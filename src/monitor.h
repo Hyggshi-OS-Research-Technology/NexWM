@@ -6,7 +6,6 @@
 #define NEXWM_MONITOR_H
 
 #include <xcb/xcb.h>
-#include <xcb/randr.h>
 #include "config.h"
 
 typedef struct {

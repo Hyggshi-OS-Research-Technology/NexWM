@@ -18,12 +18,7 @@ extern nex_atoms_t g_atoms;
 
 int nex_ewmh_init(xcb_connection_t *conn, xcb_screen_t *screen)
 {
-    xcb_intern_atom_cookie_t *cookies = xcb_ewmh_init_atoms(conn, &g_ewmh.ewmh);
-    if (!xcb_ewmh_init_atoms_replies(&g_ewmh.ewmh, cookies, NULL)) {
-        NEX_ERROR("Failed to initialize EWMH atoms");
-        return -1;
-    }
-
+    (void)conn;
     nex_ewmh_set_supported(screen);
     nex_ewmh_set_number_of_desktops(g_config.workspace_count);
     nex_ewmh_set_current_desktop(0);
@@ -120,5 +115,4 @@ void nex_ewmh_set_wm_state_hidden(xcb_window_t window, int hidden)
 
 void nex_ewmh_cleanup(void)
 {
-    xcb_ewmh_connection_wipe(&g_ewmh.ewmh);
 }

@@ -2,8 +2,8 @@
 # Nex Window Manager & Desktop Suite
 
 CC      ?= gcc
-CFLAGS  ?= -Wall -Wextra -Wpedantic -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
-LDFLAGS ?= -lxcb -lxcb-util -lxcb-randr -lxcb-ewmh -lxcb-icccm -lxcb-keysyms -lX11
+CFLAGS  ?= -Wall -Wextra -Wpedantic -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude
+LDFLAGS ?= -lxcb -lX11 $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-keysyms.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-util.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-randr.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-ewmh.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-icccm.so*)
 
 # Panel & Desktop components XCB flags
 PANEL_LDFLAGS   = -lxcb -lX11
@@ -21,7 +21,7 @@ endif
 SAN_FLAGS ?=
 
 DEBUG_CFLAGS = -Wall -Wextra -Wpedantic -std=c11 -g -O0 -DDEBUG \
-               -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+               -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = $(LDFLAGS) -fsanitize=address,undefined
 

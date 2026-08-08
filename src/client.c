@@ -69,11 +69,39 @@ nex_client_t *nex_client_create(xcb_window_t window)
                     XCB_EVENT_MASK_STRUCTURE_NOTIFY;
     xcb_change_window_attributes(g_conn, window, XCB_CW_EVENT_MASK, &mask);
 
+    nex_client_grab_buttons(c);
+
     NEX_INFO("Created client: window=0x%x, class=\"%s\", title=\"%s\"",
              window, c->class, c->title);
 
     nex_client_list_add(c);
     return c;
+}
+
+void nex_client_grab_buttons(nex_client_t *c)
+{
+    if (!c) return;
+    xcb_ungrab_button(g_conn, XCB_BUTTON_INDEX_ANY, c->window, XCB_MOD_MASK_ANY);
+
+    uint16_t modifiers[] = {
+        g_config.modkey,
+        g_config.modkey | XCB_MOD_MASK_2,
+        g_config.modkey | XCB_MOD_MASK_LOCK,
+        g_config.modkey | XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK
+    };
+
+    for (size_t i = 0; i < sizeof(modifiers)/sizeof(modifiers[0]); i++) {
+        xcb_grab_button(g_conn, 0, c->window,
+                        XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE,
+                        XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC,
+                        XCB_NONE, XCB_NONE,
+                        XCB_BUTTON_INDEX_1, modifiers[i]);
+        xcb_grab_button(g_conn, 0, c->window,
+                        XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE,
+                        XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC,
+                        XCB_NONE, XCB_NONE,
+                        XCB_BUTTON_INDEX_3, modifiers[i]);
+    }
 }
 
 void nex_client_destroy(nex_client_t *c)

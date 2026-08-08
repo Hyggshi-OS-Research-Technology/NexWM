@@ -14,6 +14,7 @@
 #include "log.h"
 #include <xcb/xcb_icccm.h>
 #include <string.h>
+#include <stdlib.h>
 
 extern xcb_connection_t *g_conn;
 extern xcb_screen_t *g_screen;
@@ -202,12 +203,84 @@ static void handle_enter_notify(xcb_enter_notify_event_t *ev)
     nex_focus_follow_mouse(ev->event);
 }
 
+static nex_client_t *g_drag_client = NULL;
+static int g_drag_start_x = 0;
+static int g_drag_start_y = 0;
+static int g_drag_win_x = 0;
+static int g_drag_win_y = 0;
+static int g_drag_win_w = 0;
+static int g_drag_win_h = 0;
+static int g_drag_mode = 0; /* 0 = none, 1 = move, 2 = resize */
+
 static void handle_button_press(xcb_button_press_event_t *ev)
 {
     nex_client_t *c = nex_client_find(ev->event);
+    if (!c) c = nex_client_find(ev->child);
+
     if (c) {
         nex_client_focus(c);
         nex_client_raise(c);
+
+        uint16_t mod = ev->state & ~(XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK);
+        if (mod == g_config.modkey || (c->flags & NEX_CLIENT_FLOATING)) {
+            if (!(c->flags & NEX_CLIENT_FLOATING)) {
+                c->flags |= NEX_CLIENT_FLOATING;
+            }
+
+            g_drag_client = c;
+            g_drag_start_x = ev->root_x;
+            g_drag_start_y = ev->root_y;
+            g_drag_win_x = c->x;
+            g_drag_win_y = c->y;
+            g_drag_win_w = c->width;
+            g_drag_win_h = c->height;
+
+            if (ev->detail == XCB_BUTTON_INDEX_1) {
+                g_drag_mode = 1; /* Move */
+            } else if (ev->detail == XCB_BUTTON_INDEX_3) {
+                g_drag_mode = 2; /* Resize */
+            }
+
+            if (g_drag_mode != 0) {
+                xcb_grab_pointer(g_conn, 0, g_screen->root,
+                                 XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+                                 XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC,
+                                 XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+                xcb_flush(g_conn);
+            }
+        }
+    }
+
+    xcb_allow_events(g_conn, XCB_ALLOW_REPLAY_POINTER, ev->time);
+}
+
+static void handle_motion_notify(xcb_motion_notify_event_t *ev)
+{
+    if (g_drag_mode == 0 || !g_drag_client) return;
+
+    int dx = ev->root_x - g_drag_start_x;
+    int dy = ev->root_y - g_drag_start_y;
+
+    if (g_drag_mode == 1) {
+        nex_client_move(g_drag_client, g_drag_win_x + dx, g_drag_win_y + dy);
+    } else if (g_drag_mode == 2) {
+        int new_w = g_drag_win_w + dx;
+        int new_h = g_drag_win_h + dy;
+        if (new_w < 50) new_w = 50;
+        if (new_h < 50) new_h = 50;
+        nex_client_resize(g_drag_client, new_w, new_h);
+    }
+    xcb_flush(g_conn);
+}
+
+static void handle_button_release(xcb_button_release_event_t *ev)
+{
+    (void)ev;
+    if (g_drag_mode != 0) {
+        g_drag_mode = 0;
+        g_drag_client = NULL;
+        xcb_ungrab_pointer(g_conn, XCB_CURRENT_TIME);
+        xcb_flush(g_conn);
     }
 }
 
@@ -230,6 +303,8 @@ void nex_events_handle(xcb_generic_event_t *ev)
         case XCB_CLIENT_MESSAGE:     handle_client_message((xcb_client_message_event_t *)ev); break;
         case XCB_ENTER_NOTIFY:       handle_enter_notify((xcb_enter_notify_event_t *)ev); break;
         case XCB_BUTTON_PRESS:       handle_button_press((xcb_button_press_event_t *)ev); break;
+        case XCB_MOTION_NOTIFY:      handle_motion_notify((xcb_motion_notify_event_t *)ev); break;
+        case XCB_BUTTON_RELEASE:     handle_button_release((xcb_button_release_event_t *)ev); break;
         case XCB_KEY_PRESS:          handle_key_press((xcb_key_press_event_t *)ev); break;
         case XCB_CREATE_NOTIFY:      NEX_DEBUG("CreateNotify: 0x%x", ((xcb_create_notify_event_t *)ev)->window); break;
         case XCB_REPARENT_NOTIFY:    NEX_DEBUG("ReparentNotify: 0x%x", ((xcb_reparent_notify_event_t *)ev)->window); break;
