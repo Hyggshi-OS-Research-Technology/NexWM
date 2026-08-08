@@ -37,6 +37,7 @@ int nex_atoms_init(xcb_connection_t *conn, nex_atoms_t *atoms)
     atoms->net_wm_desktop            = intern_atom(conn, "_NET_WM_DESKTOP");
     atoms->net_wm_state              = intern_atom(conn, "_NET_WM_STATE");
     atoms->net_wm_state_fullscreen   = intern_atom(conn, "_NET_WM_STATE_FULLSCREEN");
+    atoms->net_wm_state_hidden       = intern_atom(conn, "_NET_WM_STATE_HIDDEN");
     atoms->net_wm_state_maximized_vert = intern_atom(conn, "_NET_WM_STATE_MAXIMIZED_VERT");
     atoms->net_wm_state_maximized_horz = intern_atom(conn, "_NET_WM_STATE_MAXIMIZED_HORZ");
     atoms->net_wm_window_type        = intern_atom(conn, "_NET_WM_WINDOW_TYPE");

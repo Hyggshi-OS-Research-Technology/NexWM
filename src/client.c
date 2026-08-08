@@ -5,6 +5,7 @@
 #include "client.h"
 #include "wm.h"
 #include "atoms.h"
+#include "ewmh.h"
 #include "log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -141,6 +142,38 @@ void nex_client_unmap(nex_client_t *c)
 {
     if (!c) return;
     xcb_unmap_window(g_conn, c->window);
+}
+
+void nex_client_minimize(nex_client_t *c)
+{
+    if (!c || (c->flags & NEX_CLIENT_MINIMIZED)) return;
+    c->flags |= NEX_CLIENT_MINIMIZED;
+    xcb_unmap_window(g_conn, c->window);
+    nex_ewmh_set_wm_state_hidden(c->window, 1);
+    if (g_focused == c) {
+        g_focused = NULL;
+        /* Try to focus the next visible client */
+        nex_client_t *n;
+        for (n = g_clients; n; n = n->next) {
+            if (n != c && !(n->flags & NEX_CLIENT_MINIMIZED) && n->workspace == c->workspace) {
+                nex_client_focus(n);
+                break;
+            }
+        }
+    }
+    xcb_flush(g_conn);
+    NEX_INFO("Minimized client 0x%x", c->window);
+}
+
+void nex_client_unminimize(nex_client_t *c)
+{
+    if (!c || !(c->flags & NEX_CLIENT_MINIMIZED)) return;
+    c->flags &= ~NEX_CLIENT_MINIMIZED;
+    xcb_map_window(g_conn, c->window);
+    nex_ewmh_set_wm_state_hidden(c->window, 0);
+    nex_client_focus(c);
+    xcb_flush(g_conn);
+    NEX_INFO("Unminimized client 0x%x", c->window);
 }
 
 void nex_client_kill(nex_client_t *c)

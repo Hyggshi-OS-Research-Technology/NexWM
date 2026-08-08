@@ -50,6 +50,8 @@ void nex_client_resize(nex_client_t *c, int w, int h);
 void nex_client_set_border(nex_client_t *c, uint32_t color);
 void nex_client_map(nex_client_t *c);
 void nex_client_unmap(nex_client_t *c);
+void nex_client_minimize(nex_client_t *c);
+void nex_client_unminimize(nex_client_t *c);
 void nex_client_kill(nex_client_t *c);
 void nex_client_list_add(nex_client_t *c);
 void nex_client_list_remove(nex_client_t *c);

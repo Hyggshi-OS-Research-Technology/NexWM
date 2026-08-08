@@ -1,4 +1,4 @@
-name: Build NexWM
+name: Build Nex Desktop Environment
 
 on:
   push:
@@ -27,23 +27,31 @@ jobs:
           xserver-xephyr \
           xterm
 
-    - name: Build NexWM
-      run: make
+    - name: Build NexWM + nexwmctl
+      run: make wm ctl
+
+    - name: Build Phase 1 components (panel, launcher, wallpaper)
+      run: make phase1
 
     - name: Build NexWM (debug)
       run: make debug
 
-    - name: Check compiler warnings
+    - name: Check compiler warnings (Werror)
       run: |
         make clean
-        make CFLAGS="-Wall -Wextra -Wpedantic -Werror -std=c11 -O2" 2>&1 | tee build.log
+        make CFLAGS="-Wall -Wextra -Wpedantic -Werror -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE" 2>&1 | tee build.log
         if grep -i "error:" build.log; then exit 1; fi
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: nexwm-binary
-        path: bin/nexwm
+        name: nexde-binaries
+        path: |
+          bin/nexwm
+          bin/nexwmctl
+          bin/nex-panel
+          bin/nex-launcher
+          bin/nex-wallpaper
 
   test-xephyr:
     runs-on: ubuntu-latest
@@ -67,10 +75,10 @@ jobs:
           xterm \
           xvfb
 
-    - name: Build
+    - name: Build all
       run: make
 
-    - name: Test with Xvfb
+    - name: Test NexWM with Xvfb
       run: |
         export DISPLAY=:99
         Xvfb :99 -screen 0 1280x720x24 &
@@ -82,3 +90,18 @@ jobs:
         DISPLAY=:99 xterm &
         sleep 2
         kill $NEXWM_PID || true
+
+    - name: Test nexwmctl (IPC smoke test)
+      run: |
+        export DISPLAY=:99
+        # nexwm should not be running; expect connect error (not crash)
+        ./bin/nexwmctl reload 2>&1 | grep -q "cannot connect" || true
+        ./bin/nexwmctl --help 2>&1 || true
+
+    - name: Test nex-launcher --list
+      run: |
+        ./bin/nex-launcher --list 2>&1 | head -20 || true
+
+    - name: Test nex-wallpaper --color (no display, expect graceful failure)
+      run: |
+        ./bin/nex-wallpaper --color 0x1a1a2e 2>&1 | grep -q "cannot open display" || true

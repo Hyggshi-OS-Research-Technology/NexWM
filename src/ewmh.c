@@ -108,6 +108,16 @@ void nex_ewmh_set_wm_desktop(xcb_window_t window, int desktop)
                         g_atoms.net_wm_desktop, XCB_ATOM_CARDINAL, 32, 1, &data);
 }
 
+void nex_ewmh_set_wm_state_hidden(xcb_window_t window, int hidden)
+{
+    if (hidden) {
+        xcb_change_property(g_conn, XCB_PROP_MODE_REPLACE, window,
+                            g_atoms.net_wm_state, XCB_ATOM_ATOM, 32, 1, &g_atoms.net_wm_state_hidden);
+    } else {
+        xcb_delete_property(g_conn, window, g_atoms.net_wm_state);
+    }
+}
+
 void nex_ewmh_cleanup(void)
 {
     xcb_ewmh_connection_wipe(&g_ewmh.ewmh);

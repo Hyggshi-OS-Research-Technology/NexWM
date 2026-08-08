@@ -17,6 +17,7 @@ typedef struct {
     xcb_atom_t net_wm_desktop;
     xcb_atom_t net_wm_state;
     xcb_atom_t net_wm_state_fullscreen;
+    xcb_atom_t net_wm_state_hidden;
     xcb_atom_t net_wm_state_maximized_vert;
     xcb_atom_t net_wm_state_maximized_horz;
     xcb_atom_t net_wm_window_type;

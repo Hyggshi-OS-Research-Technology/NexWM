@@ -24,6 +24,8 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <string.h>
+#include <errno.h>
+#include <poll.h>
 #include <X11/cursorfont.h>
 
 xcb_connection_t *g_conn = NULL;
@@ -169,14 +171,49 @@ int nex_wm_init(void)
 void nex_wm_run(void)
 {
     NEX_INFO("Entering main event loop");
-    xcb_generic_event_t *ev;
-    while (g_running && (ev = xcb_wait_for_event(g_conn))) {
-        nex_events_handle(ev);
-        free(ev);
-        xcb_flush(g_conn);
+
+    int xcb_fd = xcb_get_file_descriptor(g_conn);
+    int ipc_fd = nex_ipc_get_fd();
+
+    struct pollfd fds[2];
+    fds[0].fd = xcb_fd;
+    fds[0].events = POLLIN;
+    fds[1].fd = ipc_fd;
+    fds[1].events = POLLIN;
+
+    while (g_running) {
+        int nfds = (ipc_fd >= 0) ? 2 : 1;
+        int ready = poll(fds, (nfds_t)nfds, -1);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            NEX_ERROR("poll() error: %s", strerror(errno));
+            break;
+        }
+
+        /* Handle IPC commands */
+        if (ipc_fd >= 0 && (fds[1].revents & POLLIN)) {
+            nex_ipc_handle();
+        }
+
+        /* Handle X11 events */
+        if (fds[0].revents & POLLIN) {
+            xcb_generic_event_t *ev;
+            while ((ev = xcb_poll_for_event(g_conn)) != NULL) {
+                nex_events_handle(ev);
+                free(ev);
+            }
+            xcb_flush(g_conn);
+        }
+
+        if (xcb_connection_has_error(g_conn)) {
+            NEX_ERROR("X11 connection error, exiting");
+            break;
+        }
     }
+
     NEX_INFO("Exiting main event loop");
 }
+
 
 void nex_wm_cleanup(void)
 {
