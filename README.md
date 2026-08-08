@@ -42,21 +42,16 @@ Part of the **Nex / Hyggshi OS** ecosystem.
 
 ## Dependencies
 
-- `gcc` or `clang`
+- `gcc` / `g++` or `clang` / `clang++`
 - `make`
 - `libxcb`
-- `xcb-util`
-- `xcb-randr`
-- `xcb-ewmh`
-- `xcb-icccm`
-- `xcb-keysyms`
+- `Qt6` (Widgets, Gui, Core for GUI components: `nex-launcher`, `nex-settings`, `nex-notify`)
 
 ### Installing Dependencies
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt install libx11-dev libxcb1-dev libxcb-util-dev libxcb-randr0-dev \
-                 libxcb-ewmh-dev libxcb-icccm4-dev libxcb-keysyms1-dev
+sudo apt install libx11-dev libxcb1-dev qt6-base-dev
 ```
 
 **Arch Linux:**

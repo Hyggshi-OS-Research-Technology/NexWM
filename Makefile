@@ -57,6 +57,10 @@ CTL_OBJS = $(CTL_SRCS:.c=.o)
 CTL_DEPS = $(CTL_SRCS:.c=.d)
 
 # ── Desktop Suite Components ──────────────────────────────────────────────────
+CXX     ?= g++
+QT6_CFLAGS  = -I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtWidgets -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtCore -fPIC
+QT6_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -lQt6Widgets -lQt6Gui -lQt6Core
+
 PANEL_DIR    = components/panel
 LAUNCH_DIR   = components/launcher
 WALL_DIR     = components/wallpaper
@@ -65,18 +69,18 @@ NOTIFY_DIR   = components/notify
 SETT_DIR     = components/settings
 
 PANEL_SRCS   = $(PANEL_DIR)/nex-panel.c
-LAUNCH_SRCS  = $(LAUNCH_DIR)/nex-launcher.c
+LAUNCH_SRCS  = $(LAUNCH_DIR)/nex-launcher.cpp
 WALL_SRCS    = $(WALL_DIR)/nex-wallpaper.c
 DESK_SRCS    = $(DESK_DIR)/nex-desktop.c
-NOTIFY_SRCS  = $(NOTIFY_DIR)/nex-notify.c
-SETT_SRCS    = $(SETT_DIR)/nex-settings.c
+NOTIFY_SRCS  = $(NOTIFY_DIR)/nex-notify.cpp
+SETT_SRCS    = $(SETT_DIR)/nex-settings.cpp
 
 PANEL_OBJS   = $(PANEL_SRCS:.c=.o)
-LAUNCH_OBJS  = $(LAUNCH_SRCS:.c=.o)
+LAUNCH_OBJS  = $(LAUNCH_DIR)/nex-launcher.o
 WALL_OBJS    = $(WALL_SRCS:.c=.o)
 DESK_OBJS    = $(DESK_SRCS:.c=.o)
-NOTIFY_OBJS  = $(NOTIFY_SRCS:.c=.o)
-SETT_OBJS    = $(SETT_SRCS:.c=.o)
+NOTIFY_OBJS  = $(NOTIFY_DIR)/nex-notify.o
+SETT_OBJS    = $(SETT_DIR)/nex-settings.o
 
 # ── Targets ───────────────────────────────────────────────────────────────────
 TARGET         = $(BINDIR)/nexwm
@@ -122,7 +126,7 @@ $(PANEL_TARGET): $(PANEL_OBJS)
 	$(CC) $(PANEL_OBJS) -o $@ $(PANEL_LDFLAGS) $(SAN_FLAGS)
 
 $(LAUNCH_TARGET): $(LAUNCH_OBJS)
-	$(CC) $(LAUNCH_OBJS) -o $@ $(SAN_FLAGS)
+	$(CXX) $(LAUNCH_OBJS) -o $@ $(QT6_LDFLAGS)
 
 $(WALL_TARGET): $(WALL_OBJS)
 	$(CC) $(WALL_OBJS) -o $@ $(WALLPAPER_LDFLAGS) $(SAN_FLAGS)
@@ -131,10 +135,10 @@ $(DESK_TARGET): $(DESK_OBJS)
 	$(CC) $(DESK_OBJS) -o $@ $(DESKTOP_LDFLAGS) $(SAN_FLAGS)
 
 $(NOTIFY_TARGET): $(NOTIFY_OBJS)
-	$(CC) $(NOTIFY_OBJS) -o $@ $(NOTIFY_LDFLAGS) $(SAN_FLAGS)
+	$(CXX) $(NOTIFY_OBJS) -o $@ $(QT6_LDFLAGS)
 
 $(SETT_TARGET): $(SETT_OBJS)
-	$(CC) $(SETT_OBJS) -o $@ $(SAN_FLAGS)
+	$(CXX) $(SETT_OBJS) -o $@ $(QT6_LDFLAGS)
 
 # ── Compile rules ─────────────────────────────────────────────────────────────
 $(SRCDIR)/%.o: $(SRCDIR)/%.c
@@ -143,8 +147,8 @@ $(SRCDIR)/%.o: $(SRCDIR)/%.c
 $(PANEL_DIR)/%.o: $(PANEL_DIR)/%.c
 	$(CC) $(CFLAGS) -I$(PANEL_DIR) -MMD -MP -c $< -o $@
 
-$(LAUNCH_DIR)/%.o: $(LAUNCH_DIR)/%.c
-	$(CC) $(CFLAGS) -I$(LAUNCH_DIR) -MMD -MP -c $< -o $@
+$(LAUNCH_DIR)/%.o: $(LAUNCH_DIR)/%.cpp
+	$(CXX) -std=c++17 $(QT6_CFLAGS) -I$(LAUNCH_DIR) -c $< -o $@
 
 $(WALL_DIR)/%.o: $(WALL_DIR)/%.c
 	$(CC) $(CFLAGS) $(WALLPAPER_CFLAGS) -I$(WALL_DIR) -MMD -MP -c $< -o $@
@@ -152,20 +156,17 @@ $(WALL_DIR)/%.o: $(WALL_DIR)/%.c
 $(DESK_DIR)/%.o: $(DESK_DIR)/%.c
 	$(CC) $(CFLAGS) -I$(DESK_DIR) -MMD -MP -c $< -o $@
 
-$(NOTIFY_DIR)/%.o: $(NOTIFY_DIR)/%.c
-	$(CC) $(CFLAGS) -I$(NOTIFY_DIR) -MMD -MP -c $< -o $@
+$(NOTIFY_DIR)/%.o: $(NOTIFY_DIR)/%.cpp
+	$(CXX) -std=c++17 $(QT6_CFLAGS) -I$(NOTIFY_DIR) -c $< -o $@
 
-$(SETT_DIR)/%.o: $(SETT_DIR)/%.c
-	$(CC) $(CFLAGS) -I$(SETT_DIR) -MMD -MP -c $< -o $@
+$(SETT_DIR)/%.o: $(SETT_DIR)/%.cpp
+	$(CXX) -std=c++17 $(QT6_CFLAGS) -I$(SETT_DIR) -c $< -o $@
 
 -include $(WM_DEPS)
 -include $(CTL_DEPS)
 -include $(PANEL_OBJS:.o=.d)
--include $(LAUNCH_OBJS:.o=.d)
 -include $(WALL_OBJS:.o=.d)
 -include $(DESK_OBJS:.o=.d)
--include $(NOTIFY_OBJS:.o=.d)
--include $(SETT_OBJS:.o=.d)
 
 # ── Maintenance ───────────────────────────────────────────────────────────────
 clean:
