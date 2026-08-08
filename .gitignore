@@ -1,0 +1,23 @@
+# Build artifacts
+bin/
+*.o
+*.d
+*.a
+*.so
+nexwm
+
+# Debug/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+*.log
+core
+core.*
+vgcore.*
+
+# Temporary files
+*.tmp

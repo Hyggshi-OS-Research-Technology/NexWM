@@ -1,0 +1,82 @@
+name: Build NexWM
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb1-dev \
+          libxcb-util-dev \
+          libxcb-randr0-dev \
+          libxcb-ewmh-dev \
+          libxcb-icccm4-dev \
+          libxcb-keysyms1-dev \
+          xserver-xephyr \
+          xterm
+
+    - name: Build NexWM
+      run: make
+
+    - name: Build NexWM (debug)
+      run: make debug
+
+    - name: Check compiler warnings
+      run: |
+        make clean
+        make CFLAGS="-Wall -Wextra -Wpedantic -Werror -std=c11 -O2" 2>&1 | tee build.log
+        if grep -i "error:" build.log; then exit 1; fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nexwm-binary
+        path: bin/nexwm
+
+  test-xephyr:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb1-dev \
+          libxcb-util-dev \
+          libxcb-randr0-dev \
+          libxcb-ewmh-dev \
+          libxcb-icccm4-dev \
+          libxcb-keysyms1-dev \
+          xserver-xephyr \
+          xterm \
+          xvfb
+
+    - name: Build
+      run: make
+
+    - name: Test with Xvfb
+      run: |
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1280x720x24 &
+        sleep 2
+        ./bin/nexwm --version
+        timeout 5 ./bin/nexwm --debug &
+        NEXWM_PID=$!
+        sleep 2
+        DISPLAY=:99 xterm &
+        sleep 2
+        kill $NEXWM_PID || true
