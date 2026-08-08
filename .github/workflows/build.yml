@@ -24,6 +24,8 @@ jobs:
           libxcb-ewmh-dev \
           libxcb-icccm4-dev \
           libxcb-keysyms1-dev \
+          qt6-base-dev \
+          pkg-config \
           xserver-xephyr \
           xterm
 
@@ -71,6 +73,8 @@ jobs:
           libxcb-ewmh-dev \
           libxcb-icccm4-dev \
           libxcb-keysyms1-dev \
+          qt6-base-dev \
+          pkg-config \
           xserver-xephyr \
           xterm \
           xvfb

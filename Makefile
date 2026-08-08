@@ -57,9 +57,9 @@ CTL_OBJS = $(CTL_SRCS:.c=.o)
 CTL_DEPS = $(CTL_SRCS:.c=.d)
 
 # ── Desktop Suite Components ──────────────────────────────────────────────────
-CXX     ?= g++
-QT6_CFLAGS  = -I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtWidgets -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtCore -fPIC
-QT6_LDFLAGS = -L/usr/lib/x86_64-linux-gnu -lQt6Widgets -lQt6Gui -lQt6Core
+CXX         ?= g++
+QT6_CFLAGS  ?= $(shell pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core 2>/dev/null || echo "-I/usr/include/qt6 -I/usr/include/qt6/QtWidgets -I/usr/include/qt6/QtGui -I/usr/include/qt6/QtCore -I/usr/include/x86_64-linux-gnu/qt6 -I/usr/include/x86_64-linux-gnu/qt6/QtWidgets -I/usr/include/x86_64-linux-gnu/qt6/QtGui -I/usr/include/x86_64-linux-gnu/qt6/QtCore -fPIC")
+QT6_LDFLAGS ?= $(shell pkg-config --libs Qt6Widgets Qt6Gui Qt6Core 2>/dev/null || echo "-lQt6Widgets -lQt6Gui -lQt6Core")
 
 PANEL_DIR    = components/panel
 LAUNCH_DIR   = components/launcher
