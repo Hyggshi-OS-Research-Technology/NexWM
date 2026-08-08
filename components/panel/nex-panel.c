@@ -326,8 +326,8 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
     x += 6;
 
     /* ── Taskbar ─────────────────────────────────────── */
-    /* Reserve right zone width (clock ~80px) */
-    int right_zone_w = 84;
+    /* Reserve right zone width (buttons + clock ~160px) */
+    int right_zone_w = 160;
     int taskbar_w    = width - x - right_zone_w;
     int task_btn_w   = (s->count > 0) ? (taskbar_w / s->count) : 0;
     if (task_btn_w > 200) task_btn_w = 200;
@@ -346,14 +346,27 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
         x += task_btn_w;
     }
 
-    /* ── Right zone: clock ───────────────────────────── */
+    /* ── Right zone: Max & Full buttons, clock ───────── */
+    int ctrl_btn_w = 36;
+    int max_btn_x  = width - 156;
+    int full_btn_x = width - 116;
+    int clock_x    = width - 70;
+
+    xcb_gc_t gc_ctrl = make_gc(conn, win, CLR_FG, CLR_WS_INACT);
+    fill_rect(conn, win, gc_ctrl, max_btn_x, 2, ctrl_btn_w, height - 4);
+    draw_text(conn, win, gc_ctrl, max_btn_x + 6, text_y, "Max");
+
+    fill_rect(conn, win, gc_ctrl, full_btn_x, 2, ctrl_btn_w, height - 4);
+    draw_text(conn, win, gc_ctrl, full_btn_x + 6, text_y, "Full");
+    xcb_free_gc(conn, gc_ctrl);
+
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
     char clock_str[16];
     strftime(clock_str, sizeof(clock_str), "%H:%M", t);
 
     xcb_gc_t gc_fg = make_gc(conn, win, CLR_FG, CLR_BG);
-    draw_text(conn, win, gc_fg, width - 78, text_y, clock_str);
+    draw_text(conn, win, gc_fg, clock_x, text_y, clock_str);
     xcb_free_gc(conn, gc_fg);
 
     xcb_flush(conn);
@@ -364,6 +377,32 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
 static void handle_click(xcb_connection_t *conn, xcb_window_t root,
                          panel_state_t *s, int click_x, int panel_w)
 {
+    int max_btn_x  = panel_w - 156;
+    int full_btn_x = panel_w - 116;
+    int ctrl_btn_w = 36;
+
+    if (click_x >= max_btn_x && click_x < max_btn_x + ctrl_btn_w) {
+        if (s->active) {
+            char cmd[48];
+            snprintf(cmd, sizeof(cmd), "maximize %u", (unsigned)s->active);
+            ipc_send(cmd);
+        } else {
+            ipc_send("maximize");
+        }
+        return;
+    }
+
+    if (click_x >= full_btn_x && click_x < full_btn_x + ctrl_btn_w) {
+        if (s->active) {
+            char cmd[48];
+            snprintf(cmd, sizeof(cmd), "fullscreen %u", (unsigned)s->active);
+            ipc_send(cmd);
+        } else {
+            ipc_send("fullscreen");
+        }
+        return;
+    }
+
     int x = 4;
 
     /* Launcher button */
@@ -393,7 +432,7 @@ static void handle_click(xcb_connection_t *conn, xcb_window_t root,
     x += 7;  /* separator + gap */
 
     /* Taskbar buttons */
-    int right_zone_w = 84;
+    int right_zone_w = 160;
     int taskbar_w    = panel_w - x - right_zone_w;
     int task_btn_w   = (s->count > 0) ? (taskbar_w / s->count) : 0;
     if (task_btn_w > 200) task_btn_w = 200;

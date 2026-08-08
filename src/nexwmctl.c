@@ -84,6 +84,8 @@ static void print_usage(void)
     printf("Commands:\n");
     printf("  minimize <window_id>              Minimize a window\n");
     printf("  unminimize <window_id>            Restore a minimized window\n");
+    printf("  fullscreen [window_id]            Toggle fullscreen\n");
+    printf("  maximize [window_id]              Toggle maximize\n");
     printf("  focus <window_id>                 Focus a window\n");
     printf("  close <window_id>                 Close a window\n");
     printf("  workspace <num>                   Switch to workspace (1-indexed)\n");

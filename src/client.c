@@ -6,6 +6,8 @@
 #include "wm.h"
 #include "atoms.h"
 #include "ewmh.h"
+#include "monitor.h"
+#include "config.h"
 #include "log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -174,6 +176,55 @@ void nex_client_unminimize(nex_client_t *c)
     nex_client_focus(c);
     xcb_flush(g_conn);
     NEX_INFO("Unminimized client 0x%x", c->window);
+}
+
+void nex_client_toggle_fullscreen(nex_client_t *c)
+{
+    if (!c) return;
+
+    if (c->flags & NEX_CLIENT_FULLSCREEN) {
+        c->flags &= ~NEX_CLIENT_FULLSCREEN;
+        nex_client_move(c, c->old_x, c->old_y);
+        nex_client_resize(c, c->old_width, c->old_height);
+        uint32_t values[] = { g_config.border_width };
+        xcb_configure_window(g_conn, c->window, XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
+    } else {
+        c->old_x = c->x;
+        c->old_y = c->y;
+        c->old_width = c->width;
+        c->old_height = c->height;
+        c->flags |= NEX_CLIENT_FULLSCREEN;
+
+        nex_monitor_t *m = nex_monitor_current();
+        nex_client_move(c, m->x, m->y);
+        nex_client_resize(c, m->width, m->height);
+        uint32_t values[] = { 0 };
+        xcb_configure_window(g_conn, c->window, XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
+    }
+    nex_client_raise(c);
+}
+
+void nex_client_toggle_maximize(nex_client_t *c)
+{
+    if (!c) return;
+
+    if (c->flags & NEX_CLIENT_MAXIMIZED) {
+        c->flags &= ~NEX_CLIENT_MAXIMIZED;
+        nex_client_move(c, c->old_x, c->old_y);
+        nex_client_resize(c, c->old_width, c->old_height);
+    } else {
+        c->old_x = c->x;
+        c->old_y = c->y;
+        c->old_width = c->width;
+        c->old_height = c->height;
+        c->flags |= NEX_CLIENT_MAXIMIZED;
+
+        nex_monitor_t *m = nex_monitor_current();
+        int bw = g_config.border_width;
+        nex_client_move(c, m->x + bw, m->y + bw);
+        nex_client_resize(c, m->width - 2 * bw, m->height - 2 * bw);
+    }
+    nex_client_raise(c);
 }
 
 void nex_client_kill(nex_client_t *c)

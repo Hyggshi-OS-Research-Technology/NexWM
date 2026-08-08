@@ -32,8 +32,6 @@ extern xcb_screen_t *g_screen;
 static void action_spawn(void *arg);
 static void action_kill(void *arg);
 static void action_toggle_floating(void *arg);
-static void action_toggle_fullscreen(void *arg);
-static void action_maximize(void *arg);
 static void action_exit(void *arg);
 
 static void grab_key(xcb_connection_t *conn, xcb_window_t root,
@@ -77,8 +75,6 @@ void nex_keybind_grab(xcb_connection_t *conn, xcb_window_t root)
     grab_key(conn, root, XK_Return, g_config.modkey);
     grab_key(conn, root, XK_d, g_config.modkey);
     grab_key(conn, root, XK_q, g_config.modkey);
-    grab_key(conn, root, XK_f, g_config.modkey);
-    grab_key(conn, root, XK_m, g_config.modkey);
     grab_key(conn, root, XK_space, g_config.modkey);
     grab_key(conn, root, XK_Tab, g_config.modkey);
     grab_key(conn, root, XK_Tab, g_config.modkey | XCB_MOD_MASK_SHIFT);
@@ -120,8 +116,6 @@ void nex_keybind_handle(xcb_key_press_event_t *ev)
             case XK_Return: action_spawn(g_config.terminal); break;
             case XK_d: action_spawn(g_config.launcher); break;
             case XK_q: action_kill(NULL); break;
-            case XK_f: action_toggle_fullscreen(NULL); break;
-            case XK_m: action_maximize(NULL); break;
             case XK_space: action_toggle_floating(NULL); break;
             case XK_Tab: nex_focus_next(); break;
             case XK_h:
@@ -178,57 +172,6 @@ static void action_toggle_floating(void *arg)
         g_focused->flags ^= NEX_CLIENT_FLOATING;
         NEX_INFO("Toggled floating for client 0x%x", g_focused->window);
     }
-}
-
-static void action_toggle_fullscreen(void *arg)
-{
-    (void)arg;
-    if (!g_focused) return;
-
-    if (g_focused->flags & NEX_CLIENT_FULLSCREEN) {
-        g_focused->flags &= ~NEX_CLIENT_FULLSCREEN;
-        nex_client_move(g_focused, g_focused->old_x, g_focused->old_y);
-        nex_client_resize(g_focused, g_focused->old_width, g_focused->old_height);
-        uint32_t values[] = { g_config.border_width };
-        xcb_configure_window(g_conn, g_focused->window, XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
-    } else {
-        g_focused->old_x = g_focused->x;
-        g_focused->old_y = g_focused->y;
-        g_focused->old_width = g_focused->width;
-        g_focused->old_height = g_focused->height;
-        g_focused->flags |= NEX_CLIENT_FULLSCREEN;
-
-        nex_monitor_t *m = nex_monitor_current();
-        nex_client_move(g_focused, m->x, m->y);
-        nex_client_resize(g_focused, m->width, m->height);
-        uint32_t values[] = { 0 };
-        xcb_configure_window(g_conn, g_focused->window, XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
-    }
-    nex_client_raise(g_focused);
-}
-
-static void action_maximize(void *arg)
-{
-    (void)arg;
-    if (!g_focused) return;
-
-    if (g_focused->flags & NEX_CLIENT_MAXIMIZED) {
-        g_focused->flags &= ~NEX_CLIENT_MAXIMIZED;
-        nex_client_move(g_focused, g_focused->old_x, g_focused->old_y);
-        nex_client_resize(g_focused, g_focused->old_width, g_focused->old_height);
-    } else {
-        g_focused->old_x = g_focused->x;
-        g_focused->old_y = g_focused->y;
-        g_focused->old_width = g_focused->width;
-        g_focused->old_height = g_focused->height;
-        g_focused->flags |= NEX_CLIENT_MAXIMIZED;
-
-        nex_monitor_t *m = nex_monitor_current();
-        int bw = g_config.border_width;
-        nex_client_move(g_focused, m->x + bw, m->y + bw);
-        nex_client_resize(g_focused, m->width - 2 * bw, m->height - 2 * bw);
-    }
-    nex_client_raise(g_focused);
 }
 
 static void action_exit(void *arg)

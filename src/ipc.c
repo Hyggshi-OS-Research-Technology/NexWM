@@ -110,6 +110,26 @@ static void ipc_dispatch(const char *cmd)
         if (c) nex_client_unminimize(c);
         else NEX_WARN("IPC: unminimize: window 0x%lx not found", win_id);
 
+    } else if (strcmp(cmd, "fullscreen") == 0 || strncmp(cmd, "fullscreen ", 11) == 0) {
+        if (strlen(cmd) > 11) {
+            win_id = strtoul(cmd + 11, NULL, 0);
+            nex_client_t *c = nex_client_find((xcb_window_t)win_id);
+            if (c) nex_client_toggle_fullscreen(c);
+            else NEX_WARN("IPC: fullscreen: window 0x%lx not found", win_id);
+        } else if (g_focused) {
+            nex_client_toggle_fullscreen(g_focused);
+        }
+
+    } else if (strcmp(cmd, "maximize") == 0 || strncmp(cmd, "maximize ", 9) == 0) {
+        if (strlen(cmd) > 9) {
+            win_id = strtoul(cmd + 9, NULL, 0);
+            nex_client_t *c = nex_client_find((xcb_window_t)win_id);
+            if (c) nex_client_toggle_maximize(c);
+            else NEX_WARN("IPC: maximize: window 0x%lx not found", win_id);
+        } else if (g_focused) {
+            nex_client_toggle_maximize(g_focused);
+        }
+
     } else if (strncmp(cmd, "focus ", 6) == 0) {
         win_id = strtoul(cmd + 6, NULL, 0);
         nex_client_t *c = nex_client_find((xcb_window_t)win_id);

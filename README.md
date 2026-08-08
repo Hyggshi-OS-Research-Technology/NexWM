@@ -123,14 +123,14 @@ See `config/nexwm.conf` for an example configuration.
 | `Super + Enter` | Launch terminal |
 | `Super + D` | Launch application launcher |
 | `Super + Q` | Close focused window |
-| `Super + F` | Toggle fullscreen |
-| `Super + M` | Toggle maximize |
 | `Super + Space` | Toggle floating |
 | `Super + 1-9` | Switch to workspace |
 | `Super + Shift + 1-9` | Move window to workspace |
 | `Super + Tab` | Focus next window |
 | `Super + Shift + Tab` | Focus previous window |
 | `Super + Shift + Escape` | Exit NexWM |
+
+*Note: Maximize (`Max`) and Fullscreen (`Full`) controls are accessible via panel buttons on the status bar or via `nexwmctl maximize`/`nexwmctl fullscreen`.*
 
 ## Development Roadmap
 
