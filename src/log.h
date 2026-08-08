@@ -31,13 +31,13 @@ void nex_log_init(nex_log_level_t level);
 void nex_log_set_level(nex_log_level_t level);
 void nex_log(nex_log_level_t level, const char *file, int line, const char *fmt, ...);
 
-#define NEX_LOG(level, fmt, ...) \
-    nex_log(level, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define NEX_LOG(level, ...) \
+    nex_log(level, __FILE__, __LINE__, __VA_ARGS__)
 
-#define NEX_DEBUG(fmt, ...) NEX_LOG(NEX_LOG_DEBUG, fmt, ##__VA_ARGS__)
-#define NEX_INFO(fmt, ...)  NEX_LOG(NEX_LOG_INFO,  fmt, ##__VA_ARGS__)
-#define NEX_WARN(fmt, ...)  NEX_LOG(NEX_LOG_WARN,  fmt, ##__VA_ARGS__)
-#define NEX_ERROR(fmt, ...) NEX_LOG(NEX_LOG_ERROR, fmt, ##__VA_ARGS__)
-#define NEX_FATAL(fmt, ...) NEX_LOG(NEX_LOG_FATAL, fmt, ##__VA_ARGS__)
+#define NEX_DEBUG(...) NEX_LOG(NEX_LOG_DEBUG, __VA_ARGS__)
+#define NEX_INFO(...)  NEX_LOG(NEX_LOG_INFO,  __VA_ARGS__)
+#define NEX_WARN(...)  NEX_LOG(NEX_LOG_WARN,  __VA_ARGS__)
+#define NEX_ERROR(...) NEX_LOG(NEX_LOG_ERROR, __VA_ARGS__)
+#define NEX_FATAL(...) NEX_LOG(NEX_LOG_FATAL, __VA_ARGS__)
 
 #endif
