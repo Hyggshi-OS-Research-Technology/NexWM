@@ -267,18 +267,23 @@ static void show_context_menu(xcb_connection_t *conn, xcb_screen_t *screen, int 
         uint8_t type = ev->response_type & ~0x80;
         if (type == XCB_MOTION_NOTIFY) {
             xcb_motion_notify_event_t *mn = (xcb_motion_notify_event_t *)ev;
-            if (mn->event_x >= 0 && mn->event_x < menu_w && mn->event_y >= 4 && mn->event_y < menu_h - 4) {
-                hovered = (mn->event_y - 4) / item_h;
+            int rx = mn->root_x - x;
+            int ry = mn->root_y - y;
+            if (rx >= 0 && rx < menu_w && ry >= 4 && ry < menu_h - 4) {
+                hovered = (ry - 4) / item_h;
                 if (hovered >= count) hovered = -1;
             } else {
                 hovered = -1;
             }
         } else if (type == XCB_BUTTON_PRESS) {
             xcb_button_press_event_t *bp = (xcb_button_press_event_t *)ev;
-            if (bp->event_x < 0 || bp->event_x >= menu_w || bp->event_y < 0 || bp->event_y >= menu_h) {
+            int rx = bp->root_x - x;
+            int ry = bp->root_y - y;
+
+            if (rx < 0 || rx >= menu_w || ry < 0 || ry >= menu_h) {
                 menu_running = 0;
-            } else {
-                int selected = (bp->event_y - 4) / item_h;
+            } else if (bp->detail == XCB_BUTTON_INDEX_1) {
+                int selected = (ry - 4) / item_h;
                 if (selected >= 0 && selected < count) {
                     menu_running = 0;
                     pid_t pid = fork();

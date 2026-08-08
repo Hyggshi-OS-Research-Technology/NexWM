@@ -93,7 +93,7 @@ static QList<AppItem> scanApps() {
 class LauncherWindow : public QWidget {
 public:
     LauncherWindow(QWidget *parent = nullptr) : QWidget(parent) {
-        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Popup);
+        setWindowFlags(Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
         setAttribute(Qt::WA_TranslucentBackground, false);
         resize(480, 360);
 
