@@ -1,6 +1,7 @@
 [Desktop Entry]
 Name=Nex Desktop Environment
 Comment=Modern, lightweight X11 window manager and desktop suite
-Exec=start-nexde
-Type=Application
+Exec=/usr/local/bin/start-nexde
+TryExec=/usr/local/bin/nexwm
+Type=XSession
 DesktopNames=NexDE

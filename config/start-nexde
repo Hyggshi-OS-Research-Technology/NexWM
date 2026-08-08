@@ -1,17 +1,21 @@
 #!/bin/sh
 # start-nexde — Session launcher for Nex Desktop Environment
 
+# Display managers run this with a restricted PATH that usually excludes
+# /usr/local/bin, so call the installed binaries by absolute path.
+BINDIR=/usr/local/bin
+
 # 1. Restore wallpaper (or solid color background fallback)
-nex-wallpaper --restore 2>/dev/null || nex-wallpaper --color 0x1a1a2e &
+"$BINDIR/nex-wallpaper" --restore 2>/dev/null || "$BINDIR/nex-wallpaper" --color 0x1a1a2e &
 
 # 2. Start Desktop Icon Manager
-nex-desktop &
+"$BINDIR/nex-desktop" &
 
 # 3. Start NexPanel (Status Bar + Taskbar + Workspace Pager)
-nex-panel &
+"$BINDIR/nex-panel" &
 
 # 4. Show welcome notification toast
-nex-notify "NexDE" "Welcome to Nex Desktop Environment" 3000 &
+"$BINDIR/nex-notify" "NexDE" "Welcome to Nex Desktop Environment" 3000 &
 
 # 5. Execute core Window Manager (keeps session alive)
-exec nexwm
+exec "$BINDIR/nexwm"
