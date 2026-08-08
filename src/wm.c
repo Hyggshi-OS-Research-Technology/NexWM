@@ -156,9 +156,19 @@ int nex_wm_init(void)
     xcb_close_font(g_conn, font);
     xcb_free_cursor(g_conn, cursor);
 
+    /* Passive grab on the root window so the WM sees every click for
+     * focus/raise handling. The pointer mode MUST be SYNC: with ASYNC the
+     * triggering ButtonPress is delivered to the WM only, and a later
+     * xcb_allow_events(..., REPLAY_POINTER, ...) does NOT re-deliver it to
+     * the window the click actually landed on. That silently ate clicks
+     * meant for override-redirect windows (nex-panel's Start button,
+     * nex-desktop's right-click context menu) since they are never
+     * "managed" clients and always fall through to the replay path in
+     * handle_button_press(). SYNC freezes the pointer until we explicitly
+     * allow/replay it, which correctly forwards the event on. */
     xcb_grab_button(g_conn, 0, g_root,
                     XCB_EVENT_MASK_BUTTON_PRESS,
-                    XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC,
+                    XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC,
                     XCB_NONE, XCB_NONE,
                     XCB_BUTTON_INDEX_ANY, XCB_MOD_MASK_ANY);
 

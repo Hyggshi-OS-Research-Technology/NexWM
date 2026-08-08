@@ -11,10 +11,13 @@
 #include <QSpinBox>
 #include <QComboBox>
 #include <QPushButton>
+#include <QLineEdit>
 #include <QColorDialog>
+#include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 #include <QProcess>
 #include <cstdlib>
@@ -26,6 +29,8 @@ struct NexConfig {
     int borderWidth = 2;
     QColor borderFocus = QColor("#5b8dd9");
     QColor borderNormal = QColor("#444444");
+    QString wallpaperPath;      /* Background image path (empty = none) */
+    QString wallpaperMode = "scale";  /* scale|stretch|center|tile */
 };
 
 static QString getConfigPath() {
@@ -56,6 +61,8 @@ static NexConfig loadConfig() {
         else if (key == "border_width") cfg.borderWidth = val.toInt();
         else if (key == "border_focus") cfg.borderFocus = QColor(val);
         else if (key == "border_normal") cfg.borderNormal = QColor(val);
+        else if (key == "wallpaper") cfg.wallpaperPath = val;
+        else if (key == "wallpaper_mode") cfg.wallpaperMode = val;
     }
     file.close();
     return cfg;
@@ -78,6 +85,8 @@ static bool saveConfig(const NexConfig &cfg) {
     out << "border_width = " << cfg.borderWidth << "\n";
     out << "border_focus = " << cfg.borderFocus.name() << "\n";
     out << "border_normal = " << cfg.borderNormal.name() << "\n";
+    out << "wallpaper = " << cfg.wallpaperPath << "\n";
+    out << "wallpaper_mode = " << cfg.wallpaperMode << "\n";
     file.close();
     return true;
 }
@@ -93,7 +102,7 @@ class SettingsWindow : public QWidget {
 public:
     SettingsWindow(QWidget *parent = nullptr) : QWidget(parent) {
         setWindowTitle("NexWM Settings Control Panel");
-        resize(420, 360);
+        resize(420, 440);
 
         m_cfg = loadConfig();
 
@@ -152,6 +161,28 @@ public:
         });
         form->addRow("Border Normal Color:", m_btnNormalColor);
 
+        /* ── Background image picker ─────────────────────────────────────── */
+        auto *bgRow = new QHBoxLayout();
+        bgRow->setSpacing(6);
+        m_editWallpaper = new QLineEdit(m_cfg.wallpaperPath, this);
+        m_editWallpaper->setPlaceholderText("No image set — select a file...");
+        m_editWallpaper->setClearButtonEnabled(true);
+        auto *btnBrowse = new QPushButton("Browse...", this);
+        connect(btnBrowse, &QPushButton::clicked, this, [this]() {
+            QString file = QFileDialog::getOpenFileName(
+                this, "Select Background Image", QDir::homePath(),
+                "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.svg);;All Files (*)");
+            if (!file.isEmpty()) m_editWallpaper->setText(file);
+        });
+        bgRow->addWidget(m_editWallpaper, 1);
+        bgRow->addWidget(btnBrowse);
+        form->addRow("Background Image:", bgRow);
+
+        m_comboWallpaperMode = new QComboBox(this);
+        m_comboWallpaperMode->addItems({"scale", "stretch", "center", "tile"});
+        m_comboWallpaperMode->setCurrentText(m_cfg.wallpaperMode);
+        form->addRow("Background Mode:", m_comboWallpaperMode);
+
         mainLayout->addLayout(form);
 
         auto *btnLayout = new QHBoxLayout();
@@ -174,7 +205,7 @@ public:
                 color: #cdd6f4;
                 font-size: 13px;
             }
-            QSpinBox, QComboBox {
+            QSpinBox, QComboBox, QLineEdit {
                 background-color: #313244;
                 color: #cdd6f4;
                 border: 1px solid #45475a;
@@ -205,6 +236,27 @@ private:
         m_cfg.workspaceCount = m_spinWorkspaces->value();
         m_cfg.defaultLayout = m_comboLayout->currentText();
         m_cfg.borderWidth = m_spinBorderWidth->value();
+        m_cfg.wallpaperPath = m_editWallpaper->text().trimmed();
+        m_cfg.wallpaperMode = m_comboWallpaperMode->currentText();
+
+        /* Apply the background image live via nex-wallpaper */
+        if (!m_cfg.wallpaperPath.isEmpty()) {
+            if (!QFileInfo::exists(m_cfg.wallpaperPath)) {
+                QMessageBox::warning(this, "NexWM Settings",
+                                     QString("Background image not found:\n%1")
+                                         .arg(m_cfg.wallpaperPath));
+                return;
+            }
+            int rc = QProcess::execute("nex-wallpaper",
+                                       {"--set", m_cfg.wallpaperPath,
+                                        "--mode", m_cfg.wallpaperMode});
+            if (rc != 0) {
+                QMessageBox::warning(this, "NexWM Settings",
+                                     "Failed to apply the background image.\n"
+                                     "Check that nex-wallpaper is installed and a display is active.");
+                return;
+            }
+        }
 
         if (saveConfig(m_cfg)) {
             applyIPC(m_cfg);
@@ -221,6 +273,8 @@ private:
     QSpinBox *m_spinBorderWidth;
     QPushButton *m_btnFocusColor;
     QPushButton *m_btnNormalColor;
+    QLineEdit *m_editWallpaper;
+    QComboBox *m_comboWallpaperMode;
 };
 
 int main(int argc, char **argv) {

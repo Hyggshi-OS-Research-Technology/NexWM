@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Configure Nex Desktop Environment
+Exec=nex-settings
+Icon=preferences-system
+Terminal=false
+Categories=System;Settings;
