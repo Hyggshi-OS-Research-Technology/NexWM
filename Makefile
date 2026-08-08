@@ -67,6 +67,8 @@ WALL_DIR     = components/wallpaper
 DESK_DIR     = components/desktop
 NOTIFY_DIR   = components/notify
 SETT_DIR     = components/settings
+FM_DIR       = components/fm
+SESSION_DIR  = components/session
 
 PANEL_SRCS   = $(PANEL_DIR)/nex-panel.c
 LAUNCH_SRCS  = $(LAUNCH_DIR)/nex-launcher.cpp
@@ -74,6 +76,8 @@ WALL_SRCS    = $(WALL_DIR)/nex-wallpaper.c
 DESK_SRCS    = $(DESK_DIR)/nex-desktop.c
 NOTIFY_SRCS  = $(NOTIFY_DIR)/nex-notify.cpp
 SETT_SRCS    = $(SETT_DIR)/nex-settings.cpp
+FM_SRCS      = $(FM_DIR)/nex-fm.cpp
+SESSION_SRCS = $(SESSION_DIR)/nex-session.cpp
 
 PANEL_OBJS   = $(PANEL_SRCS:.c=.o)
 LAUNCH_OBJS  = $(LAUNCH_DIR)/nex-launcher.o
@@ -81,6 +85,8 @@ WALL_OBJS    = $(WALL_SRCS:.c=.o)
 DESK_OBJS    = $(DESK_SRCS:.c=.o)
 NOTIFY_OBJS  = $(NOTIFY_DIR)/nex-notify.o
 SETT_OBJS    = $(SETT_DIR)/nex-settings.o
+FM_OBJS      = $(FM_DIR)/nex-fm.o
+SESSION_OBJS = $(SESSION_DIR)/nex-session.o
 
 # ── Targets ───────────────────────────────────────────────────────────────────
 TARGET         = $(BINDIR)/nexwm
@@ -91,9 +97,11 @@ WALL_TARGET    = $(BINDIR)/nex-wallpaper
 DESK_TARGET    = $(BINDIR)/nex-desktop
 NOTIFY_TARGET  = $(BINDIR)/nex-notify
 SETT_TARGET    = $(BINDIR)/nex-settings
+FM_TARGET      = $(BINDIR)/nex-fm
+SESSION_TARGET = $(BINDIR)/nex-session
 
 ALL_COMPONENTS = $(PANEL_TARGET) $(LAUNCH_TARGET) $(WALL_TARGET) \
-                 $(DESK_TARGET) $(NOTIFY_TARGET) $(SETT_TARGET)
+                 $(DESK_TARGET) $(NOTIFY_TARGET) $(SETT_TARGET) $(FM_TARGET) $(SESSION_TARGET)
 
 .PHONY: all phase1 phase2 phase3 debug release clean install uninstall test dirs wm ctl
 
@@ -140,6 +148,13 @@ $(NOTIFY_TARGET): $(NOTIFY_OBJS)
 $(SETT_TARGET): $(SETT_OBJS)
 	$(CXX) $(SETT_OBJS) -o $@ $(QT6_LDFLAGS)
 
+$(FM_TARGET): $(FM_OBJS)
+	$(CXX) $(FM_OBJS) -o $@ $(QT6_LDFLAGS)
+	ln -sf nex-fm $(BINDIR)/nex-filemanager
+
+$(SESSION_TARGET): $(SESSION_OBJS)
+	$(CXX) $(SESSION_OBJS) -o $@ $(QT6_LDFLAGS)
+
 # ── Compile rules ─────────────────────────────────────────────────────────────
 $(SRCDIR)/%.o: $(SRCDIR)/%.c
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -162,6 +177,12 @@ $(NOTIFY_DIR)/%.o: $(NOTIFY_DIR)/%.cpp
 $(SETT_DIR)/%.o: $(SETT_DIR)/%.cpp
 	$(CXX) -std=c++17 $(QT6_CFLAGS) -I$(SETT_DIR) -c $< -o $@
 
+$(FM_DIR)/%.o: $(FM_DIR)/%.cpp
+	$(CXX) -std=c++17 $(QT6_CFLAGS) -I$(FM_DIR) -c $< -o $@
+
+$(SESSION_DIR)/%.o: $(SESSION_DIR)/%.cpp
+	$(CXX) -std=c++17 $(QT6_CFLAGS) -I$(SESSION_DIR) -c $< -o $@
+
 -include $(WM_DEPS)
 -include $(CTL_DEPS)
 -include $(PANEL_OBJS:.o=.d)
@@ -177,6 +198,8 @@ clean:
 	rm -f $(DESK_DIR)/*.o $(DESK_DIR)/*.d
 	rm -f $(NOTIFY_DIR)/*.o $(NOTIFY_DIR)/*.d
 	rm -f $(SETT_DIR)/*.o $(SETT_DIR)/*.d
+	rm -f $(FM_DIR)/*.o $(FM_DIR)/*.d
+	rm -f $(SESSION_DIR)/*.o $(SESSION_DIR)/*.d
 	rm -rf $(BINDIR)
 
 install: all
@@ -188,6 +211,9 @@ install: all
 	install -Dm755 $(DESK_TARGET)   $(BINDIR_INSTALL)/nex-desktop
 	install -Dm755 $(NOTIFY_TARGET) $(BINDIR_INSTALL)/nex-notify
 	install -Dm755 $(SETT_TARGET)   $(BINDIR_INSTALL)/nex-settings
+	install -Dm755 $(FM_TARGET)     $(BINDIR_INSTALL)/nex-fm
+	ln -sf nex-fm $(BINDIR_INSTALL)/nex-filemanager
+	install -Dm755 $(SESSION_TARGET) $(BINDIR_INSTALL)/nex-session
 	install -Dm755 config/start-nexde $(BINDIR_INSTALL)/start-nexde
 	install -Dm644 config/nexwm.desktop /usr/share/xsessions/nexwm.desktop 2>/dev/null || true
 	install -Dm644 config/nexwm.conf $(ETCDIR)/nexwm.conf
@@ -202,6 +228,9 @@ uninstall:
 	rm -f $(BINDIR_INSTALL)/nex-desktop
 	rm -f $(BINDIR_INSTALL)/nex-notify
 	rm -f $(BINDIR_INSTALL)/nex-settings
+	rm -f $(BINDIR_INSTALL)/nex-fm
+	rm -f $(BINDIR_INSTALL)/nex-filemanager
+	rm -f $(BINDIR_INSTALL)/nex-session
 	rm -f $(BINDIR_INSTALL)/start-nexde
 	rm -f /usr/share/xsessions/nexwm.desktop
 	rm -rf $(ETCDIR)

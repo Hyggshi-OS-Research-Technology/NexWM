@@ -74,6 +74,7 @@ void nex_keybind_grab(xcb_connection_t *conn, xcb_window_t root)
 
     grab_key(conn, root, XK_Return, g_config.modkey);
     grab_key(conn, root, XK_d, g_config.modkey);
+    grab_key(conn, root, XK_e, g_config.modkey);
     grab_key(conn, root, XK_q, g_config.modkey);
     grab_key(conn, root, XK_space, g_config.modkey);
     grab_key(conn, root, XK_Tab, g_config.modkey);
@@ -115,6 +116,7 @@ void nex_keybind_handle(xcb_key_press_event_t *ev)
         switch (keysym) {
             case XK_Return: action_spawn(g_config.terminal); break;
             case XK_d: action_spawn(g_config.launcher); break;
+            case XK_e: action_spawn("nex-fm"); break;
             case XK_q: action_kill(NULL); break;
             case XK_space: action_toggle_floating(NULL); break;
             case XK_Tab: nex_focus_next(); break;

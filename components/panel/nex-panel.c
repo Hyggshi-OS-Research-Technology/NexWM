@@ -296,21 +296,45 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
     fill_rect(conn, win, gc_bg, 0, 0, width, height);
     xcb_free_gc(conn, gc_bg);
 
-    int x = 4;
-    int text_y = height / 2 + 5;  /* vertical baseline for 8px font */
+    /* Bottom border accent line */
+    xcb_gc_t gc_border = make_gc(conn, win, NEX_PANEL_BORDER, NEX_PANEL_BORDER);
+    fill_rect(conn, win, gc_border, 0, height - 1, width, 1);
+    xcb_free_gc(conn, gc_border);
 
-    /* ── Launcher button "⊞" ─────────────────────────── */
+    int x = 4;
+    int text_y = height / 2 + 5;  /* vertical baseline */
+
+    /* ── 1. Start Menu button ─────────────────────────── */
     xcb_gc_t gc_ws_act = make_gc(conn, win, CLR_FG, CLR_WS_ACT);
     xcb_gc_t gc_ws_in  = make_gc(conn, win, CLR_FG, CLR_WS_INACT);
-    fill_rect(conn, win, gc_ws_act, x, 2, 26, height - 4);
-    draw_text(conn, win, gc_ws_act, x + 6, text_y, "WM");
-    x += 30;
 
-    /* ── Workspace pager ─────────────────────────────── */
+    fill_rect(conn, win, gc_ws_act, x, 3, 60, height - 6);
+    draw_text(conn, win, gc_ws_act, x + 14, text_y, "Start");
+    x += 64;
+
+    /* ── 2. Quick App Launchers ───────────────────────── */
+    fill_rect(conn, win, gc_ws_in, x, 3, 50, height - 6);
+    draw_text(conn, win, gc_ws_in, x + 10, text_y, "Files");
+    x += 54;
+
+    fill_rect(conn, win, gc_ws_in, x, 3, 46, height - 6);
+    draw_text(conn, win, gc_ws_in, x + 8, text_y, "Sett");
+    x += 50;
+
+    fill_rect(conn, win, gc_ws_in, x, 3, 46, height - 6);
+    draw_text(conn, win, gc_ws_in, x + 8, text_y, "Term");
+    x += 50;
+
+    /* Separator */
+    xcb_gc_t gc_sep = make_gc(conn, win, CLR_SEP, CLR_BG);
+    fill_rect(conn, win, gc_sep, x, 5, 1, height - 10);
+    x += 6;
+
+    /* ── 3. Workspace pager ──────────────────────────── */
     int ws_btn_w = 24;
     for (int i = 0; i < s->ws_count; i++) {
         xcb_gc_t gc = (i == s->current_ws) ? gc_ws_act : gc_ws_in;
-        fill_rect(conn, win, gc, x, 2, ws_btn_w, height - 4);
+        fill_rect(conn, win, gc, x, 3, ws_btn_w, height - 6);
         char label[16];
         snprintf(label, sizeof(label), "%d", i + 1);
         draw_text(conn, win, gc, x + (ws_btn_w - 6) / 2, text_y, label);
@@ -319,19 +343,14 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
     xcb_free_gc(conn, gc_ws_act);
     xcb_free_gc(conn, gc_ws_in);
 
-    /* separator */
-    xcb_gc_t gc_sep = make_gc(conn, win, CLR_SEP, CLR_BG);
-    fill_rect(conn, win, gc_sep, x, 4, 1, height - 8);
-    xcb_free_gc(conn, gc_sep);
-    x += 6;
-
-    /* ── Taskbar ─────────────────────────────────────── */
-    /* Reserve right zone width (buttons + clock ~160px) */
-    int right_zone_w = 160;
+    /* ── 4. Taskbar ──────────────────────────────────── */
+    int right_zone_w = 250;
     int taskbar_w    = width - x - right_zone_w;
     int task_btn_w   = (s->count > 0) ? (taskbar_w / s->count) : 0;
     if (task_btn_w > 200) task_btn_w = 200;
     if (task_btn_w < 60)  task_btn_w = 60;
+
+    xcb_gc_t gc_accent = make_gc(conn, win, NEX_PANEL_ACCENT, NEX_PANEL_ACCENT);
 
     for (int i = 0; i < s->count && x < width - right_zone_w; i++) {
         int is_active = (s->wins[i] == s->active);
@@ -339,31 +358,45 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
         uint32_t fg = CLR_FG;
         xcb_gc_t gc_t = make_gc(conn, win, fg, bg);
         fill_rect(conn, win, gc_t, x + 1, 3, task_btn_w - 2, height - 6);
-        char label[32];
-        truncate_text(s->titles[i], label, (int)sizeof(label) - 1);
+
+        if (is_active) {
+            fill_rect(conn, win, gc_accent, x + 3, height - 5, task_btn_w - 6, 2);
+        }
+
+        char title_buf[32];
+        char label[36];
+        truncate_text(s->titles[i], title_buf, (int)sizeof(title_buf) - 1);
+        snprintf(label, sizeof(label), "%s%s", is_active ? "* " : "  ", title_buf);
         draw_text(conn, win, gc_t, x + 4, text_y, label);
         xcb_free_gc(conn, gc_t);
         x += task_btn_w;
     }
+    xcb_free_gc(conn, gc_accent);
 
-    /* ── Right zone: Max & Full buttons, clock ───────── */
-    int ctrl_btn_w = 36;
-    int max_btn_x  = width - 156;
-    int full_btn_x = width - 116;
-    int clock_x    = width - 70;
+    /* ── 5. Right zone: Controls, Live Clock, Power ─ */
+    int ctrl_btn_w  = 34;
+    int close_btn_x = width - 245;
+    int max_btn_x   = width - 207;
+    int full_btn_x  = width - 169;
+    int clock_x     = width - 128;
+    int power_btn_x = width - 34;
 
     xcb_gc_t gc_ctrl = make_gc(conn, win, CLR_FG, CLR_WS_INACT);
-    fill_rect(conn, win, gc_ctrl, max_btn_x, 2, ctrl_btn_w, height - 4);
+
+    fill_rect(conn, win, gc_ctrl, close_btn_x, 3, 30, height - 6);
+    draw_text(conn, win, gc_ctrl, close_btn_x + 10, text_y, "X");
+
+    fill_rect(conn, win, gc_ctrl, max_btn_x, 3, ctrl_btn_w, height - 6);
     draw_text(conn, win, gc_ctrl, max_btn_x + 6, text_y, "Max");
 
-    fill_rect(conn, win, gc_ctrl, full_btn_x, 2, ctrl_btn_w, height - 4);
+    fill_rect(conn, win, gc_ctrl, full_btn_x, 3, ctrl_btn_w, height - 6);
     draw_text(conn, win, gc_ctrl, full_btn_x + 6, text_y, "Full");
     xcb_free_gc(conn, gc_ctrl);
 
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    char clock_str[16];
-    strftime(clock_str, sizeof(clock_str), "%H:%M", t);
+    char clock_str[24];
+    strftime(clock_str, sizeof(clock_str), "%a %H:%M", t);
 
     xcb_gc_t gc_fg = make_gc(conn, win, CLR_FG, CLR_BG);
     draw_text(conn, win, gc_fg, clock_x, text_y, clock_str);
@@ -374,12 +407,38 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
 
 /* ─── click handling ─────────────────────────────────────────────────────── */
 
-static void handle_click(xcb_connection_t *conn, xcb_window_t root,
-                         panel_state_t *s, int click_x, int panel_w)
+static void spawn_app(const char *name, const char *path1, const char *path2)
 {
-    int max_btn_x  = panel_w - 156;
-    int full_btn_x = panel_w - 116;
-    int ctrl_btn_w = 36;
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        execlp(name, name, NULL);
+        if (path1) execlp(path1, name, NULL);
+        if (path2) execlp(path2, name, NULL);
+        _exit(1);
+    }
+}
+
+static void handle_click(xcb_connection_t *conn, xcb_window_t root,
+                         panel_state_t *s, int click_x, int panel_w, uint8_t button)
+{
+    int right_zone_w = 220;
+    int close_btn_x = panel_w - 215;
+    int max_btn_x   = panel_w - 177;
+    int full_btn_x  = panel_w - 139;
+    int ctrl_btn_w  = 34;
+
+    /* Window Controls (Close, Max, Full) */
+    if (click_x >= close_btn_x && click_x < close_btn_x + 30) {
+        if (s->active) {
+            char cmd[48];
+            snprintf(cmd, sizeof(cmd), "close %u", (unsigned)s->active);
+            ipc_send(cmd);
+        } else {
+            ipc_send("close");
+        }
+        return;
+    }
 
     if (click_x >= max_btn_x && click_x < max_btn_x + ctrl_btn_w) {
         if (s->active) {
@@ -405,20 +464,38 @@ static void handle_click(xcb_connection_t *conn, xcb_window_t root,
 
     int x = 4;
 
-    /* Launcher button */
-    if (click_x < x + 26) {
-        /* Spawn nex-launcher */
-        pid_t pid = fork();
-        if (pid == 0) {
-            setsid();
-            execlp("nex-launcher", "nex-launcher", NULL);
-            _exit(1);
-        }
+    /* 1. Start Menu button */
+    if (click_x >= x && click_x < x + 60) {
+        spawn_app("nex-launcher", "./bin/nex-launcher", "/usr/local/bin/nex-launcher");
         return;
     }
-    x += 30;
+    x += 64;
 
-    /* Workspace buttons */
+    /* 2. Quick Launchers */
+    /* Files Launcher */
+    if (click_x >= x && click_x < x + 50) {
+        spawn_app("nex-fm", "./bin/nex-fm", "/usr/local/bin/nex-fm");
+        return;
+    }
+    x += 54;
+
+    /* Settings Launcher */
+    if (click_x >= x && click_x < x + 46) {
+        spawn_app("nex-settings", "./bin/nex-settings", "/usr/local/bin/nex-settings");
+        return;
+    }
+    x += 50;
+
+    /* Terminal Launcher */
+    if (click_x >= x && click_x < x + 46) {
+        spawn_app("xterm", NULL, NULL);
+        return;
+    }
+    x += 50;
+
+    x += 7; /* separator + gap */
+
+    /* 3. Workspace buttons */
     int ws_btn_w = 24;
     for (int i = 0; i < s->ws_count; i++) {
         if (click_x >= x && click_x < x + ws_btn_w) {
@@ -431,23 +508,33 @@ static void handle_click(xcb_connection_t *conn, xcb_window_t root,
     }
     x += 7;  /* separator + gap */
 
-    /* Taskbar buttons */
-    int right_zone_w = 160;
-    int taskbar_w    = panel_w - x - right_zone_w;
-    int task_btn_w   = (s->count > 0) ? (taskbar_w / s->count) : 0;
+    /* 4. Taskbar buttons */
+    int taskbar_w  = panel_w - x - right_zone_w;
+    int task_btn_w = (s->count > 0) ? (taskbar_w / s->count) : 0;
     if (task_btn_w > 200) task_btn_w = 200;
     if (task_btn_w < 60)  task_btn_w = 60;
 
     for (int i = 0; i < s->count; i++) {
         if (click_x >= x && click_x < x + task_btn_w) {
-            if (s->wins[i] == s->active) {
-                /* Already focused → minimize */
+            if (button == XCB_BUTTON_INDEX_2) {
+                /* Middle Click → Close window */
                 char cmd[48];
-                snprintf(cmd, sizeof(cmd), "minimize %u", (unsigned)s->wins[i]);
+                snprintf(cmd, sizeof(cmd), "close %u", (unsigned)s->wins[i]);
+                ipc_send(cmd);
+            } else if (button == XCB_BUTTON_INDEX_3) {
+                /* Right Click → Toggle floating */
+                char cmd[48];
+                snprintf(cmd, sizeof(cmd), "toggle-floating %u", (unsigned)s->wins[i]);
                 ipc_send(cmd);
             } else {
-                /* Focus via EWMH ClientMessage */
-                ewmh_focus(conn, root, s->wins[i]);
+                /* Left Click → Focus or Minimize */
+                if (s->wins[i] == s->active) {
+                    char cmd[48];
+                    snprintf(cmd, sizeof(cmd), "minimize %u", (unsigned)s->wins[i]);
+                    ipc_send(cmd);
+                } else {
+                    ewmh_focus(conn, root, s->wins[i]);
+                }
             }
             return;
         }
@@ -537,8 +624,8 @@ void nex_panel_run(nex_panel_ctx_t *ctx)
                 break;
             case XCB_BUTTON_PRESS: {
                 xcb_button_press_event_t *bp = (xcb_button_press_event_t *)ev;
-                if (bp->event == ctx->win && bp->detail == XCB_BUTTON_INDEX_1) {
-                    handle_click(ctx->conn, root, &state, bp->event_x, ctx->width);
+                if (bp->event == ctx->win) {
+                    handle_click(ctx->conn, root, &state, bp->event_x, ctx->width, bp->detail);
                     update_state(ctx->conn, root, &state);
                     need_redraw = 1;
                 }

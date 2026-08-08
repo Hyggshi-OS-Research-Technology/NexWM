@@ -69,9 +69,14 @@ void nex_workspace_remove_client(int ws, nex_client_t *c)
     }
 }
 
+#include "layout.h"
+
 void nex_workspace_arrange(int ws)
 {
     if (ws < 0 || ws >= NEX_MAX_WORKSPACES) return;
+
+    nex_layout_apply(nex_monitor_current(), g_workspaces[ws].layout);
+
     nex_client_t *c;
     for (c = g_clients; c; c = c->next) {
         if (c->workspace == ws && c == g_focused) {

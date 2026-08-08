@@ -8,16 +8,18 @@
 
 #include <xcb/xcb.h>
 
-#define NEX_PANEL_HEIGHT      32      /* px */
+#define NEX_PANEL_HEIGHT      36      /* px */
 #define NEX_PANEL_POSITION    0       /* 0 = top, 1 = bottom */
 #define NEX_PANEL_FONT        "monospace:size=10"
-#define NEX_PANEL_BG          0x0f0f1a
-#define NEX_PANEL_FG          0xe0e0e0
+#define NEX_PANEL_BG          0x161622
+#define NEX_PANEL_FG          0xcdd6f4
+#define NEX_PANEL_BORDER      0x2a2a3e
 #define NEX_PANEL_WS_ACTIVE   0x5b8dd9
-#define NEX_PANEL_WS_INACTIVE 0x2a2a3a
-#define NEX_PANEL_WIN_ACTIVE  0x5b8dd9
-#define NEX_PANEL_WIN_BG      0x1a1a2e
+#define NEX_PANEL_WS_INACTIVE 0x242438
+#define NEX_PANEL_WIN_ACTIVE  0x313244
+#define NEX_PANEL_WIN_BG      0x1c1c2e
 #define NEX_PANEL_SEPARATOR   0x2e2e4e
+#define NEX_PANEL_ACCENT      0x5b8dd9
 
 /* IPC socket path (mirrors NexWM) */
 #define NEX_PANEL_SOCKET      "/tmp/nexwm.sock"

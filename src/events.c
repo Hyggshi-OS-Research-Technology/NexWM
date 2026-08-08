@@ -221,8 +221,12 @@ static void handle_button_press(xcb_button_press_event_t *ev)
         nex_client_focus(c);
         nex_client_raise(c);
 
-        uint16_t mod = ev->state & ~(XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK);
-        if (mod == g_config.modkey || (c->flags & NEX_CLIENT_FLOATING)) {
+        uint16_t mod = ev->state & (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL |
+                                    XCB_MOD_MASK_1 | XCB_MOD_MASK_2 |
+                                    XCB_MOD_MASK_3 | XCB_MOD_MASK_4 | XCB_MOD_MASK_5);
+        mod &= ~(XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK);
+
+        if (mod == g_config.modkey) {
             if (!(c->flags & NEX_CLIENT_FLOATING)) {
                 c->flags |= NEX_CLIENT_FLOATING;
             }
@@ -246,7 +250,9 @@ static void handle_button_press(xcb_button_press_event_t *ev)
                                  XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
                                  XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC,
                                  XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+                xcb_allow_events(g_conn, XCB_ALLOW_ASYNC_POINTER, ev->time);
                 xcb_flush(g_conn);
+                return;
             }
         }
     }

@@ -95,18 +95,37 @@ int nex_desktop_scan(nex_desktop_item_list_t *list)
     const char *home = getenv("HOME");
     if (!home) home = "/root";
 
+    /* Always populate core desktop system icons first */
+    struct {
+        const char *name;
+        const char *exec;
+    } defaults[] = {
+        {"Home", "nex-fm"},
+        {"Files", "nex-fm"},
+        {"Settings", "nex-settings"},
+        {"Terminal", "xterm"}
+    };
+
+    for (size_t i = 0; i < sizeof(defaults)/sizeof(defaults[0]) && list->count < NEX_DESKTOP_MAX_FILES; i++) {
+        nex_desktop_item_t *item = &list->items[list->count++];
+        memset(item, 0, sizeof(*item));
+        item->is_desktop_file = 1;
+        snprintf(item->name, sizeof(item->name), "%s", defaults[i].name);
+        snprintf(item->exec, sizeof(item->exec), "%s", defaults[i].exec);
+        snprintf(item->path, sizeof(item->path), "%s", defaults[i].name);
+    }
+
     char desktop_dir[512];
     snprintf(desktop_dir, sizeof(desktop_dir), "%s/Desktop", home);
 
-    /* Create ~/Desktop if it does not exist */
     struct stat st;
     if (stat(desktop_dir, &st) != 0) {
         mkdir(desktop_dir, 0755);
-        return 0;
+        return list->count;
     }
 
     DIR *d = opendir(desktop_dir);
-    if (!d) return 0;
+    if (!d) return list->count;
 
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL && list->count < NEX_DESKTOP_MAX_FILES) {
