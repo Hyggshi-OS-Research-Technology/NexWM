@@ -130,7 +130,11 @@ int nex_wallpaper_set(const nex_wp_config_t *cfg)
     if (!cfg->path || cfg->path[0] == '\0') {
         /* Solid color only */
         ret = set_solid_color(dpy, cfg->bg_color);
+        char color_str[32];
+        snprintf(color_str, sizeof(color_str), "0x%06x", cfg->bg_color);
+        cache_write(color_str);
     } else {
+        cache_write(cfg->path);
 #ifdef HAVE_IMLIB2
         /* Imlib2 image rendering path */
         int scr = DefaultScreen(dpy);

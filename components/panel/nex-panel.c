@@ -311,7 +311,7 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
     for (int i = 0; i < s->ws_count; i++) {
         xcb_gc_t gc = (i == s->current_ws) ? gc_ws_act : gc_ws_in;
         fill_rect(conn, win, gc, x, 2, ws_btn_w, height - 4);
-        char label[4];
+        char label[16];
         snprintf(label, sizeof(label), "%d", i + 1);
         draw_text(conn, win, gc, x + (ws_btn_w - 6) / 2, text_y, label);
         x += ws_btn_w + 2;

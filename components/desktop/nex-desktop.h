@@ -14,8 +14,8 @@
 #define NEX_DESKTOP_MAX_FILES   256
 
 typedef struct {
-    char name[128];
-    char path[512];
+    char name[256];
+    char path[1024];
     char exec[512];
     char icon[256];
     int is_desktop_file;

@@ -99,7 +99,7 @@ int nex_settings_save(const nex_settings_t *s, const char *path)
 
     /* Ensure directory ~/.config/nexwm exists */
     char dir[512];
-    strncpy(dir, path, sizeof(dir) - 1);
+    snprintf(dir, sizeof(dir), "%s", path);
     char *last_slash = strrchr(dir, '/');
     if (last_slash) {
         *last_slash = '\0';
@@ -131,17 +131,19 @@ int nex_settings_apply_ipc(const nex_settings_t *s)
     if (!s) return -1;
 
     char cmd[256];
+    int res = 0;
 
     snprintf(cmd, sizeof(cmd), "nexwmctl set-gap %d", s->gaps);
-    system(cmd);
+    res |= system(cmd);
 
     snprintf(cmd, sizeof(cmd), "nexwmctl set-layout %s", s->default_layout);
-    system(cmd);
+    res |= system(cmd);
 
     snprintf(cmd, sizeof(cmd), "nexwmctl workspace-count %d", s->workspace_count);
-    system(cmd);
+    res |= system(cmd);
 
-    system("nexwmctl reload");
+    res |= system("nexwmctl reload");
+    (void)res;
     return 0;
 }
 

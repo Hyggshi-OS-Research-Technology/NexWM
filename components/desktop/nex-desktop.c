@@ -35,7 +35,7 @@ static void parse_desktop_entry(const char *path, nex_desktop_item_t *item)
 {
     memset(item, 0, sizeof(*item));
     item->is_desktop_file = 1;
-    strncpy(item->path, path, sizeof(item->path) - 1);
+    snprintf(item->path, sizeof(item->path), "%s", path);
 
     FILE *f = fopen(path, "r");
     if (!f) return;
@@ -62,7 +62,7 @@ static void parse_desktop_entry(const char *path, nex_desktop_item_t *item)
         if (strchr(key, '[')) continue;
 
         if (strcmp(key, "Name") == 0) {
-            strncpy(item->name, val, sizeof(item->name) - 1);
+            snprintf(item->name, sizeof(item->name), "%s", val);
         } else if (strcmp(key, "Exec") == 0) {
             /* Strip %u %f placeholders */
             char cleaned[512];
@@ -74,16 +74,16 @@ static void parse_desktop_entry(const char *path, nex_desktop_item_t *item)
             }
             cleaned[out] = '\0';
             while (out > 0 && cleaned[out - 1] == ' ') cleaned[--out] = '\0';
-            strncpy(item->exec, cleaned, sizeof(item->exec) - 1);
+            snprintf(item->exec, sizeof(item->exec), "%s", cleaned);
         } else if (strcmp(key, "Icon") == 0) {
-            strncpy(item->icon, val, sizeof(item->icon) - 1);
+            snprintf(item->icon, sizeof(item->icon), "%s", val);
         }
     }
     fclose(f);
 
     if (item->name[0] == '\0') {
         const char *base = strrchr(path, '/');
-        strncpy(item->name, base ? base + 1 : path, sizeof(item->name) - 1);
+        snprintf(item->name, sizeof(item->name), "%.250s", base ? base + 1 : path);
     }
 }
 
@@ -123,8 +123,8 @@ int nex_desktop_scan(nex_desktop_item_list_t *list)
         } else {
             memset(item, 0, sizeof(*item));
             item->is_desktop_file = 0;
-            strncpy(item->name, ent->d_name, sizeof(item->name) - 1);
-            strncpy(item->path, path, sizeof(item->path) - 1);
+            snprintf(item->name, sizeof(item->name), "%s", ent->d_name);
+            snprintf(item->path, sizeof(item->path), "%s", path);
         }
         list->count++;
     }

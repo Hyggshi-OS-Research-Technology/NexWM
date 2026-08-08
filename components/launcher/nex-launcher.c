@@ -78,13 +78,13 @@ static void parse_desktop_file(const char *path, nex_app_t *app)
             cleaned[out] = '\0';
             /* Trim trailing space */
             while (out > 0 && cleaned[out-1] == ' ') cleaned[--out] = '\0';
-            strncpy(app->exec, cleaned, sizeof(app->exec) - 1);
+            snprintf(app->exec, sizeof(app->exec), "%s", cleaned);
         } else if (strcmp(key, "Icon") == 0) {
-            strncpy(app->icon, val, sizeof(app->icon) - 1);
+            snprintf(app->icon, sizeof(app->icon), "%s", val);
         } else if (strcmp(key, "Categories") == 0) {
-            strncpy(app->categories, val, sizeof(app->categories) - 1);
+            snprintf(app->categories, sizeof(app->categories), "%s", val);
         } else if (strcmp(key, "Comment") == 0) {
-            strncpy(app->comment, val, sizeof(app->comment) - 1);
+            snprintf(app->comment, sizeof(app->comment), "%s", val);
         } else if (strcmp(key, "Terminal") == 0) {
             app->terminal = (strcasecmp(val, "true") == 0);
         } else if (strcmp(key, "NoDisplay") == 0) {

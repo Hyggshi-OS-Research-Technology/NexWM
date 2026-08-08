@@ -18,6 +18,8 @@ else
 WALLPAPER_LDFLAGS = -lX11
 endif
 
+SAN_FLAGS ?=
+
 DEBUG_CFLAGS = -Wall -Wextra -Wpedantic -std=c11 -g -O0 -DDEBUG \
                -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
                -fsanitize=address,undefined -fno-omit-frame-pointer
@@ -104,7 +106,7 @@ dirs:
 	@mkdir -p $(BINDIR)
 
 debug:
-	$(MAKE) CFLAGS="$(DEBUG_CFLAGS)" LDFLAGS="$(DEBUG_LDFLAGS)" all
+	$(MAKE) CFLAGS="$(DEBUG_CFLAGS)" LDFLAGS="$(DEBUG_LDFLAGS)" SAN_FLAGS="-fsanitize=address,undefined" all
 
 release:
 	$(MAKE) CFLAGS="$(CFLAGS) -DNDEBUG" all
@@ -114,25 +116,25 @@ $(TARGET): $(WM_OBJS)
 	$(CC) $(WM_OBJS) -o $@ $(LDFLAGS)
 
 $(CTL_TARGET): $(CTL_OBJS)
-	$(CC) $(CTL_OBJS) -o $@
+	$(CC) $(CTL_OBJS) -o $@ $(SAN_FLAGS)
 
 $(PANEL_TARGET): $(PANEL_OBJS)
-	$(CC) $(PANEL_OBJS) -o $@ $(PANEL_LDFLAGS)
+	$(CC) $(PANEL_OBJS) -o $@ $(PANEL_LDFLAGS) $(SAN_FLAGS)
 
 $(LAUNCH_TARGET): $(LAUNCH_OBJS)
-	$(CC) $(LAUNCH_OBJS) -o $@
+	$(CC) $(LAUNCH_OBJS) -o $@ $(SAN_FLAGS)
 
 $(WALL_TARGET): $(WALL_OBJS)
-	$(CC) $(WALL_OBJS) -o $@ $(WALLPAPER_LDFLAGS)
+	$(CC) $(WALL_OBJS) -o $@ $(WALLPAPER_LDFLAGS) $(SAN_FLAGS)
 
 $(DESK_TARGET): $(DESK_OBJS)
-	$(CC) $(DESK_OBJS) -o $@ $(DESKTOP_LDFLAGS)
+	$(CC) $(DESK_OBJS) -o $@ $(DESKTOP_LDFLAGS) $(SAN_FLAGS)
 
 $(NOTIFY_TARGET): $(NOTIFY_OBJS)
-	$(CC) $(NOTIFY_OBJS) -o $@ $(NOTIFY_LDFLAGS)
+	$(CC) $(NOTIFY_OBJS) -o $@ $(NOTIFY_LDFLAGS) $(SAN_FLAGS)
 
 $(SETT_TARGET): $(SETT_OBJS)
-	$(CC) $(SETT_OBJS) -o $@
+	$(CC) $(SETT_OBJS) -o $@ $(SAN_FLAGS)
 
 # ── Compile rules ─────────────────────────────────────────────────────────────
 $(SRCDIR)/%.o: $(SRCDIR)/%.c
