@@ -37,8 +37,6 @@
 #include <sys/un.h>
 
 #include <xcb/xcb.h>
-#include <xcb/xcb_ewmh.h>
-#include <xcb/xcb_atom.h>
 
 /* ─── colours ─────────────────────────────────────────────────────────────── */
 #define CLR_BG          NEX_PANEL_BG

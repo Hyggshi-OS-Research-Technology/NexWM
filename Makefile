@@ -5,8 +5,10 @@ CC      ?= gcc
 CFLAGS  ?= -Wall -Wextra -Wpedantic -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDFLAGS ?= -lxcb -lxcb-util -lxcb-randr -lxcb-ewmh -lxcb-icccm -lxcb-keysyms -lX11
 
-# Panel uses xcb-ewmh for atom support
-PANEL_LDFLAGS = -lxcb -lxcb-ewmh -lX11
+# Panel & Desktop components XCB flags
+PANEL_LDFLAGS   = -lxcb -lX11
+DESKTOP_LDFLAGS = -lxcb -lX11
+NOTIFY_LDFLAGS  = -lxcb -lX11
 
 # Wallpaper: XLib only (Imlib2 optional via HAVE_IMLIB2=1)
 ifeq ($(HAVE_IMLIB2),1)
@@ -52,18 +54,27 @@ CTL_SRCS = $(SRCDIR)/nexwmctl.c
 CTL_OBJS = $(CTL_SRCS:.c=.o)
 CTL_DEPS = $(CTL_SRCS:.c=.d)
 
-# ── Phase 1 Components ────────────────────────────────────────────────────────
+# ── Desktop Suite Components ──────────────────────────────────────────────────
 PANEL_DIR    = components/panel
 LAUNCH_DIR   = components/launcher
 WALL_DIR     = components/wallpaper
+DESK_DIR     = components/desktop
+NOTIFY_DIR   = components/notify
+SETT_DIR     = components/settings
 
 PANEL_SRCS   = $(PANEL_DIR)/nex-panel.c
 LAUNCH_SRCS  = $(LAUNCH_DIR)/nex-launcher.c
 WALL_SRCS    = $(WALL_DIR)/nex-wallpaper.c
+DESK_SRCS    = $(DESK_DIR)/nex-desktop.c
+NOTIFY_SRCS  = $(NOTIFY_DIR)/nex-notify.c
+SETT_SRCS    = $(SETT_DIR)/nex-settings.c
 
 PANEL_OBJS   = $(PANEL_SRCS:.c=.o)
 LAUNCH_OBJS  = $(LAUNCH_SRCS:.c=.o)
 WALL_OBJS    = $(WALL_SRCS:.c=.o)
+DESK_OBJS    = $(DESK_SRCS:.c=.o)
+NOTIFY_OBJS  = $(NOTIFY_SRCS:.c=.o)
+SETT_OBJS    = $(SETT_SRCS:.c=.o)
 
 # ── Targets ───────────────────────────────────────────────────────────────────
 TARGET         = $(BINDIR)/nexwm
@@ -71,14 +82,20 @@ CTL_TARGET     = $(BINDIR)/nexwmctl
 PANEL_TARGET   = $(BINDIR)/nex-panel
 LAUNCH_TARGET  = $(BINDIR)/nex-launcher
 WALL_TARGET    = $(BINDIR)/nex-wallpaper
+DESK_TARGET    = $(BINDIR)/nex-desktop
+NOTIFY_TARGET  = $(BINDIR)/nex-notify
+SETT_TARGET    = $(BINDIR)/nex-settings
 
-PHASE1_TARGETS = $(PANEL_TARGET) $(LAUNCH_TARGET) $(WALL_TARGET)
+ALL_COMPONENTS = $(PANEL_TARGET) $(LAUNCH_TARGET) $(WALL_TARGET) \
+                 $(DESK_TARGET) $(NOTIFY_TARGET) $(SETT_TARGET)
 
-.PHONY: all phase1 debug release clean install uninstall test dirs wm ctl
+.PHONY: all phase1 phase2 phase3 debug release clean install uninstall test dirs wm ctl
 
-all: dirs $(TARGET) $(CTL_TARGET) phase1
+all: dirs $(TARGET) $(CTL_TARGET) $(ALL_COMPONENTS)
 
-phase1: dirs $(PHASE1_TARGETS)
+phase1: dirs $(PANEL_TARGET) $(LAUNCH_TARGET) $(WALL_TARGET)
+phase2: dirs $(DESK_TARGET) $(NOTIFY_TARGET)
+phase3: dirs $(SETT_TARGET)
 
 wm:  dirs $(TARGET)
 ctl: dirs $(CTL_TARGET)
@@ -92,14 +109,13 @@ debug:
 release:
 	$(MAKE) CFLAGS="$(CFLAGS) -DNDEBUG" all
 
-# ── NexWM & nexwmctl link rules ───────────────────────────────────────────────
+# ── Link rules ────────────────────────────────────────────────────────────────
 $(TARGET): $(WM_OBJS)
 	$(CC) $(WM_OBJS) -o $@ $(LDFLAGS)
 
 $(CTL_TARGET): $(CTL_OBJS)
 	$(CC) $(CTL_OBJS) -o $@
 
-# ── Component link rules ──────────────────────────────────────────────────────
 $(PANEL_TARGET): $(PANEL_OBJS)
 	$(CC) $(PANEL_OBJS) -o $@ $(PANEL_LDFLAGS)
 
@@ -108,6 +124,15 @@ $(LAUNCH_TARGET): $(LAUNCH_OBJS)
 
 $(WALL_TARGET): $(WALL_OBJS)
 	$(CC) $(WALL_OBJS) -o $@ $(WALLPAPER_LDFLAGS)
+
+$(DESK_TARGET): $(DESK_OBJS)
+	$(CC) $(DESK_OBJS) -o $@ $(DESKTOP_LDFLAGS)
+
+$(NOTIFY_TARGET): $(NOTIFY_OBJS)
+	$(CC) $(NOTIFY_OBJS) -o $@ $(NOTIFY_LDFLAGS)
+
+$(SETT_TARGET): $(SETT_OBJS)
+	$(CC) $(SETT_OBJS) -o $@
 
 # ── Compile rules ─────────────────────────────────────────────────────────────
 $(SRCDIR)/%.o: $(SRCDIR)/%.c
@@ -122,11 +147,23 @@ $(LAUNCH_DIR)/%.o: $(LAUNCH_DIR)/%.c
 $(WALL_DIR)/%.o: $(WALL_DIR)/%.c
 	$(CC) $(CFLAGS) $(WALLPAPER_CFLAGS) -I$(WALL_DIR) -MMD -MP -c $< -o $@
 
+$(DESK_DIR)/%.o: $(DESK_DIR)/%.c
+	$(CC) $(CFLAGS) -I$(DESK_DIR) -MMD -MP -c $< -o $@
+
+$(NOTIFY_DIR)/%.o: $(NOTIFY_DIR)/%.c
+	$(CC) $(CFLAGS) -I$(NOTIFY_DIR) -MMD -MP -c $< -o $@
+
+$(SETT_DIR)/%.o: $(SETT_DIR)/%.c
+	$(CC) $(CFLAGS) -I$(SETT_DIR) -MMD -MP -c $< -o $@
+
 -include $(WM_DEPS)
 -include $(CTL_DEPS)
 -include $(PANEL_OBJS:.o=.d)
 -include $(LAUNCH_OBJS:.o=.d)
 -include $(WALL_OBJS:.o=.d)
+-include $(DESK_OBJS:.o=.d)
+-include $(NOTIFY_OBJS:.o=.d)
+-include $(SETT_OBJS:.o=.d)
 
 # ── Maintenance ───────────────────────────────────────────────────────────────
 clean:
@@ -134,6 +171,9 @@ clean:
 	rm -f $(PANEL_DIR)/*.o $(PANEL_DIR)/*.d
 	rm -f $(LAUNCH_DIR)/*.o $(LAUNCH_DIR)/*.d
 	rm -f $(WALL_DIR)/*.o $(WALL_DIR)/*.d
+	rm -f $(DESK_DIR)/*.o $(DESK_DIR)/*.d
+	rm -f $(NOTIFY_DIR)/*.o $(NOTIFY_DIR)/*.d
+	rm -f $(SETT_DIR)/*.o $(SETT_DIR)/*.d
 	rm -rf $(BINDIR)
 
 install: all
@@ -142,6 +182,9 @@ install: all
 	install -Dm755 $(PANEL_TARGET)  $(BINDIR_INSTALL)/nex-panel
 	install -Dm755 $(LAUNCH_TARGET) $(BINDIR_INSTALL)/nex-launcher
 	install -Dm755 $(WALL_TARGET)   $(BINDIR_INSTALL)/nex-wallpaper
+	install -Dm755 $(DESK_TARGET)   $(BINDIR_INSTALL)/nex-desktop
+	install -Dm755 $(NOTIFY_TARGET) $(BINDIR_INSTALL)/nex-notify
+	install -Dm755 $(SETT_TARGET)   $(BINDIR_INSTALL)/nex-settings
 	install -Dm644 config/nexwm.conf $(ETCDIR)/nexwm.conf
 	@echo "Nex Desktop Environment installed to $(PREFIX)"
 
@@ -151,22 +194,22 @@ uninstall:
 	rm -f $(BINDIR_INSTALL)/nex-panel
 	rm -f $(BINDIR_INSTALL)/nex-launcher
 	rm -f $(BINDIR_INSTALL)/nex-wallpaper
+	rm -f $(BINDIR_INSTALL)/nex-desktop
+	rm -f $(BINDIR_INSTALL)/nex-notify
+	rm -f $(BINDIR_INSTALL)/nex-settings
 	rm -rf $(ETCDIR)
 
 test:
-	@echo "=== NexDE test guide ==="
-	@echo "Start Xephyr:"
-	@echo "  Xephyr :1 -ac -br -noreset -screen 1280x720 &"
+	@echo "=== Nex Desktop Environment test guide ==="
+	@echo "1. Start Xephyr display:"
+	@echo "   Xephyr :1 -ac -br -noreset -screen 1280x720 &"
 	@echo ""
-	@echo "Launch NexWM:"
-	@echo "  DISPLAY=:1 ./$(TARGET) --debug &"
+	@echo "2. Start NexWM:"
+	@echo "   DISPLAY=:1 ./$(TARGET) --debug &"
 	@echo ""
-	@echo "Launch panel, launcher, wallpaper:"
-	@echo "  DISPLAY=:1 ./$(PANEL_TARGET) &"
-	@echo "  DISPLAY=:1 ./$(WALL_TARGET) --color 0x1a1a2e"
-	@echo "  DISPLAY=:1 ./$(LAUNCH_TARGET) --list"
-	@echo ""
-	@echo "Test IPC:"
-	@echo "  DISPLAY=:1 ./$(CTL_TARGET) reload"
-	@echo "  DISPLAY=:1 ./$(CTL_TARGET) workspace 2"
-	@echo "  DISPLAY=:1 ./$(CTL_TARGET) set-gap 12"
+	@echo "3. Run Desktop components:"
+	@echo "   DISPLAY=:1 ./$(PANEL_TARGET) &"
+	@echo "   DISPLAY=:1 ./$(WALL_TARGET) --color 0x1a1a2e &"
+	@echo "   DISPLAY=:1 ./$(DESK_TARGET) &"
+	@echo "   DISPLAY=:1 ./$(NOTIFY_TARGET) \"NexDE\" \"Desktop ready\" 3000 &"
+	@echo "   ./$(SETT_TARGET)"
