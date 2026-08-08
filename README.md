@@ -15,6 +15,8 @@ Part of the **Nex / Hyggshi OS** ecosystem.
 - **Multi-monitor**: Extensible monitor support
 - **Keyboard-driven**: Extensive configurable keybindings
 - **Window Rules**: Automatic window placement and behavior
+- **Customizable Wallpaper**: Change the desktop background to any image with scale/stretch/center/tile modes from the NexSettings control panel or the `nex-wallpaper` CLI
+- **Built-in Terminal (NexTerminal)**: A Qt6 terminal emulator that spawns a real shell over a pseudo-terminal (pty), with color support, copy/paste, and resizable TUI apps — launched via `Super + Enter` or the `nex-terminal` launcher entry (`nex-terminal.desktop`)
 
 ## Architecture
 
@@ -110,6 +112,27 @@ exec nexwm
 Configuration file: `~/.config/nexwm/nexwm.conf`
 
 See `config/nexwm.conf` for an example configuration.
+
+### Appearances
+
+| Key | Value | Description |
+|-----|-------|-------------|
+| `border_width` | `2` | Thickness of the window border (px) |
+| `border_focus` | `#5b8dd9` | Border color of the focused window |
+| `border_normal` | `#444444` | Border color of unfocused windows |
+| `gaps` | `8` | Gap between tiled windows (px) |
+| `wallpaper` | `/path/to/image.png` | Desktop background image (empty = none / solid color) |
+| `wallpaper_mode` | `scale` | How the image is displayed: `scale` \| `stretch` \| `center` \| `tile` |
+
+> **Tip:** The easiest way to change the background is through the **NexSettings** panel
+> (`nex-settings`) — pick *Background Image* with the **Browse…** button, choose a *Background
+> Mode*, and click **Apply & Save**. The selection is saved to `nexwm.conf` and re-applied on
+> the next session via `nex-wallpaper --restore`. You can also change it from the terminal:
+>
+> ```bash
+> nex-wallpaper --set /path/to/image.png --mode scale
+> nex-wallpaper --color 0x1a1a2e      # solid color background
+> ```
 
 ## Default Keyboard Shortcuts
 

@@ -8,6 +8,19 @@
 #include <xcb/xcb.h>
 #include <xcb/xcb_icccm.h>
 
+/* Titlebar height (px) used by the decoration frame. */
+#define NEX_TITLEBAR_H 24
+/* Titlebar button size (px) - each button is a square of this size. */
+#define NEX_TITLEBAR_BTN 24
+
+/* Titlebar button hit-test results */
+enum {
+    NEX_BTN_NONE = 0,
+    NEX_BTN_MINIMIZE = 1,
+    NEX_BTN_MAXIMIZE = 2,
+    NEX_BTN_CLOSE = 3
+};
+
 typedef enum {
     NEX_CLIENT_FLOATING = (1 << 0),
     NEX_CLIENT_FULLSCREEN = (1 << 1),
@@ -20,8 +33,9 @@ typedef enum {
 
 typedef struct nex_client {
     xcb_window_t window;
+    xcb_window_t frame;          /* decoration frame (client is a child of it) */
     int x, y;
-    int width, height;
+    int width, height;           /* FRAME geometry (includes the titlebar strip) */
     int old_x, old_y;
     int old_width, old_height;
     int basew, baseh;
@@ -30,6 +44,7 @@ typedef struct nex_client {
     int minw, minh;
     int workspace;
     unsigned int flags;
+    uint32_t border_color;       /* active/inactive titlebar color */
     char class[64];
     char instance[64];
     char title[256];
@@ -58,5 +73,12 @@ void nex_client_grab_buttons(nex_client_t *c);
 void nex_client_kill(nex_client_t *c);
 void nex_client_list_add(nex_client_t *c);
 void nex_client_list_remove(nex_client_t *c);
+
+/* ── decoration (titlebar) helpers ───────────────────────────────────────── */
+void nex_client_decorate(nex_client_t *c);
+void nex_client_redraw_titlebar(nex_client_t *c);
+void nex_client_reframe(nex_client_t *c);
+int  nex_client_titlebar_hit(const nex_client_t *c, int fx, int fy, int *button);
+int  nex_client_titlebar_press(const nex_client_t *c, int fy);
 
 #endif

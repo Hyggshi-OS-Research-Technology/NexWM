@@ -510,7 +510,7 @@ static void handle_click(xcb_connection_t *conn, xcb_window_t root,
 
     /* Terminal Launcher */
     if (click_x >= x && click_x < x + 46) {
-        spawn_app("xterm", NULL, NULL);
+        spawn_app("nex-terminal", "./bin/nex-terminal", "/usr/local/bin/nex-terminal");
         return;
     }
     x += 50;

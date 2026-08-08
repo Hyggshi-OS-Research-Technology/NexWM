@@ -103,7 +103,7 @@ int nex_desktop_scan(nex_desktop_item_list_t *list)
         {"Home", "nex-fm"},
         {"Files", "nex-fm"},
         {"Settings", "nex-settings"},
-        {"Terminal", "xterm"}
+        {"Terminal", "nex-terminal"}
     };
 
     for (size_t i = 0; i < sizeof(defaults)/sizeof(defaults[0]) && list->count < NEX_DESKTOP_MAX_FILES; i++) {
@@ -291,7 +291,7 @@ static void show_context_menu(xcb_connection_t *conn, xcb_screen_t *screen, int 
                         setsid();
                         for (int fd = 3; fd < 256; fd++) close(fd);
                         switch (selected) {
-                            case 0: execlp("xterm", "xterm", NULL); break;
+                            case 0: execlp("nex-terminal", "nex-terminal", NULL); break;
                             case 1: execlp("nex-fm", "nex-fm", NULL); break;
                             case 2: execlp("nex-settings", "nex-settings", NULL); break;
                             case 3: {

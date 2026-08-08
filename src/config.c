@@ -15,7 +15,7 @@ void nex_config_default(void)
     memset(&g_config, 0, sizeof(nex_config_t));
 
     g_config.modkey = XCB_MOD_MASK_4;
-    strncpy(g_config.terminal, "xterm", sizeof(g_config.terminal) - 1);
+    strncpy(g_config.terminal, "nex-terminal", sizeof(g_config.terminal) - 1);
     strncpy(g_config.launcher, "nex-launcher", sizeof(g_config.launcher) - 1);
     g_config.border_width = 2;
     g_config.border_focus = 0x5b8dd9;
