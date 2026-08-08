@@ -1,5 +1,9 @@
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
+#endif
 
 /*
  * keybind.c - Keyboard shortcut implementation for NexWM

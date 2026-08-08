@@ -7,6 +7,7 @@
 
 #include <xcb/xcb.h>
 #include <xcb/randr.h>
+#include "config.h"
 
 typedef struct {
     int x, y;

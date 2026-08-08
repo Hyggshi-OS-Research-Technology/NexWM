@@ -33,5 +33,8 @@ void nex_monitor_init(xcb_connection_t *conn, xcb_screen_t *screen)
 
 nex_monitor_t *nex_monitor_current(void)
 {
-    return &g_monitors[g_current_monitor];
+    if (g_current_monitor >= 0 && g_current_monitor < g_monitor_count) {
+        return &g_monitors[g_current_monitor];
+    }
+    return &g_monitors[0];
 }
