@@ -1,0 +1,74 @@
+#!/bin/sh
+# test-nexde — Launch NexDE inside a Xephyr window for testing
+# Usage: ./scripts/test-nexde [WxH] [display]
+#
+# Examples:
+#   ./scripts/test-nexde
+#   ./scripts/test-nexde 1920x1080
+#   ./scripts/test-nexde 1280x720 :2
+
+set -e
+
+SCREEN="${1:-1280x720}"
+DISPLAY_NUM="${2:-:1}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+BINDIR="$ROOT_DIR/bin"
+
+# ── Sanity checks ────────────────────────────────────────────────────────────
+if ! command -v Xephyr >/dev/null 2>&1; then
+    echo "Error: Xephyr not found. Install with: sudo apt install xserver-xephyr" >&2
+    exit 1
+fi
+
+if [ ! -x "$BINDIR/nexwm" ]; then
+    echo "Error: bin/nexwm not found. Run 'make' first." >&2
+    exit 1
+fi
+
+# ── Kill any stale Xephyr on this display ───────────────────────────────────
+if command -v fuser >/dev/null 2>&1; then
+    fuser "$DISPLAY_NUM" 2>/dev/null | xargs -r kill 2>/dev/null || true
+fi
+
+# ── Launch Xephyr ────────────────────────────────────────────────────────────
+echo "Starting Xephyr on $DISPLAY_NUM at $SCREEN ..."
+Xephyr "$DISPLAY_NUM" \
+    -ac \
+    -br \
+    -noreset \
+    -screen "$SCREEN" &
+
+XEPHYR_PID=$!
+
+# Cleanup on exit
+trap 'kill "$XEPHYR_PID" 2>/dev/null || true' EXIT INT TERM
+
+# Wait for Xephyr to be ready
+sleep 1
+
+# ── Launch NexDE using local bin/ ───────────────────────────────────────────
+echo "Starting NexDE on $DISPLAY_NUM ..."
+export DISPLAY="$DISPLAY_NUM"
+export PATH="$BINDIR:$PATH"
+
+# 1. Set wallpaper (solid color fallback)
+"$BINDIR/nex-wallpaper" --color 0x1a1a2e 2>/dev/null &
+
+# 2. Desktop icon grid
+"$BINDIR/nex-desktop" &
+
+# 3. Panel (taskbar, clock, workspace switcher)
+"$BINDIR/nex-panel" &
+
+# 4. Welcome notification
+"$BINDIR/nex-notify" "NexDE" "Welcome to Nex Desktop Environment" 3000 2>/dev/null &
+
+# 5. Run window manager (keeps session alive until WM exits)
+echo ""
+echo "╔══════════════════════════════════════════╗"
+echo "║  NexDE is running in Xephyr $DISPLAY_NUM           ║"
+echo "║  Press Ctrl+C in this terminal to quit  ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
+exec "$BINDIR/nexwm"

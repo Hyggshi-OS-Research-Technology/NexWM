@@ -402,6 +402,12 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
     draw_text(conn, win, gc_fg, clock_x, text_y, clock_str);
     xcb_free_gc(conn, gc_fg);
 
+    /* Power / Session button (far right, red-tinted) */
+    xcb_gc_t gc_pwr = make_gc(conn, win, 0x11111b, 0xe78284);
+    fill_rect(conn, win, gc_pwr, power_btn_x, 3, 30, height - 6);
+    draw_text(conn, win, gc_pwr, power_btn_x + 3, text_y, "Pwr");
+    xcb_free_gc(conn, gc_pwr);
+
     xcb_flush(conn);
 }
 
@@ -410,23 +416,39 @@ static void render(xcb_connection_t *conn, xcb_window_t win,
 static void spawn_app(const char *name, const char *path1, const char *path2)
 {
     pid_t pid = fork();
+    if (pid < 0) return;
     if (pid == 0) {
         setsid();
-        execlp(name, name, NULL);
-        if (path1) execlp(path1, name, NULL);
-        if (path2) execlp(path2, name, NULL);
+        /* Close X file descriptors so child does not inherit the panel's
+         * X connection — otherwise xterm and other X clients may hang. */
+        for (int fd = 3; fd < 256; fd++) close(fd);
+        /* Try bare name via PATH first */
+        execlp(name, name, (char *)NULL);
+        /* PATH lookup failed — try explicit absolute paths */
+        if (path1) execl(path1, name, (char *)NULL);
+        if (path2) execl(path2, name, (char *)NULL);
         _exit(1);
     }
+    /* Reap asynchronously so we do not leave zombies */
+    (void)waitpid(pid, NULL, WNOHANG);
 }
 
 static void handle_click(xcb_connection_t *conn, xcb_window_t root,
                          panel_state_t *s, int click_x, int panel_w, uint8_t button)
 {
-    int right_zone_w = 220;
-    int close_btn_x = panel_w - 215;
-    int max_btn_x   = panel_w - 177;
-    int full_btn_x  = panel_w - 139;
-    int ctrl_btn_w  = 34;
+    /* ── Right zone layout (must match render()) ──────────────────────────── */
+    int right_zone_w = 250;
+    int close_btn_x  = panel_w - 245;
+    int max_btn_x    = panel_w - 207;
+    int full_btn_x   = panel_w - 169;
+    int ctrl_btn_w   = 34;
+    int power_btn_x  = panel_w - 34;
+
+    /* Power button (far right) */
+    if (click_x >= power_btn_x) {
+        spawn_app("nex-session", "./bin/nex-session", "/usr/local/bin/nex-session");
+        return;
+    }
 
     /* Window Controls (Close, Max, Full) */
     if (click_x >= close_btn_x && click_x < close_btn_x + 30) {
@@ -594,6 +616,12 @@ int nex_panel_init(nex_panel_ctx_t *ctx)
     xcb_change_window_attributes(ctx->conn, screen->root, XCB_CW_EVENT_MASK, &root_mask);
 
     xcb_map_window(ctx->conn, ctx->win);
+
+    /* Raise panel above all other windows (including nex-desktop) */
+    uint32_t raise_vals[1] = { XCB_STACK_MODE_ABOVE };
+    xcb_configure_window(ctx->conn, ctx->win,
+                         XCB_CONFIG_WINDOW_STACK_MODE, raise_vals);
+
     xcb_flush(ctx->conn);
     return 0;
 }
@@ -648,7 +676,13 @@ void nex_panel_run(nex_panel_ctx_t *ctx)
 
         /* Refresh clock every poll tick regardless */
         need_redraw = 1;
-        if (need_redraw) render(ctx->conn, ctx->win, ctx->width, ctx->height, &state);
+        if (need_redraw) {
+            /* Always keep panel on top before drawing */
+            uint32_t raise_vals[1] = { XCB_STACK_MODE_ABOVE };
+            xcb_configure_window(ctx->conn, ctx->win,
+                                 XCB_CONFIG_WINDOW_STACK_MODE, raise_vals);
+            render(ctx->conn, ctx->win, ctx->width, ctx->height, &state);
+        }
 
         if (xcb_connection_has_error(ctx->conn)) break;
     }

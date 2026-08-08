@@ -189,6 +189,134 @@ static xcb_atom_t intern_atom(xcb_connection_t *conn, const char *name)
     return a;
 }
 
+/* ─── Desktop Context Menu ─────────────────────────────────────────────────── */
+
+static void show_context_menu(xcb_connection_t *conn, xcb_screen_t *screen, int x, int y, nex_desktop_item_list_t *list)
+{
+    uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK;
+    uint32_t vals[3] = {
+        0x1e1e2e, /* Dark palette */
+        1,        /* override_redirect */
+        XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS |
+        XCB_EVENT_MASK_POINTER_MOTION
+    };
+
+    int menu_w = 210;
+    int item_h = 28;
+    int count = 5;
+    int menu_h = count * item_h + 8;
+
+    if (x + menu_w > (int)screen->width_in_pixels) x = (int)screen->width_in_pixels - menu_w;
+    if (y + menu_h > (int)screen->height_in_pixels) y = (int)screen->height_in_pixels - menu_h;
+
+    xcb_window_t menu_win = xcb_generate_id(conn);
+    xcb_create_window(conn, XCB_COPY_FROM_PARENT, menu_win, screen->root,
+                      (int16_t)x, (int16_t)y, (uint16_t)menu_w, (uint16_t)menu_h, 1,
+                      XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual, mask, vals);
+
+    uint32_t raise_vals[1] = { XCB_STACK_MODE_ABOVE };
+    xcb_configure_window(conn, menu_win, XCB_CONFIG_WINDOW_STACK_MODE, raise_vals);
+
+    xcb_map_window(conn, menu_win);
+    xcb_flush(conn);
+
+    xcb_grab_pointer(conn, 0, menu_win, XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_POINTER_MOTION,
+                     XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+
+    xcb_gc_t gc_bg = xcb_generate_id(conn);
+    uint32_t gc_bg_vals[2] = { 0x1e1e2e, 0x1e1e2e };
+    xcb_create_gc(conn, gc_bg, menu_win, XCB_GC_FOREGROUND | XCB_GC_BACKGROUND, gc_bg_vals);
+
+    xcb_gc_t gc_fg = xcb_generate_id(conn);
+    uint32_t gc_fg_vals[2] = { 0xcdd6f4, 0x1e1e2e };
+    xcb_create_gc(conn, gc_fg, menu_win, XCB_GC_FOREGROUND | XCB_GC_BACKGROUND, gc_fg_vals);
+
+    xcb_gc_t gc_hover = xcb_generate_id(conn);
+    uint32_t gc_hover_vals[2] = { 0x5b8dd9, 0x5b8dd9 };
+    xcb_create_gc(conn, gc_hover, menu_win, XCB_GC_FOREGROUND | XCB_GC_BACKGROUND, gc_hover_vals);
+
+    const char *items[] = {
+        "  Terminal",
+        "  Files",
+        "  Settings",
+        "  New Folder",
+        "  About NexDE"
+    };
+
+    int hovered = -1;
+    int menu_running = 1;
+
+    while (menu_running) {
+        xcb_rectangle_t bg_rect = { 0, 0, (uint16_t)menu_w, (uint16_t)menu_h };
+        xcb_poly_fill_rectangle(conn, menu_win, gc_bg, 1, &bg_rect);
+
+        for (int i = 0; i < count; i++) {
+            int iy = 4 + i * item_h;
+            if (i == hovered) {
+                xcb_rectangle_t h_rect = { 4, (int16_t)iy, (uint16_t)(menu_w - 8), (uint16_t)(item_h - 2) };
+                xcb_poly_fill_rectangle(conn, menu_win, gc_hover, 1, &h_rect);
+            }
+            xcb_image_text_8(conn, (uint8_t)strlen(items[i]), menu_win, gc_fg,
+                             12, (int16_t)(iy + 18), items[i]);
+        }
+        xcb_flush(conn);
+
+        xcb_generic_event_t *ev = xcb_wait_for_event(conn);
+        if (!ev) break;
+
+        uint8_t type = ev->response_type & ~0x80;
+        if (type == XCB_MOTION_NOTIFY) {
+            xcb_motion_notify_event_t *mn = (xcb_motion_notify_event_t *)ev;
+            if (mn->event_x >= 0 && mn->event_x < menu_w && mn->event_y >= 4 && mn->event_y < menu_h - 4) {
+                hovered = (mn->event_y - 4) / item_h;
+                if (hovered >= count) hovered = -1;
+            } else {
+                hovered = -1;
+            }
+        } else if (type == XCB_BUTTON_PRESS) {
+            xcb_button_press_event_t *bp = (xcb_button_press_event_t *)ev;
+            if (bp->event_x < 0 || bp->event_x >= menu_w || bp->event_y < 0 || bp->event_y >= menu_h) {
+                menu_running = 0;
+            } else {
+                int selected = (bp->event_y - 4) / item_h;
+                if (selected >= 0 && selected < count) {
+                    menu_running = 0;
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        setsid();
+                        for (int fd = 3; fd < 256; fd++) close(fd);
+                        switch (selected) {
+                            case 0: execlp("xterm", "xterm", NULL); break;
+                            case 1: execlp("nex-fm", "nex-fm", NULL); break;
+                            case 2: execlp("nex-settings", "nex-settings", NULL); break;
+                            case 3: {
+                                const char *home = getenv("HOME");
+                                char folder_path[512];
+                                snprintf(folder_path, sizeof(folder_path), "%s/Desktop/New_Folder", home ? home : "/root");
+                                mkdir(folder_path, 0755);
+                                break;
+                            }
+                            case 4: execlp("nex-notify", "nex-notify", "NexDE", "Nex Desktop Environment v0.1.0", "5000", NULL); break;
+                        }
+                        _exit(0);
+                    }
+                    if (selected == 3) {
+                        nex_desktop_scan(list);
+                    }
+                }
+            }
+        }
+        free(ev);
+    }
+
+    xcb_ungrab_pointer(conn, XCB_CURRENT_TIME);
+    xcb_free_gc(conn, gc_bg);
+    xcb_free_gc(conn, gc_fg);
+    xcb_free_gc(conn, gc_hover);
+    xcb_destroy_window(conn, menu_win);
+    xcb_flush(conn);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -227,6 +355,11 @@ int main(int argc, char **argv)
     }
 
     xcb_map_window(conn, win);
+
+    /* Lower desktop below all other windows including the panel */
+    uint32_t lower_vals[1] = { XCB_STACK_MODE_BELOW };
+    xcb_configure_window(conn, win, XCB_CONFIG_WINDOW_STACK_MODE, lower_vals);
+
     xcb_flush(conn);
 
     nex_desktop_item_list_t list;
@@ -301,6 +434,8 @@ int main(int argc, char **argv)
                         last_click_time = now_ms;
                     }
                 }
+            } else if (bp->detail == XCB_BUTTON_INDEX_3) {
+                show_context_menu(conn, screen, bp->event_x, bp->event_y, &list);
             }
         }
         free(ev);

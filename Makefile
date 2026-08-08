@@ -103,7 +103,7 @@ SESSION_TARGET = $(BINDIR)/nex-session
 ALL_COMPONENTS = $(PANEL_TARGET) $(LAUNCH_TARGET) $(WALL_TARGET) \
                  $(DESK_TARGET) $(NOTIFY_TARGET) $(SETT_TARGET) $(FM_TARGET) $(SESSION_TARGET)
 
-.PHONY: all phase1 phase2 phase3 debug release clean install uninstall test dirs wm ctl
+.PHONY: all phase1 phase2 phase3 debug release clean install uninstall test test-hd test-display dirs wm ctl
 
 all: dirs $(TARGET) $(CTL_TARGET) $(ALL_COMPONENTS)
 
@@ -235,17 +235,15 @@ uninstall:
 	rm -f /usr/share/xsessions/nexwm.desktop
 	rm -rf $(ETCDIR)
 
-test:
-	@echo "=== Nex Desktop Environment test guide ==="
-	@echo "1. Start Xephyr display:"
-	@echo "   Xephyr :1 -ac -br -noreset -screen 1280x720 &"
-	@echo ""
-	@echo "2. Start NexWM:"
-	@echo "   DISPLAY=:1 ./$(TARGET) --debug &"
-	@echo ""
-	@echo "3. Run Desktop components:"
-	@echo "   DISPLAY=:1 ./$(PANEL_TARGET) &"
-	@echo "   DISPLAY=:1 ./$(WALL_TARGET) --color 0x1a1a2e &"
-	@echo "   DISPLAY=:1 ./$(DESK_TARGET) &"
-	@echo "   DISPLAY=:1 ./$(NOTIFY_TARGET) \"NexDE\" \"Desktop ready\" 3000 &"
-	@echo "   ./$(SETT_TARGET)"
+test: all
+	@echo "Launching NexDE in Xephyr (1280x720 on :1) ..."
+	@./scripts/test-nexde
+
+test-hd: all
+	@echo "Launching NexDE in Xephyr (1920x1080 on :1) ..."
+	@./scripts/test-nexde 1920x1080
+
+test-display: all
+	@echo "Launching NexDE in Xephyr ($(SCREEN)) on $(XDISP) ..."
+	@./scripts/test-nexde $(SCREEN) $(XDISP)
+
