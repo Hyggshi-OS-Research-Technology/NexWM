@@ -2,10 +2,11 @@
 # Nex Window Manager
 
 CC      ?= gcc
-CFLAGS  ?= -Wall -Wextra -Wpedantic -std=c11 -O2
+CFLAGS  ?= -Wall -Wextra -Wpedantic -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 LDFLAGS ?= -lxcb -lxcb-util -lxcb-randr -lxcb-ewmh -lxcb-icccm -lxcb-keysyms
 
 DEBUG_CFLAGS = -Wall -Wextra -Wpedantic -std=c11 -g -O0 -DDEBUG \
+               -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = $(LDFLAGS) -fsanitize=address,undefined
 
