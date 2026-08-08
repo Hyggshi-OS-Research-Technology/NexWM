@@ -1,3 +1,10 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+
 /*
  * rules.c - Window rules implementation for NexWM
  */
@@ -6,6 +13,7 @@
 #include "config.h"
 #include "log.h"
 #include <string.h>
+#include <strings.h>
 
 void nex_rules_apply(nex_client_t *c)
 {
