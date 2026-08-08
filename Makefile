@@ -187,6 +187,8 @@ install: all
 	install -Dm755 $(DESK_TARGET)   $(BINDIR_INSTALL)/nex-desktop
 	install -Dm755 $(NOTIFY_TARGET) $(BINDIR_INSTALL)/nex-notify
 	install -Dm755 $(SETT_TARGET)   $(BINDIR_INSTALL)/nex-settings
+	install -Dm755 config/start-nexde $(BINDIR_INSTALL)/start-nexde
+	install -Dm644 config/nexwm.desktop /usr/share/xsessions/nexwm.desktop 2>/dev/null || true
 	install -Dm644 config/nexwm.conf $(ETCDIR)/nexwm.conf
 	@echo "Nex Desktop Environment installed to $(PREFIX)"
 
@@ -199,6 +201,8 @@ uninstall:
 	rm -f $(BINDIR_INSTALL)/nex-desktop
 	rm -f $(BINDIR_INSTALL)/nex-notify
 	rm -f $(BINDIR_INSTALL)/nex-settings
+	rm -f $(BINDIR_INSTALL)/start-nexde
+	rm -f /usr/share/xsessions/nexwm.desktop
 	rm -rf $(ETCDIR)
 
 test:
