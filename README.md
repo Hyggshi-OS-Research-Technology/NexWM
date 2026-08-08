@@ -55,7 +55,7 @@ Part of the **Nex / Hyggshi OS** ecosystem.
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt install libxcb1-dev libxcb-util-dev libxcb-randr0-dev \
+sudo apt install libx11-dev libxcb1-dev libxcb-util-dev libxcb-randr0-dev \
                  libxcb-ewmh-dev libxcb-icccm4-dev libxcb-keysyms1-dev
 ```
 
