@@ -452,6 +452,27 @@ void nex_client_resize(nex_client_t *c, int w, int h)
     }
 }
 
+void nex_client_set_geometry(nex_client_t *c, int x, int y, int w, int h)
+{
+    if (!c) return;
+    if (w < 1) w = 1;
+    if (h < NEX_TITLEBAR_H + 1) h = NEX_TITLEBAR_H + 1;
+    c->x = x;
+    c->y = y;
+    c->width = w;
+    c->height = h;
+    if (c->frame != XCB_WINDOW_NONE) {
+        nex_client_reframe(c);
+    } else {
+        uint32_t values[] = { (uint32_t)x, (uint32_t)y,
+                              (uint32_t)w, (uint32_t)h };
+        xcb_configure_window(g_conn, c->window,
+                             XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                             XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+                             values);
+    }
+}
+
 void nex_client_set_border(nex_client_t *c, uint32_t color)
 {
     if (!c) return;

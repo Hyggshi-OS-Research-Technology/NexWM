@@ -235,6 +235,31 @@ static int g_drag_win_y = 0;
 static int g_drag_win_w = 0;
 static int g_drag_win_h = 0;
 static int g_drag_mode = 0; /* 0 = none, 1 = move, 2 = resize */
+static int g_resize_edge = NEX_RESIZE_NONE;
+
+static void begin_resize(nex_client_t *c, xcb_button_press_event_t *ev, int edge)
+{
+    if (!c || edge == NEX_RESIZE_NONE) return;
+    if (c->flags & (NEX_CLIENT_FULLSCREEN | NEX_CLIENT_MAXIMIZED | NEX_CLIENT_FIXED)) return;
+
+    if (!(c->flags & NEX_CLIENT_FLOATING))
+        c->flags |= NEX_CLIENT_FLOATING;
+
+    g_drag_client = c;
+    g_drag_start_x = ev->root_x;
+    g_drag_start_y = ev->root_y;
+    g_drag_win_x = c->x;
+    g_drag_win_y = c->y;
+    g_drag_win_w = c->width;
+    g_drag_win_h = c->height;
+    g_resize_edge = edge;
+    g_drag_mode = 2;
+
+    xcb_grab_pointer(g_conn, 0, g_screen->root,
+                     XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+                     XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC,
+                     XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+}
 
 static void handle_button_press(xcb_button_press_event_t *ev)
 {
@@ -249,6 +274,18 @@ static void handle_button_press(xcb_button_press_event_t *ev)
     if (c) {
         nex_client_focus(c);
         nex_client_raise(c);
+
+        /* Server-side frame resize: 4 edges + 4 corners. */
+        if (frame_client && ev->detail == XCB_BUTTON_INDEX_1 &&
+            !(c->flags & (NEX_CLIENT_FULLSCREEN | NEX_CLIENT_MAXIMIZED | NEX_CLIENT_FIXED))) {
+            int edge = NEX_RESIZE_NONE;
+            if (nex_client_frame_resize_hit(c, ev->event_x, ev->event_y, &edge)) {
+                begin_resize(c, ev, edge);
+                xcb_allow_events(g_conn, XCB_ALLOW_ASYNC_POINTER, ev->time);
+                xcb_flush(g_conn);
+                return;
+            }
+        }
 
         /* Server-side titlebar controls. */
         if (frame_client && ev->detail == XCB_BUTTON_INDEX_1) {
@@ -325,12 +362,49 @@ static void handle_motion_notify(xcb_motion_notify_event_t *ev)
     if (g_drag_mode == 1) {
         nex_client_move(g_drag_client, g_drag_win_x + dx, g_drag_win_y + dy);
     } else if (g_drag_mode == 2) {
-        int new_w = g_drag_win_w + dx;
-        int new_h = g_drag_win_h + dy;
-        if (new_w < 50) new_w = 50;
-        if (new_h < NEX_TITLEBAR_H + 30) new_h = NEX_TITLEBAR_H + 30;
+        int new_x = g_drag_win_x;
+        int new_y = g_drag_win_y;
+        int new_w = g_drag_win_w;
+        int new_h = g_drag_win_h;
+
+        /* Resize from the selected edge/corner. The opposite edge stays fixed. */
+        if (g_resize_edge & NEX_RESIZE_W) {
+            new_x = g_drag_win_x + dx;
+            new_w = g_drag_win_w - dx;
+        }
+        if (g_resize_edge & NEX_RESIZE_E) {
+            new_w = g_drag_win_w + dx;
+        }
+        if (g_resize_edge & NEX_RESIZE_N) {
+            new_y = g_drag_win_y + dy;
+            new_h = g_drag_win_h - dy;
+        }
+        if (g_resize_edge & NEX_RESIZE_S) {
+            new_h = g_drag_win_h + dy;
+        }
+
+        /* Keep the frame large enough for the titlebar and client content. */
+        if (new_w < 50) {
+            if (g_resize_edge & NEX_RESIZE_W)
+                new_x = g_drag_win_x + g_drag_win_w - 50;
+            new_w = 50;
+        }
+        if (new_h < NEX_TITLEBAR_H + 30) {
+            if (g_resize_edge & NEX_RESIZE_N)
+                new_y = g_drag_win_y + g_drag_win_h - (NEX_TITLEBAR_H + 30);
+            new_h = NEX_TITLEBAR_H + 30;
+        }
+
+        /* Apply the application's WM_NORMAL_HINTS to the frame size. */
         nex_client_apply_size_hints(g_drag_client, &new_w, &new_h);
-        nex_client_resize(g_drag_client, new_w, new_h);
+
+        /* Re-anchor the frame after hint rounding/clamping. */
+        if (g_resize_edge & NEX_RESIZE_W)
+            new_x = g_drag_win_x + g_drag_win_w - new_w;
+        if (g_resize_edge & NEX_RESIZE_N)
+            new_y = g_drag_win_y + g_drag_win_h - new_h;
+
+        nex_client_set_geometry(g_drag_client, new_x, new_y, new_w, new_h);
     }
     xcb_flush(g_conn);
 }
@@ -340,6 +414,7 @@ static void handle_button_release(xcb_button_release_event_t *ev)
     (void)ev;
     if (g_drag_mode != 0) {
         g_drag_mode = 0;
+        g_resize_edge = NEX_RESIZE_NONE;
         g_drag_client = NULL;
         xcb_ungrab_pointer(g_conn, XCB_CURRENT_TIME);
         xcb_flush(g_conn);
