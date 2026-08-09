@@ -43,7 +43,7 @@ static void handle_map_request(xcb_map_request_event_t *ev)
     }
 
     nex_ewmh_set_wm_desktop(window, c->workspace);
-    xcb_map_window(g_conn, window);
+    nex_client_map(c);
 
     if (c->workspace == g_current_workspace) {
         nex_client_focus(c);
@@ -77,30 +77,44 @@ static void handle_configure_request(xcb_configure_request_event_t *ev)
     if (c->flags & NEX_CLIENT_FULLSCREEN) return;
 
     if (c->flags & NEX_CLIENT_FLOATING) {
-        uint32_t values[6];
-        uint32_t mask = 0;
-        int i = 0;
-        if (ev->value_mask & XCB_CONFIG_WINDOW_X) { mask |= XCB_CONFIG_WINDOW_X; values[i++] = ev->x; c->x = ev->x; }
-        if (ev->value_mask & XCB_CONFIG_WINDOW_Y) { mask |= XCB_CONFIG_WINDOW_Y; values[i++] = ev->y; c->y = ev->y; }
-        if (ev->value_mask & XCB_CONFIG_WINDOW_WIDTH) { mask |= XCB_CONFIG_WINDOW_WIDTH; values[i++] = ev->width; c->width = ev->width; }
-        if (ev->value_mask & XCB_CONFIG_WINDOW_HEIGHT) { mask |= XCB_CONFIG_WINDOW_HEIGHT; values[i++] = ev->height; c->height = ev->height; }
-        if (ev->value_mask & XCB_CONFIG_WINDOW_BORDER_WIDTH) { mask |= XCB_CONFIG_WINDOW_BORDER_WIDTH; values[i++] = ev->border_width; }
-        if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE) { mask |= XCB_CONFIG_WINDOW_STACK_MODE; values[i++] = ev->stack_mode; }
-        if (mask) xcb_configure_window(g_conn, window, mask, values);
+        int x = c->x;
+        int y = c->y;
+        int w = c->width;
+        int h = c->height;
+
+        if (ev->value_mask & XCB_CONFIG_WINDOW_X) x = ev->x;
+        if (ev->value_mask & XCB_CONFIG_WINDOW_Y) y = ev->y;
+        if (ev->value_mask & XCB_CONFIG_WINDOW_WIDTH)
+            w = ev->width + 2 * (int)g_config.border_width;
+        if (ev->value_mask & XCB_CONFIG_WINDOW_HEIGHT)
+            h = ev->height + NEX_TITLEBAR_H + (int)g_config.border_width;
+
+        if (ev->value_mask & (XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT))
+            nex_client_apply_size_hints(c, &w, &h);
+
+        nex_client_move(c, x, y);
+        nex_client_resize(c, w, h);
+        if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE)
+            nex_client_raise(c);
     } else {
+        /* The WM owns the frame geometry. Reply with the client's actual
+         * geometry so applications do not fight the decoration frame. */
         xcb_configure_notify_event_t notify = {
             .response_type = XCB_CONFIGURE_NOTIFY,
             .event = window,
             .window = window,
             .above_sibling = XCB_NONE,
-            .x = c->x,
-            .y = c->y,
-            .width = c->width,
-            .height = c->height,
-            .border_width = g_config.border_width,
+            .x = 0,
+            .y = NEX_TITLEBAR_H,
+            .width = (uint16_t)(c->width > 2 * (int)g_config.border_width
+                                 ? c->width - 2 * (int)g_config.border_width : 1),
+            .height = (uint16_t)(c->height > NEX_TITLEBAR_H + (int)g_config.border_width
+                                  ? c->height - NEX_TITLEBAR_H - (int)g_config.border_width : 1),
+            .border_width = 0,
             .override_redirect = 0
         };
-        xcb_send_event(g_conn, 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, (char *)&notify);
+        xcb_send_event(g_conn, 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+                       (char *)&notify);
     }
 }
 
@@ -108,6 +122,10 @@ static void handle_destroy_notify(xcb_destroy_notify_event_t *ev)
 {
     xcb_window_t window = ev->window;
     nex_client_t *c = nex_client_find(window);
+    if (!c) {
+        c = nex_client_find_frame(window);
+        if (c) return;
+    }
     if (c) {
         nex_workspace_remove_client(c->workspace, c);
         nex_client_destroy(c);
@@ -120,6 +138,10 @@ static void handle_unmap_notify(xcb_unmap_notify_event_t *ev)
 {
     xcb_window_t window = ev->window;
     nex_client_t *c = nex_client_find(window);
+    if (!c) {
+        c = nex_client_find_frame(window);
+        if (c) return;
+    }
     if (c) {
         xcb_get_window_attributes_cookie_t cookie = xcb_get_window_attributes(g_conn, window);
         xcb_get_window_attributes_reply_t *reply = xcb_get_window_attributes_reply(g_conn, cookie, NULL);
@@ -147,7 +169,9 @@ static void handle_property_notify(xcb_property_notify_event_t *ev)
         xcb_get_property_cookie_t cookie = xcb_icccm_get_wm_name(g_conn, window);
         if (xcb_icccm_get_wm_name_reply(g_conn, cookie, &reply, NULL)) {
             strncpy(c->title, reply.name ? reply.name : "", sizeof(c->title) - 1);
+            c->title[sizeof(c->title) - 1] = '\0';
             xcb_icccm_get_text_property_reply_wipe(&reply);
+            nex_client_redraw_titlebar(c);
         }
     } else if (atom == XCB_ATOM_WM_CLASS) {
         xcb_icccm_get_wm_class_reply_t wm_class;
@@ -217,9 +241,42 @@ static void handle_button_press(xcb_button_press_event_t *ev)
     nex_client_t *c = nex_client_find(ev->event);
     if (!c) c = nex_client_find(ev->child);
 
+    nex_client_t *frame_client = nex_client_find_frame(ev->event);
+    if (!frame_client && ev->child != XCB_NONE)
+        frame_client = nex_client_find_frame(ev->child);
+    if (frame_client) c = frame_client;
+
     if (c) {
         nex_client_focus(c);
         nex_client_raise(c);
+
+        /* Server-side titlebar controls. */
+        if (frame_client && ev->detail == XCB_BUTTON_INDEX_1) {
+            int button = NEX_BTN_NONE;
+            if (nex_client_titlebar_hit(c, ev->event_x, ev->event_y, &button)) {
+                if (button == NEX_BTN_MINIMIZE) {
+                    nex_client_minimize(c);
+                } else if (button == NEX_BTN_MAXIMIZE) {
+                    nex_client_toggle_maximize(c);
+                } else if (button == NEX_BTN_CLOSE) {
+                    nex_client_kill(c);
+                } else {
+                    g_drag_client = c;
+                    g_drag_start_x = ev->root_x;
+                    g_drag_start_y = ev->root_y;
+                    g_drag_win_x = c->x;
+                    g_drag_win_y = c->y;
+                    g_drag_mode = 1;
+                    xcb_grab_pointer(g_conn, 0, g_screen->root,
+                                     XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+                                     XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC,
+                                     XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+                }
+                xcb_allow_events(g_conn, XCB_ALLOW_ASYNC_POINTER, ev->time);
+                xcb_flush(g_conn);
+                return;
+            }
+        }
 
         uint16_t mod = ev->state & (XCB_MOD_MASK_SHIFT | XCB_MOD_MASK_CONTROL |
                                     XCB_MOD_MASK_1 | XCB_MOD_MASK_2 |
@@ -227,9 +284,8 @@ static void handle_button_press(xcb_button_press_event_t *ev)
         mod &= ~(XCB_MOD_MASK_2 | XCB_MOD_MASK_LOCK);
 
         if (mod == g_config.modkey) {
-            if (!(c->flags & NEX_CLIENT_FLOATING)) {
+            if (!(c->flags & NEX_CLIENT_FLOATING))
                 c->flags |= NEX_CLIENT_FLOATING;
-            }
 
             g_drag_client = c;
             g_drag_start_x = ev->root_x;
@@ -239,11 +295,10 @@ static void handle_button_press(xcb_button_press_event_t *ev)
             g_drag_win_w = c->width;
             g_drag_win_h = c->height;
 
-            if (ev->detail == XCB_BUTTON_INDEX_1) {
-                g_drag_mode = 1; /* Move */
-            } else if (ev->detail == XCB_BUTTON_INDEX_3) {
-                g_drag_mode = 2; /* Resize */
-            }
+            if (ev->detail == XCB_BUTTON_INDEX_1)
+                g_drag_mode = 1;
+            else if (ev->detail == XCB_BUTTON_INDEX_3)
+                g_drag_mode = 2;
 
             if (g_drag_mode != 0) {
                 xcb_grab_pointer(g_conn, 0, g_screen->root,
@@ -273,7 +328,8 @@ static void handle_motion_notify(xcb_motion_notify_event_t *ev)
         int new_w = g_drag_win_w + dx;
         int new_h = g_drag_win_h + dy;
         if (new_w < 50) new_w = 50;
-        if (new_h < 50) new_h = 50;
+        if (new_h < NEX_TITLEBAR_H + 30) new_h = NEX_TITLEBAR_H + 30;
+        nex_client_apply_size_hints(g_drag_client, &new_w, &new_h);
         nex_client_resize(g_drag_client, new_w, new_h);
     }
     xcb_flush(g_conn);
@@ -288,6 +344,12 @@ static void handle_button_release(xcb_button_release_event_t *ev)
         xcb_ungrab_pointer(g_conn, XCB_CURRENT_TIME);
         xcb_flush(g_conn);
     }
+}
+
+static void handle_expose(xcb_expose_event_t *ev)
+{
+    nex_client_t *c = nex_client_find_frame(ev->window);
+    if (c) nex_client_redraw_titlebar(c);
 }
 
 static void handle_key_press(xcb_key_press_event_t *ev)
@@ -308,6 +370,7 @@ void nex_events_handle(xcb_generic_event_t *ev)
         case XCB_PROPERTY_NOTIFY:    handle_property_notify((xcb_property_notify_event_t *)ev); break;
         case XCB_CLIENT_MESSAGE:     handle_client_message((xcb_client_message_event_t *)ev); break;
         case XCB_ENTER_NOTIFY:       handle_enter_notify((xcb_enter_notify_event_t *)ev); break;
+        case XCB_EXPOSE:             handle_expose((xcb_expose_event_t *)ev); break;
         case XCB_BUTTON_PRESS:       handle_button_press((xcb_button_press_event_t *)ev); break;
         case XCB_MOTION_NOTIFY:      handle_motion_notify((xcb_motion_notify_event_t *)ev); break;
         case XCB_BUTTON_RELEASE:     handle_button_release((xcb_button_release_event_t *)ev); break;

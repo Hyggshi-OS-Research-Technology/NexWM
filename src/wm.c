@@ -69,7 +69,7 @@ void nex_wm_scan_existing_windows(void)
                     c->workspace = g_current_workspace;
                 }
                 nex_ewmh_set_wm_desktop(w, c->workspace);
-                xcb_map_window(g_conn, w);
+                nex_client_map(c);
                 if (c->workspace == g_current_workspace) nex_client_focus(c);
             }
         }
