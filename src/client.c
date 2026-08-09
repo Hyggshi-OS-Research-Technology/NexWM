@@ -38,12 +38,6 @@
 nex_client_t *g_clients = NULL;
 nex_client_t *g_focused = NULL;
 
-extern xcb_connection_t *g_conn;
-extern xcb_screen_t *g_screen;
-extern xcb_window_t g_root;
-extern nex_atoms_t g_atoms;
-extern nex_config_t g_config;
-
 /* ICCCM WM_STATE values (set on the client window as WM_STATE property). */
 enum {
     NEX_WM_STATE_WITHDRAWN = 0,
@@ -336,11 +330,14 @@ static int nex_client_read_title(xcb_window_t window,
      * Preferred EWMH property:
      *   _NET_WM_NAME / UTF8_STRING
      */
-    xcb_atom_t net_wm_name =
-        nex_client_intern_atom("_NET_WM_NAME");
-
-    xcb_atom_t utf8_string =
-        nex_client_intern_atom("UTF8_STRING");
+    static xcb_atom_t net_wm_name = XCB_NONE;
+    static xcb_atom_t utf8_string = XCB_NONE;
+    static int atoms_cached = 0;
+    if (!atoms_cached) {
+        net_wm_name = nex_client_intern_atom("_NET_WM_NAME");
+        utf8_string = nex_client_intern_atom("UTF8_STRING");
+        atoms_cached = 1;
+    }
 
     if (net_wm_name != XCB_ATOM_NONE &&
         utf8_string != XCB_ATOM_NONE) {
@@ -435,13 +432,6 @@ int nex_client_update_title(nex_client_t *c)
     memcpy(c->title, new_title, sizeof(c->title));
     c->title[sizeof(c->title) - 1] = '\0';
 
-    if (!c->title[0] && c->class[0]) {
-        /*
-         * Keep title empty internally. The titlebar already falls back to
-         * c->class when drawing.
-         */
-    }
-
     if (c->frame != XCB_WINDOW_NONE)
         nex_client_redraw_titlebar(c);
 
@@ -485,7 +475,9 @@ nex_client_t *nex_client_create(xcb_window_t window)
     xcb_get_property_cookie_t class_cookie = xcb_icccm_get_wm_class(g_conn, window);
     if (xcb_icccm_get_wm_class_reply(g_conn, class_cookie, &wm_class, NULL)) {
         strncpy(c->class, wm_class.class_name ? wm_class.class_name : "", sizeof(c->class) - 1);
+        c->class[sizeof(c->class) - 1] = '\0';
         strncpy(c->instance, wm_class.instance_name ? wm_class.instance_name : "", sizeof(c->instance) - 1);
+        c->instance[sizeof(c->instance) - 1] = '\0';
         xcb_icccm_get_wm_class_reply_wipe(&wm_class);
     }
 
@@ -544,6 +536,7 @@ void nex_client_destroy(nex_client_t *c)
     if (!c) return;
     NEX_INFO("Destroying client: window=0x%x", c->window);
     if (g_focused == c) g_focused = NULL;
+    xcb_ungrab_button(g_conn, XCB_BUTTON_INDEX_ANY, c->window, XCB_MOD_MASK_ANY);
     if (c->frame != XCB_WINDOW_NONE) {
         xcb_reparent_window(g_conn, c->window, g_root, (int16_t)c->x, (int16_t)c->y);
         xcb_destroy_window(g_conn, c->frame);
@@ -609,7 +602,6 @@ void nex_client_move(nex_client_t *c, int x, int y)
     if (!c) return;
     c->x = x; c->y = y;
     if (c->frame != XCB_WINDOW_NONE) {
-        c->x = x; c->y = y;
         nex_client_reframe(c);
     } else {
         uint32_t values[] = { (uint32_t)x, (uint32_t)y };
@@ -726,6 +718,7 @@ void nex_client_toggle_fullscreen(nex_client_t *c)
         c->flags |= NEX_CLIENT_FULLSCREEN;
 
         nex_monitor_t *m = nex_monitor_current();
+        if (!m) return;
         nex_client_move(c, m->x, m->y);
         nex_client_resize(c, m->width, m->height);
         uint32_t bw = 0;
@@ -753,6 +746,7 @@ void nex_client_toggle_maximize(nex_client_t *c)
         c->flags |= NEX_CLIENT_MAXIMIZED;
 
         nex_monitor_t *m = nex_monitor_current();
+        if (!m) return;
         int bw = g_config.border_width;
         nex_client_move(c, m->x + bw, m->y + bw);
         nex_client_resize(c, m->width - 2 * bw, m->height - 2 * bw);

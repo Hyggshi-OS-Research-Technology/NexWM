@@ -4,6 +4,7 @@
 
 #include "focus.h"
 #include "workspace.h"
+#include "client.h"
 #include "log.h"
 
 extern nex_client_t *g_clients;
@@ -46,12 +47,6 @@ void nex_focus_prev(void)
         while (c && c->workspace != g_current_workspace) c = c->prev;
     }
     if (c && c != g_focused) nex_client_focus(c);
-}
-
-void nex_focus_direction(int dir)
-{
-    (void)dir;
-    nex_focus_next();
 }
 
 void nex_focus_follow_mouse(xcb_window_t window)

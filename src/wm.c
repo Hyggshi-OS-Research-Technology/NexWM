@@ -101,7 +101,7 @@ int nex_wm_init(void)
 
     const xcb_setup_t *setup = xcb_get_setup(g_conn);
     xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
-    for (int i = 0; i < screen_num; i++) xcb_screen_next(&iter);
+    for (int i = 0; i < screen_num && iter.rem > 0; i++) xcb_screen_next(&iter);
     g_screen = iter.data;
     g_root = g_screen->root;
     NEX_INFO("Root window acquired: 0x%x", g_root);
@@ -223,7 +223,6 @@ void nex_wm_run(void)
 
     NEX_INFO("Exiting main event loop");
 }
-
 
 void nex_wm_cleanup(void)
 {

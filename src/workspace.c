@@ -4,6 +4,7 @@
 
 #include "workspace.h"
 #include "config.h"
+#include "layout.h"
 #include "log.h"
 #include <string.h>
 
@@ -11,7 +12,6 @@ nex_workspace_t g_workspaces[NEX_MAX_WORKSPACES];
 int g_current_workspace = 0;
 
 extern xcb_connection_t *g_conn;
-extern xcb_screen_t *g_screen;
 
 void nex_workspace_init(int count)
 {
@@ -68,8 +68,6 @@ void nex_workspace_remove_client(int ws, nex_client_t *c)
         NEX_DEBUG("Removed client 0x%x from workspace %d", c->window, ws + 1);
     }
 }
-
-#include "layout.h"
 
 void nex_workspace_arrange(int ws)
 {

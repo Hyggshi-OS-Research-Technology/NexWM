@@ -6,16 +6,9 @@
 #define NEXWM_EWMH_H
 
 #include <xcb/xcb.h>
-#include <xcb/xcb_ewmh.h>
 
-typedef struct {
-    xcb_ewmh_connection_t ewmh;
-} nex_ewmh_ctx_t;
-
-extern nex_ewmh_ctx_t g_ewmh;
-
-int nex_ewmh_init(xcb_connection_t *conn, xcb_screen_t *screen);
-void nex_ewmh_set_supported(xcb_screen_t *screen);
+int nex_ewmh_init(xcb_screen_t *screen);
+void nex_ewmh_set_supported(const xcb_screen_t *screen);
 void nex_ewmh_set_client_list(void);
 void nex_ewmh_set_active_window(xcb_window_t window);
 void nex_ewmh_set_current_desktop(int desktop);

@@ -4,7 +4,10 @@
 
 #include "layout.h"
 #include "config.h"
+#include "monitor.h"
 #include "log.h"
+
+#define NEX_PANEL_HEIGHT 36
 
 extern xcb_connection_t *g_conn;
 extern int g_current_workspace;
@@ -14,7 +17,7 @@ void nex_layout_tile(nex_monitor_t *m)
     if (!m) m = nex_monitor_current();
     if (!m) return;
 
-    int panel_h = 36;
+    int panel_h = NEX_PANEL_HEIGHT;
     int gaps = g_config.gaps;
     int bw = g_config.border_width;
 
@@ -87,7 +90,7 @@ void nex_layout_monocle(nex_monitor_t *m)
     if (!m) m = nex_monitor_current();
     if (!m) return;
 
-    int panel_h = 36;
+    int panel_h = NEX_PANEL_HEIGHT;
     int gaps = g_config.gaps;
     int bw = g_config.border_width;
 

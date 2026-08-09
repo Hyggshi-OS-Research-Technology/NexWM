@@ -67,6 +67,7 @@ int nex_ipc_init(void)
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
 
     if (bind(g_ipc_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         NEX_ERROR("IPC: Failed to bind socket: %s", strerror(errno));
@@ -211,7 +212,8 @@ void nex_ipc_handle(void)
             /* Strip trailing newline */
             if (n > 0 && buf[n-1] == '\n') buf[n-1] = '\0';
             ipc_dispatch(buf);
-            send(client_fd, "ok\n", 3, 0);
+            ssize_t sent = send(client_fd, "ok\n", 3, 0);
+            (void)sent;
         }
         close(client_fd);
     }

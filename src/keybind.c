@@ -180,6 +180,5 @@ static void action_exit(void *arg)
 {
     (void)arg;
     NEX_INFO("Exit requested via keybind");
-    extern int g_running;
     g_running = 0;
 }

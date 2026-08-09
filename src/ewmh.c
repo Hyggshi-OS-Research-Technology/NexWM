@@ -10,15 +10,12 @@
 #include <string.h>
 #include <stdlib.h>
 
-nex_ewmh_ctx_t g_ewmh;
-
 extern xcb_connection_t *g_conn;
 extern xcb_screen_t *g_screen;
 extern nex_atoms_t g_atoms;
 
-int nex_ewmh_init(xcb_connection_t *conn, xcb_screen_t *screen)
+int nex_ewmh_init(xcb_screen_t *screen)
 {
-    (void)conn;
     nex_ewmh_set_supported(screen);
     nex_ewmh_set_number_of_desktops(g_config.workspace_count);
     nex_ewmh_set_current_desktop(0);
@@ -27,7 +24,7 @@ int nex_ewmh_init(xcb_connection_t *conn, xcb_screen_t *screen)
     return 0;
 }
 
-void nex_ewmh_set_supported(xcb_screen_t *screen)
+void nex_ewmh_set_supported(const xcb_screen_t *screen)
 {
     xcb_atom_t supported[] = {
         g_atoms.net_supported,

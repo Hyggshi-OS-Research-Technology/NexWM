@@ -16,11 +16,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-extern xcb_connection_t *g_conn;
-extern xcb_screen_t *g_screen;
-extern nex_atoms_t g_atoms;
-extern int g_running;
-
 static void handle_map_request(xcb_map_request_event_t *ev)
 {
     xcb_window_t window = ev->window;
@@ -146,7 +141,7 @@ static void handle_unmap_notify(xcb_unmap_notify_event_t *ev)
         xcb_get_window_attributes_cookie_t cookie = xcb_get_window_attributes(g_conn, window);
         xcb_get_window_attributes_reply_t *reply = xcb_get_window_attributes_reply(g_conn, cookie, NULL);
         if (reply) {
-            if (reply->map_state == XCB_MAP_STATE_UNMAPPED) {
+            if (reply->map_state == XCB_MAP_STATE_UNMAPPED && !ev->send_event) {
                 nex_workspace_remove_client(c->workspace, c);
                 nex_client_destroy(c);
                 nex_ewmh_set_client_list();
@@ -178,7 +173,9 @@ static void handle_property_notify(xcb_property_notify_event_t *ev)
         xcb_get_property_cookie_t cookie = xcb_icccm_get_wm_class(g_conn, window);
         if (xcb_icccm_get_wm_class_reply(g_conn, cookie, &wm_class, NULL)) {
             strncpy(c->class, wm_class.class_name ? wm_class.class_name : "", sizeof(c->class) - 1);
+            c->class[sizeof(c->class) - 1] = '\0';
             strncpy(c->instance, wm_class.instance_name ? wm_class.instance_name : "", sizeof(c->instance) - 1);
+            c->instance[sizeof(c->instance) - 1] = '\0';
             xcb_icccm_get_wm_class_reply_wipe(&wm_class);
         }
     }

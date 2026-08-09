@@ -40,7 +40,11 @@ void nex_log(nex_log_level_t level, const char *file, int line, const char *fmt,
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);
     char time_buf[32];
-    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+    if (tm_info) {
+        strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+    } else {
+        snprintf(time_buf, sizeof(time_buf), "??-??-?? ??:??:??");
+    }
 
     const char *basename = strrchr(file, '/');
     if (basename) basename++;

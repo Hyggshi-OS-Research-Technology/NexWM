@@ -11,7 +11,7 @@ nex_monitor_t g_monitors[NEX_MAX_MONITORS];
 int g_monitor_count = 0;
 int g_current_monitor = 0;
 
-void nex_monitor_init(xcb_connection_t *conn, xcb_screen_t *screen)
+void nex_monitor_init(xcb_connection_t *conn, const xcb_screen_t *screen)
 {
     (void)conn;
     memset(g_monitors, 0, sizeof(g_monitors));

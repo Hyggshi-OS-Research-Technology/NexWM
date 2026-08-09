@@ -103,8 +103,6 @@ void nex_client_place_client(nex_client_t *c);
 void nex_client_set_geometry(nex_client_t *c, int x, int y, int w, int h);
 void nex_client_read_size_hints(nex_client_t *c);
 void nex_client_apply_size_hints(nex_client_t *c, int *w, int *h);
-void nex_client_sync_wm_state(nex_client_t *c);
-void nex_client_unmanage(nex_client_t *c);
 int  nex_client_frame_resize_hit(const nex_client_t *c, int fx, int fy, int *edge);
 
 #endif

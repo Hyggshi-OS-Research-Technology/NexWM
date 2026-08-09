@@ -19,7 +19,7 @@ extern nex_monitor_t g_monitors[NEX_MAX_MONITORS];
 extern int g_monitor_count;
 extern int g_current_monitor;
 
-void nex_monitor_init(xcb_connection_t *conn, xcb_screen_t *screen);
+void nex_monitor_init(xcb_connection_t *conn, const xcb_screen_t *screen);
 nex_monitor_t *nex_monitor_current(void);
 
 #endif

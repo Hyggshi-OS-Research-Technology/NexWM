@@ -6,7 +6,6 @@
 #define NEXWM_WM_H
 
 #include <xcb/xcb.h>
-#include <xcb/xcb_keysyms.h>
 #include "atoms.h"
 #include "config.h"
 
