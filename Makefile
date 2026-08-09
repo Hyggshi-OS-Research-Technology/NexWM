@@ -6,8 +6,9 @@ CFLAGS  ?= -Wall -Wextra -Wpedantic -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DE
 LDFLAGS ?= -lxcb -lX11 $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-keysyms.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-util.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-randr.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-ewmh.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-icccm.so*)
 
 # Panel & Desktop components XCB flags
-PANEL_LDFLAGS   = -lxcb -lX11
-DESKTOP_LDFLAGS = -lxcb -lX11
+# Panel & Desktop link libpng for PNG icon loading (nex_icon.c)
+PANEL_LDFLAGS   = -lxcb -lX11 -lpng
+DESKTOP_LDFLAGS = -lxcb -lX11 -lpng
 NOTIFY_LDFLAGS  = -lxcb -lX11
 
 # Wallpaper: XLib only (Imlib2 optional via HAVE_IMLIB2=1)
@@ -71,10 +72,12 @@ FM_DIR       = components/fm
 SESSION_DIR  = components/session
 TERM_DIR     = components/terminal
 
-PANEL_SRCS   = $(PANEL_DIR)/nex-panel.c
+PANEL_SRCS   = $(PANEL_DIR)/nex-panel.c \
+               $(PANEL_DIR)/nex_icon.c
 LAUNCH_SRCS  = $(LAUNCH_DIR)/nex-launcher.cpp
 WALL_SRCS    = $(WALL_DIR)/nex-wallpaper.c
-DESK_SRCS    = $(DESK_DIR)/nex-desktop.c
+DESK_SRCS    = $(DESK_DIR)/nex-desktop.c \
+               $(PANEL_DIR)/nex_icon.c
 NOTIFY_SRCS  = $(NOTIFY_DIR)/nex-notify.cpp
 SETT_SRCS    = $(SETT_DIR)/nex-settings.cpp
 FM_SRCS      = $(FM_DIR)/nex-fm.cpp

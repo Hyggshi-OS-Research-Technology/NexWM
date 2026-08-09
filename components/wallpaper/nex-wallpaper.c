@@ -102,13 +102,28 @@ static int set_solid_color(Display *dpy, unsigned int rgb)
                    (unsigned int)DisplayHeight(dpy, scr));
     XFreeGC(dpy, gc);
 
-    /* Persist via _XROOTPMAP_ID / ESETROOT_PMAP_ID for compositors */
-    Atom prop = XInternAtom(dpy, "_XROOTPMAP_ID", False);
-    Pixmap pix = XCreatePixmap(dpy, root, 1, 1, (unsigned int)DefaultDepth(dpy, scr));
+    /* Publish a real screen-sized Pixmap so NexDesktop can copy it. */
+    Atom prop  = XInternAtom(dpy, "_XROOTPMAP_ID",    False);
+    Atom prop2 = XInternAtom(dpy, "ESETROOT_PMAP_ID", False);
+    Pixmap pix = XCreatePixmap(dpy, root,
+                               (unsigned int)DisplayWidth(dpy, scr),
+                               (unsigned int)DisplayHeight(dpy, scr),
+                               (unsigned int)DefaultDepth(dpy, scr));
+
+    GC pix_gc = XCreateGC(dpy, pix, 0, NULL);
+    XSetForeground(dpy, pix_gc, col.pixel);
+    XFillRectangle(dpy, pix, pix_gc, 0, 0,
+                   (unsigned int)DisplayWidth(dpy, scr),
+                   (unsigned int)DisplayHeight(dpy, scr));
+    XFreeGC(dpy, pix_gc);
+
+    XSetWindowBackgroundPixmap(dpy, root, pix);
+    XClearWindow(dpy, root);
+
     XChangeProperty(dpy, root, prop, XA_PIXMAP, 32,
                     PropModeReplace, (unsigned char *)&pix, 1);
-    XSetWindowBackground(dpy, root, col.pixel);
-    XClearWindow(dpy, root);
+    XChangeProperty(dpy, root, prop2, XA_PIXMAP, 32,
+                    PropModeReplace, (unsigned char *)&pix, 1);
     XFlush(dpy);
     return 0;
 }
@@ -124,6 +139,13 @@ int nex_wallpaper_set(const nex_wp_config_t *cfg)
         fprintf(stderr, "nex-wallpaper: cannot open display\n");
         return -1;
     }
+
+    /*
+     * NexDesktop may need the wallpaper Pixmap after this process exits.
+     * Keep X11 resources alive after XCloseDisplay so _XROOTPMAP_ID does not
+     * point at a destroyed Pixmap.
+     */
+    XSetCloseDownMode(dpy, RetainPermanent);
 
     int ret = 0;
 

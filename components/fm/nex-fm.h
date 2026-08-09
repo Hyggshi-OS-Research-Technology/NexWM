@@ -33,6 +33,7 @@ private slots:
     void onSidebarClicked(QListWidgetItem *item);
     void onItemDoubleClicked(const QModelIndex &index);
     void showContextMenu(const QPoint &pos);
+    void toggleViewMode();
     
     /* File Actions */
     void actionBack();
@@ -58,12 +59,13 @@ private:
     void setupUI();
     void setupSidebar();
     void setupToolBar();
-    void setupContextMenu();
 
     QFileSystemModel *m_fileModel;
     QTreeView *m_treeView;
+    QListView *m_iconView;
     QSplitter *m_splitter;
     QListWidget *m_sidebar;
+    bool m_isIconMode;
     
     /* Navigation history */
     QStringList m_history;
@@ -77,6 +79,7 @@ private:
     QAction *m_actUp;
     QAction *m_actHome;
     QAction *m_actRefresh;
+    QAction *m_actViewMode;
 
     /* Status bar */
     QLabel *m_statusLabel;

@@ -18,6 +18,9 @@ public:
     explicit SessionWindow(QWidget *parent = nullptr);
     ~SessionWindow() override = default;
 
+protected:
+    void keyPressEvent(QKeyEvent *event) override;
+
 private:
     void actionLock();
     void actionLogout();

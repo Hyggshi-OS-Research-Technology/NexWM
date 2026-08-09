@@ -1,6 +1,5 @@
 /*
- * nex-fm.cpp - Qt6 File Manager for NexWM
- * Part of Nex Desktop Environment
+ * nex-fm.cpp - Qt6 File Manager for NexWM / NexDE
  */
 
 #include "nex-fm.h"
@@ -21,13 +20,15 @@
 #include <QShortcut>
 #include <QKeyEvent>
 #include <QStorageInfo>
+#include <QIcon>
+#include <QStackedWidget>
 #include <cstdlib>
 
 FileManagerWindow::FileManagerWindow(const QString &initialPath, QWidget *parent)
-    : QMainWindow(parent), m_historyIdx(-1), m_clipboardIsCut(false)
+    : QMainWindow(parent), m_isIconMode(false), m_historyIdx(-1), m_clipboardIsCut(false)
 {
     setWindowTitle("NexFM — File Manager");
-    resize(920, 580);
+    resize(960, 600);
 
     setupUI();
 
@@ -41,24 +42,24 @@ FileManagerWindow::FileManagerWindow(const QString &initialPath, QWidget *parent
 
 void FileManagerWindow::setupUI()
 {
-    // Apply NexDE Dark Theme
     setStyleSheet(R"(
         QMainWindow {
             background-color: #1e1e2e;
             color: #cdd6f4;
+            font-family: 'Segoe UI', 'Ubuntu', sans-serif;
         }
         QToolBar {
             background-color: #181825;
             border-bottom: 1px solid #313244;
             spacing: 6px;
-            padding: 4px;
+            padding: 6px;
         }
         QToolButton {
             background-color: #313244;
             color: #cdd6f4;
             border: 1px solid #45475a;
-            border-radius: 4px;
-            padding: 5px 9px;
+            border-radius: 6px;
+            padding: 6px 10px;
             font-weight: bold;
         }
         QToolButton:hover {
@@ -69,9 +70,12 @@ void FileManagerWindow::setupUI()
             background-color: #181825;
             color: #cdd6f4;
             border: 1px solid #45475a;
-            border-radius: 4px;
-            padding: 4px 8px;
+            border-radius: 6px;
+            padding: 5px 10px;
             font-size: 13px;
+        }
+        QLineEdit:focus {
+            border: 1px solid #5b8dd9;
         }
         QSplitter::handle {
             background-color: #313244;
@@ -84,7 +88,7 @@ void FileManagerWindow::setupUI()
         }
         QListWidget::item {
             padding: 8px 12px;
-            border-radius: 4px;
+            border-radius: 6px;
         }
         QListWidget::item:hover {
             background-color: #313244;
@@ -93,27 +97,28 @@ void FileManagerWindow::setupUI()
             background-color: #5b8dd9;
             color: #ffffff;
         }
-        QTreeView {
+        QTreeView, QListView {
             background-color: #1e1e2e;
             color: #cdd6f4;
             border: none;
             font-size: 13px;
-            alternate-background-color: #181825;
+            outline: none;
         }
-        QTreeView::item {
-            padding: 4px 6px;
+        QTreeView::item, QListView::item {
+            padding: 6px 8px;
+            border-radius: 4px;
         }
-        QTreeView::item:hover {
+        QTreeView::item:hover, QListView::item:hover {
             background-color: #313244;
         }
-        QTreeView::item:selected {
+        QTreeView::item:selected, QListView::item:selected {
             background-color: #5b8dd9;
             color: #ffffff;
         }
         QHeaderView::section {
             background-color: #181825;
             color: #a6adc8;
-            padding: 4px 8px;
+            padding: 6px 10px;
             border: 1px solid #313244;
             font-weight: bold;
         }
@@ -127,10 +132,11 @@ void FileManagerWindow::setupUI()
             background-color: #1e1e2e;
             color: #cdd6f4;
             border: 1px solid #45475a;
-            padding: 4px;
+            padding: 6px;
+            border-radius: 6px;
         }
         QMenu::item {
-            padding: 6px 20px;
+            padding: 6px 22px;
             border-radius: 4px;
         }
         QMenu::item:selected {
@@ -146,11 +152,12 @@ void FileManagerWindow::setupUI()
 
     setupSidebar();
 
-    // File Tree / List View
+    // File Model
     m_fileModel = new QFileSystemModel(this);
     m_fileModel->setFilter(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
     m_fileModel->setReadOnly(false);
 
+    // Tree Details View
     m_treeView = new QTreeView(this);
     m_treeView->setModel(m_fileModel);
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -164,8 +171,20 @@ void FileManagerWindow::setupUI()
     m_treeView->setColumnWidth(2, 110);
     m_treeView->setColumnWidth(3, 140);
 
+    // Icon Grid View
+    m_iconView = new QListView(this);
+    m_iconView->setModel(m_fileModel);
+    m_iconView->setViewMode(QListView::IconMode);
+    m_iconView->setIconSize(QSize(48, 48));
+    m_iconView->setGridSize(QSize(96, 84));
+    m_iconView->setMovement(QListView::Static);
+    m_iconView->setResizeMode(QListView::Adjust);
+    m_iconView->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_iconView->hide();
+
     m_splitter->addWidget(m_treeView);
-    m_splitter->setSizes({200, 720});
+    m_splitter->addWidget(m_iconView);
+    m_splitter->setSizes({220, 740});
 
     // Status bar
     m_statusLabel = new QLabel("Ready", this);
@@ -174,6 +193,10 @@ void FileManagerWindow::setupUI()
     // Signals
     connect(m_treeView, &QTreeView::doubleClicked, this, &FileManagerWindow::onItemDoubleClicked);
     connect(m_treeView, &QTreeView::customContextMenuRequested, this, &FileManagerWindow::showContextMenu);
+
+    connect(m_iconView, &QListView::doubleClicked, this, &FileManagerWindow::onItemDoubleClicked);
+    connect(m_iconView, &QListView::customContextMenuRequested, this, &FileManagerWindow::showContextMenu);
+
     connect(m_pathEdit, &QLineEdit::returnPressed, this, &FileManagerWindow::onAddressEntered);
     connect(m_searchEdit, &QLineEdit::textChanged, this, &FileManagerWindow::filterFiles);
 }
@@ -183,11 +206,11 @@ void FileManagerWindow::setupToolBar()
     QToolBar *tb = addToolBar("Navigation");
     tb->setMovable(false);
 
-    m_actBack = tb->addAction("◀ Back", this, &FileManagerWindow::actionBack);
-    m_actForward = tb->addAction("▶ Forward", this, &FileManagerWindow::actionForward);
-    m_actUp = tb->addAction("▲ Up", this, &FileManagerWindow::actionUp);
-    m_actHome = tb->addAction("🏠 Home", this, &FileManagerWindow::actionHome);
-    m_actRefresh = tb->addAction("🔄 Refresh", this, &FileManagerWindow::actionRefresh);
+    m_actBack = tb->addAction(QIcon::fromTheme("go-previous"), "Back", this, &FileManagerWindow::actionBack);
+    m_actForward = tb->addAction(QIcon::fromTheme("go-next"), "Forward", this, &FileManagerWindow::actionForward);
+    m_actUp = tb->addAction(QIcon::fromTheme("go-up"), "Up", this, &FileManagerWindow::actionUp);
+    m_actHome = tb->addAction(QIcon::fromTheme("user-home"), "Home", this, &FileManagerWindow::actionHome);
+    m_actRefresh = tb->addAction(QIcon::fromTheme("view-refresh"), "Refresh", this, &FileManagerWindow::actionRefresh);
 
     tb->addSeparator();
 
@@ -197,8 +220,12 @@ void FileManagerWindow::setupToolBar()
 
     tb->addSeparator();
 
-    tb->addAction("➕ New Folder", this, &FileManagerWindow::actionNewFolder);
-    tb->addAction("📄 New File", this, &FileManagerWindow::actionNewFile);
+    tb->addAction(QIcon::fromTheme("folder-new"), "+ Folder", this, &FileManagerWindow::actionNewFolder);
+    tb->addAction(QIcon::fromTheme("document-new"), "+ File", this, &FileManagerWindow::actionNewFile);
+
+    tb->addSeparator();
+
+    m_actViewMode = tb->addAction(QIcon::fromTheme("view-grid"), "Grid View", this, &FileManagerWindow::toggleViewMode);
 
     tb->addSeparator();
 
@@ -219,29 +246,44 @@ void FileManagerWindow::setupSidebar()
     struct Place {
         QString name;
         QString path;
+        QString icon;
     };
 
     QList<Place> places = {
-        {"🏠 Home", homeDir},
-        {"🖥️ Desktop", homeDir + "/Desktop"},
-        {"📄 Documents", homeDir + "/Documents"},
-        {"⬇️ Downloads", homeDir + "/Downloads"},
-        {"🎵 Music", homeDir + "/Music"},
-        {"🖼️ Pictures", homeDir + "/Pictures"},
-        {"🎬 Videos", homeDir + "/Videos"},
-        {"📁 Root (/)", "/"},
-        {"⚡ Tmp (/tmp)", "/tmp"}
+        {"Home", homeDir, "user-home"},
+        {"Desktop", homeDir + "/Desktop", "user-desktop"},
+        {"Documents", homeDir + "/Documents", "folder-documents"},
+        {"Downloads", homeDir + "/Downloads", "folder-download"},
+        {"Music", homeDir + "/Music", "folder-music"},
+        {"Pictures", homeDir + "/Pictures", "folder-pictures"},
+        {"Videos", homeDir + "/Videos", "folder-videos"},
+        {"Root (/)", "/", "drive-harddisk"},
+        {"Tmp (/tmp)", "/tmp", "folder-temp"}
     };
 
     for (const auto &p : places) {
         if (QDir(p.path).exists()) {
-            auto *item = new QListWidgetItem(p.name, m_sidebar);
+            auto *item = new QListWidgetItem(QIcon::fromTheme(p.icon), p.name, m_sidebar);
             item->setData(Qt::UserRole, p.path);
         }
     }
 
     m_splitter->addWidget(m_sidebar);
     connect(m_sidebar, &QListWidget::itemClicked, this, &FileManagerWindow::onSidebarClicked);
+}
+
+void FileManagerWindow::toggleViewMode()
+{
+    m_isIconMode = !m_isIconMode;
+    if (m_isIconMode) {
+        m_treeView->hide();
+        m_iconView->show();
+        m_actViewMode->setText("List View");
+    } else {
+        m_iconView->hide();
+        m_treeView->show();
+        m_actViewMode->setText("Grid View");
+    }
 }
 
 void FileManagerWindow::navigateTo(const QString &path)
@@ -254,9 +296,10 @@ void FileManagerWindow::navigateTo(const QString &path)
 
     QModelIndex rootIdx = m_fileModel->setRootPath(cleanPath);
     m_treeView->setRootIndex(rootIdx);
+    m_iconView->setRootIndex(rootIdx);
     m_pathEdit->setText(cleanPath);
 
-    // Navigation history management
+    // Navigation history
     if (m_historyIdx < 0 || m_history[m_historyIdx] != cleanPath) {
         while (m_history.size() > m_historyIdx + 1) {
             m_history.removeLast();
@@ -304,6 +347,7 @@ void FileManagerWindow::actionBack()
         QString path = m_history[m_historyIdx];
         QModelIndex rootIdx = m_fileModel->setRootPath(path);
         m_treeView->setRootIndex(rootIdx);
+        m_iconView->setRootIndex(rootIdx);
         m_pathEdit->setText(path);
         m_actBack->setEnabled(m_historyIdx > 0);
         m_actForward->setEnabled(m_historyIdx < m_history.size() - 1);
@@ -318,6 +362,7 @@ void FileManagerWindow::actionForward()
         QString path = m_history[m_historyIdx];
         QModelIndex rootIdx = m_fileModel->setRootPath(path);
         m_treeView->setRootIndex(rootIdx);
+        m_iconView->setRootIndex(rootIdx);
         m_pathEdit->setText(path);
         m_actBack->setEnabled(m_historyIdx > 0);
         m_actForward->setEnabled(m_historyIdx < m_history.size() - 1);
@@ -376,7 +421,7 @@ void FileManagerWindow::actionNewFile()
 
 void FileManagerWindow::actionRename()
 {
-    QModelIndex idx = m_treeView->currentIndex();
+    QModelIndex idx = m_isIconMode ? m_iconView->currentIndex() : m_treeView->currentIndex();
     if (!idx.isValid()) return;
 
     QString oldPath = m_fileModel->filePath(idx);
@@ -394,7 +439,7 @@ void FileManagerWindow::actionRename()
 
 void FileManagerWindow::actionDelete()
 {
-    QModelIndex idx = m_treeView->currentIndex();
+    QModelIndex idx = m_isIconMode ? m_iconView->currentIndex() : m_treeView->currentIndex();
     if (!idx.isValid()) return;
 
     QString path = m_fileModel->filePath(idx);
@@ -414,7 +459,7 @@ void FileManagerWindow::actionDelete()
 
 void FileManagerWindow::actionCopy()
 {
-    QModelIndex idx = m_treeView->currentIndex();
+    QModelIndex idx = m_isIconMode ? m_iconView->currentIndex() : m_treeView->currentIndex();
     if (!idx.isValid()) return;
 
     m_clipboardPaths = { m_fileModel->filePath(idx) };
@@ -424,7 +469,7 @@ void FileManagerWindow::actionCopy()
 
 void FileManagerWindow::actionCut()
 {
-    QModelIndex idx = m_treeView->currentIndex();
+    QModelIndex idx = m_isIconMode ? m_iconView->currentIndex() : m_treeView->currentIndex();
     if (!idx.isValid()) return;
 
     m_clipboardPaths = { m_fileModel->filePath(idx) };
@@ -445,7 +490,6 @@ void FileManagerWindow::actionPaste()
             QFile::rename(src, dest);
         } else {
             if (fi.isDir()) {
-                // Copy directory recursively
                 QProcess::execute("cp", {"-r", src, dest});
             } else {
                 QFile::copy(src, dest);
@@ -459,7 +503,7 @@ void FileManagerWindow::actionPaste()
 
 void FileManagerWindow::actionProperties()
 {
-    QModelIndex idx = m_treeView->currentIndex();
+    QModelIndex idx = m_isIconMode ? m_iconView->currentIndex() : m_treeView->currentIndex();
     if (!idx.isValid()) return;
 
     QString path = m_fileModel->filePath(idx);
@@ -513,31 +557,32 @@ void FileManagerWindow::updateStatusBar()
 
 void FileManagerWindow::showContextMenu(const QPoint &pos)
 {
-    QModelIndex idx = m_treeView->indexAt(pos);
+    QWidget *activeView = m_isIconMode ? static_cast<QWidget*>(m_iconView) : static_cast<QWidget*>(m_treeView);
+    QModelIndex idx = m_isIconMode ? m_iconView->indexAt(pos) : m_treeView->indexAt(pos);
     QMenu menu(this);
 
     if (idx.isValid()) {
-        menu.addAction("📂 Open", [this, idx]() { onItemDoubleClicked(idx); });
+        menu.addAction(QIcon::fromTheme("document-open"), "Open", [this, idx]() { onItemDoubleClicked(idx); });
         menu.addSeparator();
-        menu.addAction("📋 Copy", this, &FileManagerWindow::actionCopy);
-        menu.addAction("✂️ Cut", this, &FileManagerWindow::actionCut);
+        menu.addAction(QIcon::fromTheme("edit-copy"), "Copy", this, &FileManagerWindow::actionCopy);
+        menu.addAction(QIcon::fromTheme("edit-cut"), "Cut", this, &FileManagerWindow::actionCut);
         menu.addSeparator();
-        menu.addAction("✏️ Rename", this, &FileManagerWindow::actionRename);
-        menu.addAction("🗑️ Delete", this, &FileManagerWindow::actionDelete);
+        menu.addAction(QIcon::fromTheme("edit-rename"), "Rename", this, &FileManagerWindow::actionRename);
+        menu.addAction(QIcon::fromTheme("edit-delete"), "Delete", this, &FileManagerWindow::actionDelete);
         menu.addSeparator();
-        menu.addAction("ℹ️ Properties", this, &FileManagerWindow::actionProperties);
+        menu.addAction(QIcon::fromTheme("dialog-information"), "Properties", this, &FileManagerWindow::actionProperties);
     } else {
-        menu.addAction("➕ New Folder", this, &FileManagerWindow::actionNewFolder);
-        menu.addAction("📄 New File", this, &FileManagerWindow::actionNewFile);
+        menu.addAction(QIcon::fromTheme("folder-new"), "New Folder", this, &FileManagerWindow::actionNewFolder);
+        menu.addAction(QIcon::fromTheme("document-new"), "New File", this, &FileManagerWindow::actionNewFile);
         if (!m_clipboardPaths.isEmpty()) {
             menu.addSeparator();
-            menu.addAction("📋 Paste", this, &FileManagerWindow::actionPaste);
+            menu.addAction(QIcon::fromTheme("edit-paste"), "Paste", this, &FileManagerWindow::actionPaste);
         }
         menu.addSeparator();
-        menu.addAction("🔄 Refresh", this, &FileManagerWindow::actionRefresh);
+        menu.addAction(QIcon::fromTheme("view-refresh"), "Refresh", this, &FileManagerWindow::actionRefresh);
     }
 
-    menu.exec(m_treeView->viewport()->mapToGlobal(pos));
+    menu.exec(activeView->mapToGlobal(pos));
 }
 
 void FileManagerWindow::keyPressEvent(QKeyEvent *event)

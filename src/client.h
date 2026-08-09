@@ -71,6 +71,7 @@ extern nex_client_t *g_clients;
 extern nex_client_t *g_focused;
 
 nex_client_t *nex_client_create(xcb_window_t window);
+int nex_client_update_title(nex_client_t *c);
 void nex_client_destroy(nex_client_t *c);
 nex_client_t *nex_client_find(xcb_window_t window);
 void nex_client_focus(nex_client_t *c);

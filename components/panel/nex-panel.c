@@ -7,23 +7,16 @@
 
 /*
  * nex-panel.c - NexPanel
- * Status bar, taskbar, and workspace pager for NexWM.
+ * Status bar / taskbar / workspace pager for NexWM / Hyggshi OS
  *
- * Architecture:
- *   - Creates a strut-reserved top/bottom XCB window (_NET_WM_STRUT)
- *   - Polls _NET_CLIENT_LIST, _NET_ACTIVE_WINDOW, _NET_CURRENT_DESKTOP
- *     from the root window via X11 property change events
- *   - Left zone:  workspace pager buttons
- *   - Centre zone: window taskbar (title truncated, click-to-focus / click-active-to-minimize)
- *   - Right zone: clock, system stats
- *   - Launcher button at far left
+ * Visual layout (left → right):
  *
- * Window interaction (click):
- *   focus     → set _NET_ACTIVE_WINDOW via ClientMessage
- *   minimize  → nexwmctl minimize <win_id>  (IPC)
+ *  [⊞ Nex]  [⏍Files] [⚙Sett] [▣Term]  │  [①][②][③]  │  taskbar …  │  🔊 HH:MM  [⏻]
+ *   start     quick-launchers   sep       workspace pager   window list   right zone
  */
 
 #include "nex-panel.h"
+#include "nex_icon.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,38 +31,33 @@
 
 #include <xcb/xcb.h>
 
-/* ─── colours ─────────────────────────────────────────────────────────────── */
-#define CLR_BG          NEX_PANEL_BG
-#define CLR_FG          NEX_PANEL_FG
-#define CLR_WS_ACT      NEX_PANEL_WS_ACTIVE
-#define CLR_WS_INACT    NEX_PANEL_WS_INACTIVE
-#define CLR_WIN_ACT     NEX_PANEL_WIN_ACTIVE
-#define CLR_WIN_BG      NEX_PANEL_WIN_BG
-#define CLR_SEP         NEX_PANEL_SEPARATOR
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ATOMS
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ─── atoms ───────────────────────────────────────────────────────────────── */
 typedef struct {
     xcb_atom_t net_client_list;
     xcb_atom_t net_active_window;
     xcb_atom_t net_current_desktop;
     xcb_atom_t net_number_of_desktops;
     xcb_atom_t net_wm_name;
+    xcb_atom_t net_wm_desktop;
     xcb_atom_t net_wm_strut;
     xcb_atom_t net_wm_strut_partial;
     xcb_atom_t net_wm_window_type;
     xcb_atom_t net_wm_window_type_dock;
     xcb_atom_t net_wm_state;
     xcb_atom_t net_wm_state_above;
+    xcb_atom_t net_wm_state_skip_taskbar;
     xcb_atom_t utf8_string;
-    xcb_atom_t wm_protocols;
-    xcb_atom_t wm_delete_window;
 } panel_atoms_t;
 
 static panel_atoms_t g_atoms;
 
 static xcb_atom_t intern_atom(xcb_connection_t *conn, const char *name)
 {
-    xcb_intern_atom_cookie_t c = xcb_intern_atom(conn, 0, (uint16_t)strlen(name), name);
+    xcb_intern_atom_cookie_t c =
+        xcb_intern_atom(conn, 0, (uint16_t)strlen(name), name);
     xcb_intern_atom_reply_t *r = xcb_intern_atom_reply(conn, c, NULL);
     xcb_atom_t a = r ? r->atom : XCB_ATOM_NONE;
     free(r);
@@ -78,27 +66,69 @@ static xcb_atom_t intern_atom(xcb_connection_t *conn, const char *name)
 
 static void init_atoms(xcb_connection_t *conn)
 {
-    g_atoms.net_client_list          = intern_atom(conn, "_NET_CLIENT_LIST");
-    g_atoms.net_active_window        = intern_atom(conn, "_NET_ACTIVE_WINDOW");
-    g_atoms.net_current_desktop      = intern_atom(conn, "_NET_CURRENT_DESKTOP");
-    g_atoms.net_number_of_desktops   = intern_atom(conn, "_NET_NUMBER_OF_DESKTOPS");
-    g_atoms.net_wm_name              = intern_atom(conn, "_NET_WM_NAME");
-    g_atoms.net_wm_strut             = intern_atom(conn, "_NET_WM_STRUT");
-    g_atoms.net_wm_strut_partial     = intern_atom(conn, "_NET_WM_STRUT_PARTIAL");
-    g_atoms.net_wm_window_type       = intern_atom(conn, "_NET_WM_WINDOW_TYPE");
-    g_atoms.net_wm_window_type_dock  = intern_atom(conn, "_NET_WM_WINDOW_TYPE_DOCK");
-    g_atoms.net_wm_state             = intern_atom(conn, "_NET_WM_STATE");
-    g_atoms.net_wm_state_above       = intern_atom(conn, "_NET_WM_STATE_ABOVE");
-    g_atoms.utf8_string              = intern_atom(conn, "UTF8_STRING");
-    g_atoms.wm_protocols             = intern_atom(conn, "WM_PROTOCOLS");
-    g_atoms.wm_delete_window         = intern_atom(conn, "WM_DELETE_WINDOW");
+    g_atoms.net_client_list         = intern_atom(conn, "_NET_CLIENT_LIST");
+    g_atoms.net_active_window       = intern_atom(conn, "_NET_ACTIVE_WINDOW");
+    g_atoms.net_current_desktop     = intern_atom(conn, "_NET_CURRENT_DESKTOP");
+    g_atoms.net_number_of_desktops  = intern_atom(conn, "_NET_NUMBER_OF_DESKTOPS");
+    g_atoms.net_wm_name             = intern_atom(conn, "_NET_WM_NAME");
+    g_atoms.net_wm_desktop          = intern_atom(conn, "_NET_WM_DESKTOP");
+    g_atoms.net_wm_strut            = intern_atom(conn, "_NET_WM_STRUT");
+    g_atoms.net_wm_strut_partial    = intern_atom(conn, "_NET_WM_STRUT_PARTIAL");
+    g_atoms.net_wm_window_type      = intern_atom(conn, "_NET_WM_WINDOW_TYPE");
+    g_atoms.net_wm_window_type_dock = intern_atom(conn, "_NET_WM_WINDOW_TYPE_DOCK");
+    g_atoms.net_wm_state            = intern_atom(conn, "_NET_WM_STATE");
+    g_atoms.net_wm_state_above      = intern_atom(conn, "_NET_WM_STATE_ABOVE");
+    g_atoms.net_wm_state_skip_taskbar = intern_atom(conn, "_NET_WM_STATE_SKIP_TASKBAR");
+    g_atoms.utf8_string             = intern_atom(conn, "UTF8_STRING");
 }
 
-/* ─── property helpers ────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ICON CACHE
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-static uint32_t get_cardinal(xcb_connection_t *conn, xcb_window_t win, xcb_atom_t prop)
+typedef enum {
+    ICON_FILES = 0,
+    ICON_SETTINGS,
+    ICON_TERMINAL,
+    ICON_POWER,
+    ICON_VOLUME,
+    ICON__COUNT
+} panel_icon_id_t;
+
+static const char *ICON_NAMES[ICON__COUNT] = {
+    "system-file-manager",
+    "preferences-system",
+    "utilities-terminal",
+    "system-shutdown",
+    "audio-speakers",
+};
+
+static nex_icon_t *g_icons[ICON__COUNT];
+
+static void icons_load(void)
 {
-    xcb_get_property_cookie_t c = xcb_get_property(conn, 0, win, prop, XCB_ATOM_CARDINAL, 0, 1);
+    for (int i = 0; i < ICON__COUNT; i++) {
+        g_icons[i] = nex_icon_load(ICON_NAMES[i], NEX_PANEL_ICON_SIZE);
+    }
+}
+
+static void icons_free(void)
+{
+    for (int i = 0; i < ICON__COUNT; i++) {
+        nex_icon_free(g_icons[i]);
+        g_icons[i] = NULL;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PROPERTY HELPERS
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static uint32_t get_cardinal(xcb_connection_t *conn, xcb_window_t win,
+                              xcb_atom_t prop)
+{
+    xcb_get_property_cookie_t c =
+        xcb_get_property(conn, 0, win, prop, XCB_ATOM_CARDINAL, 0, 1);
     xcb_get_property_reply_t *r = xcb_get_property_reply(conn, c, NULL);
     uint32_t val = 0;
     if (r && r->value_len) val = *(uint32_t *)xcb_get_property_value(r);
@@ -106,10 +136,11 @@ static uint32_t get_cardinal(xcb_connection_t *conn, xcb_window_t win, xcb_atom_
     return val;
 }
 
-static int get_windows(xcb_connection_t *conn, xcb_window_t root, xcb_atom_t prop,
-                       xcb_window_t *out, int max)
+static int get_windows(xcb_connection_t *conn, xcb_window_t root,
+                       xcb_atom_t prop, xcb_window_t *out, int max)
 {
-    xcb_get_property_cookie_t c = xcb_get_property(conn, 0, root, prop, XCB_ATOM_WINDOW, 0, (uint32_t)max);
+    xcb_get_property_cookie_t c =
+        xcb_get_property(conn, 0, root, prop, XCB_ATOM_WINDOW, 0, (uint32_t)max);
     xcb_get_property_reply_t *r = xcb_get_property_reply(conn, c, NULL);
     if (!r) return 0;
     int n = xcb_get_property_value_length(r) / (int)sizeof(xcb_window_t);
@@ -119,11 +150,12 @@ static int get_windows(xcb_connection_t *conn, xcb_window_t root, xcb_atom_t pro
     return n;
 }
 
-static int get_wm_name(xcb_connection_t *conn, xcb_window_t win, char *buf, int bufsz)
+static int get_wm_name(xcb_connection_t *conn, xcb_window_t win,
+                       char *buf, int bufsz)
 {
-    /* Try _NET_WM_NAME first (UTF-8), fall back to WM_NAME */
-    xcb_get_property_cookie_t c = xcb_get_property(conn, 0, win, g_atoms.net_wm_name,
-                                                     g_atoms.utf8_string, 0, 128);
+    xcb_get_property_cookie_t c =
+        xcb_get_property(conn, 0, win, g_atoms.net_wm_name,
+                         g_atoms.utf8_string, 0, 128);
     xcb_get_property_reply_t *r = xcb_get_property_reply(conn, c, NULL);
     if (r && r->value_len > 0) {
         int len = xcb_get_property_value_length(r);
@@ -134,8 +166,8 @@ static int get_wm_name(xcb_connection_t *conn, xcb_window_t win, char *buf, int 
         return len;
     }
     free(r);
-
-    c = xcb_get_property(conn, 0, win, XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 0, 128);
+    c = xcb_get_property(conn, 0, win, XCB_ATOM_WM_NAME,
+                         XCB_ATOM_STRING, 0, 128);
     r = xcb_get_property_reply(conn, c, NULL);
     if (r && r->value_len > 0) {
         int len = xcb_get_property_value_length(r);
@@ -150,7 +182,28 @@ static int get_wm_name(xcb_connection_t *conn, xcb_window_t win, char *buf, int 
     return -1;
 }
 
-/* ─── IPC helpers ────────────────────────────────────────────────────────── */
+static int window_skip_taskbar(xcb_connection_t *conn, xcb_window_t win)
+{
+    xcb_get_property_cookie_t c =
+        xcb_get_property(conn, 0, win, g_atoms.net_wm_state,
+                         XCB_ATOM_ATOM, 0, 32);
+    xcb_get_property_reply_t *r = xcb_get_property_reply(conn, c, NULL);
+    if (!r) return 0;
+    int n = xcb_get_property_value_length(r) / (int)sizeof(xcb_atom_t);
+    xcb_atom_t *atoms = (xcb_atom_t *)xcb_get_property_value(r);
+    for (int i = 0; i < n; i++) {
+        if (atoms[i] == g_atoms.net_wm_state_skip_taskbar) {
+            free(r);
+            return 1;
+        }
+    }
+    free(r);
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * IPC
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void ipc_send(const char *cmd)
 {
@@ -160,14 +213,15 @@ static void ipc_send(const char *cmd)
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     const char *path = getenv("NEX_SOCKET");
-    strncpy(addr.sun_path, path ? path : NEX_PANEL_SOCKET, sizeof(addr.sun_path) - 1);
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+    strncpy(addr.sun_path, path ? path : NEX_PANEL_SOCKET,
+            sizeof(addr.sun_path) - 1);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0)
         send(fd, cmd, strlen(cmd), 0);
-    }
     close(fd);
 }
 
-static void ewmh_focus(xcb_connection_t *conn, xcb_window_t root, xcb_window_t win)
+static void ewmh_activate(xcb_connection_t *conn, xcb_window_t root,
+                           xcb_window_t win)
 {
     xcb_client_message_event_t ev;
     memset(&ev, 0, sizeof(ev));
@@ -175,21 +229,25 @@ static void ewmh_focus(xcb_connection_t *conn, xcb_window_t root, xcb_window_t w
     ev.format         = 32;
     ev.window         = win;
     ev.type           = g_atoms.net_active_window;
-    ev.data.data32[0] = 2;  /* source: pager */
+    ev.data.data32[0] = 2;
     ev.data.data32[1] = XCB_CURRENT_TIME;
-    ev.data.data32[2] = XCB_NONE;
     xcb_send_event(conn, 0, root,
-                   XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+                   XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
+                   XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
                    (const char *)&ev);
     xcb_flush(conn);
 }
 
-/* ─── drawing ─────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DRAWING UTILITIES
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
-static xcb_gc_t make_gc(xcb_connection_t *conn, xcb_window_t win, uint32_t fg, uint32_t bg)
+static xcb_gc_t make_gc(xcb_connection_t *conn, xcb_window_t win,
+                         uint32_t fg, uint32_t bg)
 {
     xcb_gc_t gc = xcb_generate_id(conn);
-    uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_BACKGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+    uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_BACKGROUND |
+                    XCB_GC_GRAPHICS_EXPOSURES;
     uint32_t vals[3] = { fg, bg, 0 };
     xcb_create_gc(conn, gc, win, mask, vals);
     return gc;
@@ -202,37 +260,81 @@ static void fill_rect(xcb_connection_t *conn, xcb_drawable_t win,
     xcb_poly_fill_rectangle(conn, win, gc, 1, &r);
 }
 
-static void draw_text(xcb_connection_t *conn, xcb_drawable_t win,
-                      xcb_gc_t gc, int x, int y, const char *text)
+static void fill_rounded_rect(xcb_connection_t *conn, xcb_drawable_t win,
+                               xcb_gc_t gc, int x, int y, int w, int h, int r)
 {
-    xcb_image_text_8(conn, (uint8_t)strlen(text), win, gc, (int16_t)x, (int16_t)y, text);
-}
-
-/* Truncate text to fit within max_chars */
-static void truncate_text(const char *src, char *dst, int max_chars)
-{
-    int len = (int)strlen(src);
-    if (len <= max_chars) {
-        strcpy(dst, src);
-    } else {
-        memcpy(dst, src, (size_t)(max_chars - 1));
-        dst[max_chars - 1] = '\0';
+    if (r <= 0 || w <= 0 || h <= 0) {
+        fill_rect(conn, win, gc, x, y, w, h);
+        return;
     }
+    if (r > w/2) r = w/2;
+    if (r > h/2) r = h/2;
+
+    fill_rect(conn, win, gc, x + r, y,     w - 2*r, h);
+    fill_rect(conn, win, gc, x,     y + r, r,       h - 2*r);
+    fill_rect(conn, win, gc, x+w-r, y + r, r,       h - 2*r);
+    fill_rect(conn, win, gc, x + r/2, y,   r - r/2, r);
+    fill_rect(conn, win, gc, x,       y + r/2, r, r - r/2);
+    fill_rect(conn, win, gc, x+w-r, y,       r - r/2, r);
+    fill_rect(conn, win, gc, x+w-r+r/2, y + r/2, r - r/2, r - r/2);
+    fill_rect(conn, win, gc, x + r/2, y+h-r, r - r/2, r);
+    fill_rect(conn, win, gc, x, y+h-r+r/2-1, r, r - r/2 + 1);
+    fill_rect(conn, win, gc, x+w-r, y+h-r, r - r/2, r);
+    fill_rect(conn, win, gc, x+w-r+r/2, y+h-r+r/2-1, r - r/2, r - r/2 + 1);
 }
 
-/* ─── strut / dock setup ─────────────────────────────────────────────────── */
+static void draw_button_shape(xcb_connection_t *conn, xcb_window_t win,
+                              int x, int y, int w, int h, int r, uint32_t fill_color)
+{
+    xcb_gc_t gc = make_gc(conn, win, fill_color, fill_color);
+    fill_rounded_rect(conn, win, gc, x, y, w, h, r);
+    xcb_free_gc(conn, gc);
+}
+
+static void draw_button_text(xcb_connection_t *conn, xcb_window_t win,
+                             int x, int y, const char *text,
+                             uint32_t fg_color, uint32_t bg_color)
+{
+    xcb_gc_t gc = make_gc(conn, win, fg_color, bg_color);
+    size_t len = strlen(text);
+    if (len > 255) len = 255;
+    xcb_image_text_8(conn, (uint8_t)len, win, gc, (int16_t)x, (int16_t)y, text);
+    xcb_free_gc(conn, gc);
+}
+
+static void draw_icon_or_placeholder(xcb_connection_t *conn,
+                                     xcb_drawable_t    win,
+                                     panel_icon_id_t   id,
+                                     int x, int y, int sz,
+                                     uint32_t bg_rgb)
+{
+    if (id >= 0 && id < ICON__COUNT && g_icons[id]) {
+        xcb_gc_t gc = make_gc(conn, win, 0xffffff, bg_rgb);
+        nex_icon_draw(conn, win, gc, g_icons[id], x, y, bg_rgb);
+        xcb_free_gc(conn, gc);
+        return;
+    }
+
+    static const uint32_t FALLBACK_COLORS[ICON__COUNT] = {
+        0x5b8dd9, 0xf38ba8, 0xa6e3a1, 0xe78284, 0x89dceb,
+    };
+    uint32_t col = (id >= 0 && id < ICON__COUNT) ? FALLBACK_COLORS[id] : 0x888888;
+    draw_button_shape(conn, win, x, y, sz, sz, 4, col);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * STRUT / DOCK SETUP
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void set_strut(xcb_connection_t *conn, xcb_window_t win,
                       int screen_w, int panel_h, int position)
 {
-    /* _NET_WM_STRUT: left, right, top, bottom */
     uint32_t strut[4] = { 0, 0, 0, 0 };
-    if (position == 0) strut[2] = (uint32_t)panel_h;  /* top */
-    else               strut[3] = (uint32_t)panel_h;  /* bottom */
+    if (position == 0) strut[2] = (uint32_t)panel_h;
+    else               strut[3] = (uint32_t)panel_h;
     xcb_change_property(conn, XCB_PROP_MODE_REPLACE, win,
                         g_atoms.net_wm_strut, XCB_ATOM_CARDINAL, 32, 4, strut);
 
-    /* _NET_WM_STRUT_PARTIAL: l, r, top, bot, l_s, l_e, r_s, r_e, t_s, t_e, b_s, b_e */
     uint32_t partial[12] = { 0 };
     if (position == 0) {
         partial[2] = (uint32_t)panel_h;
@@ -244,20 +346,21 @@ static void set_strut(xcb_connection_t *conn, xcb_window_t win,
         partial[11] = (uint32_t)screen_w;
     }
     xcb_change_property(conn, XCB_PROP_MODE_REPLACE, win,
-                        g_atoms.net_wm_strut_partial, XCB_ATOM_CARDINAL, 32, 12, partial);
+                        g_atoms.net_wm_strut_partial,
+                        XCB_ATOM_CARDINAL, 32, 12, partial);
 
-    /* Window type: dock */
     xcb_change_property(conn, XCB_PROP_MODE_REPLACE, win,
                         g_atoms.net_wm_window_type, XCB_ATOM_ATOM, 32, 1,
                         &g_atoms.net_wm_window_type_dock);
 
-    /* Always on top */
     xcb_atom_t state_atoms[1] = { g_atoms.net_wm_state_above };
     xcb_change_property(conn, XCB_PROP_MODE_REPLACE, win,
                         g_atoms.net_wm_state, XCB_ATOM_ATOM, 32, 1, state_atoms);
 }
 
-/* ─── panel state ────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PANEL STATE
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
 #define MAX_CLIENTS 128
 
@@ -267,151 +370,208 @@ typedef struct {
     xcb_window_t active;
     int          current_ws;
     int          ws_count;
-    char         titles[MAX_CLIENTS][128];
-    /* click regions */
-    int          ws_btn_w;
-    int          task_x;
-    int          task_btn_w;
+    char         titles[MAX_CLIENTS][96];
 } panel_state_t;
 
-static void update_state(xcb_connection_t *conn, xcb_window_t root, panel_state_t *s)
+static void update_state(xcb_connection_t *conn, xcb_window_t root,
+                         panel_state_t *s)
 {
-    s->count      = get_windows(conn, root, g_atoms.net_client_list, s->wins, MAX_CLIENTS);
+    xcb_window_t all[MAX_CLIENTS];
+    int n = get_windows(conn, root, g_atoms.net_client_list, all, MAX_CLIENTS);
+
+    s->count = 0;
+    for (int i = 0; i < n; i++) {
+        if (!window_skip_taskbar(conn, all[i]))
+            s->wins[s->count++] = all[i];
+    }
+
     s->active     = (xcb_window_t)get_cardinal(conn, root, g_atoms.net_active_window);
     s->current_ws = (int)get_cardinal(conn, root, g_atoms.net_current_desktop);
     s->ws_count   = (int)get_cardinal(conn, root, g_atoms.net_number_of_desktops);
     if (s->ws_count <= 0) s->ws_count = 1;
-    for (int i = 0; i < s->count; i++) {
-        get_wm_name(conn, s->wins[i], s->titles[i], 128);
+
+    for (int i = 0; i < s->count; i++)
+        get_wm_name(conn, s->wins[i], s->titles[i], 96);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * LAYOUT CONSTANTS
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define PANEL_PAD           5
+#define PANEL_TEXT_Y(H)     ((H) / 2 + 5)
+#define PANEL_ICON_Y(H)     (((H) - NEX_PANEL_ICON_SIZE) / 2)
+
+#define START_W             64
+#define START_CORNER        6
+
+#define QLNCH_ICON_W        (NEX_PANEL_ICON_SIZE + 4)
+#define QLNCH_LABEL_CHARS   5
+#define QLNCH_CHAR_W        7
+#define QLNCH_LABEL_W       (QLNCH_LABEL_CHARS * QLNCH_CHAR_W)
+#define QLNCH_W             (QLNCH_ICON_W + QLNCH_LABEL_W + 4)
+#define QLNCH_CORNER        5
+#define QLNCH_GAP           4
+
+#define SEP_W               1
+#define SEP_PAD             6
+
+#define WS_BTN_W            26
+#define WS_BTN_GAP          2
+#define WS_CORNER           5
+
+#define TASK_MAX_W          180
+#define TASK_MIN_W          60
+#define TASK_ACCENT_H       3
+#define TASK_CORNER         4
+
+#define RZ_POWER_W          32
+#define RZ_POWER_CORNER     5
+#define RZ_CLOCK_W          110
+#define RZ_VOL_W            (NEX_PANEL_ICON_SIZE + 4)
+#define RZ_TOTAL            (RZ_VOL_W + 4 + RZ_CLOCK_W + 4 + RZ_POWER_W + PANEL_PAD)
+
+static void trunc_str(const char *src, char *dst, int max_chars)
+{
+    int len = (int)strlen(src);
+    if (len < max_chars) {
+        memcpy(dst, src, (size_t)len + 1);
+    } else {
+        memcpy(dst, src, (size_t)(max_chars - 1));
+        dst[max_chars - 1] = '\0';
     }
 }
 
-/* ─── render ──────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * RENDER
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void render(xcb_connection_t *conn, xcb_window_t win,
                    int width, int height, const panel_state_t *s)
 {
-    /* Background */
-    xcb_gc_t gc_bg = make_gc(conn, win, CLR_BG, CLR_BG);
-    fill_rect(conn, win, gc_bg, 0, 0, width, height);
-    xcb_free_gc(conn, gc_bg);
+    int text_y = PANEL_TEXT_Y(height);
+    int icon_y = PANEL_ICON_Y(height);
+    int btn_y  = 4;
+    int btn_h  = height - 8;
+    uint32_t bg = NEX_PANEL_BG;
 
-    /* Bottom border accent line */
-    xcb_gc_t gc_border = make_gc(conn, win, NEX_PANEL_BORDER, NEX_PANEL_BORDER);
-    fill_rect(conn, win, gc_border, 0, height - 1, width, 1);
-    xcb_free_gc(conn, gc_border);
+    /* ── Clear background ── */
+    draw_button_shape(conn, win, 0, 0, width, height, 0, bg);
 
-    int x = 4;
-    int text_y = height / 2 + 5;  /* vertical baseline */
+    /* ── Bottom border accent ── */
+    draw_button_shape(conn, win, 0, height - 1, width, 1, 0, NEX_PANEL_BORDER_BOT);
 
-    /* ── 1. Start Menu button ─────────────────────────── */
-    xcb_gc_t gc_ws_act = make_gc(conn, win, CLR_FG, CLR_WS_ACT);
-    xcb_gc_t gc_ws_in  = make_gc(conn, win, CLR_FG, CLR_WS_INACT);
+    int x = PANEL_PAD;
 
-    fill_rect(conn, win, gc_ws_act, x, 3, 60, height - 6);
-    draw_text(conn, win, gc_ws_act, x + 14, text_y, "Start");
-    x += 64;
-
-    /* ── 2. Quick App Launchers ───────────────────────── */
-    fill_rect(conn, win, gc_ws_in, x, 3, 50, height - 6);
-    draw_text(conn, win, gc_ws_in, x + 10, text_y, "Files");
-    x += 54;
-
-    fill_rect(conn, win, gc_ws_in, x, 3, 46, height - 6);
-    draw_text(conn, win, gc_ws_in, x + 8, text_y, "Sett");
-    x += 50;
-
-    fill_rect(conn, win, gc_ws_in, x, 3, 46, height - 6);
-    draw_text(conn, win, gc_ws_in, x + 8, text_y, "Term");
-    x += 50;
-
-    /* Separator */
-    xcb_gc_t gc_sep = make_gc(conn, win, CLR_SEP, CLR_BG);
-    fill_rect(conn, win, gc_sep, x, 5, 1, height - 10);
-    x += 6;
-
-    /* ── 3. Workspace pager ──────────────────────────── */
-    int ws_btn_w = 24;
-    for (int i = 0; i < s->ws_count; i++) {
-        xcb_gc_t gc = (i == s->current_ws) ? gc_ws_act : gc_ws_in;
-        fill_rect(conn, win, gc, x, 3, ws_btn_w, height - 6);
-        char label[16];
-        snprintf(label, sizeof(label), "%d", i + 1);
-        draw_text(conn, win, gc, x + (ws_btn_w - 6) / 2, text_y, label);
-        x += ws_btn_w + 2;
+    /* ── 1. Start button ── */
+    {
+        draw_button_shape(conn, win, x, btn_y, START_W, btn_h, START_CORNER, NEX_PANEL_START_BG);
+        draw_button_text(conn, win, x + (START_W - 21)/2, text_y, "Nex",
+                         NEX_PANEL_START_FG, NEX_PANEL_START_BG);
+        x += START_W + PANEL_PAD;
     }
-    xcb_free_gc(conn, gc_ws_act);
-    xcb_free_gc(conn, gc_ws_in);
 
-    /* ── 4. Taskbar ──────────────────────────────────── */
-    int right_zone_w = 250;
-    int taskbar_w    = width - x - right_zone_w;
-    int task_btn_w   = (s->count > 0) ? (taskbar_w / s->count) : 0;
-    if (task_btn_w > 200) task_btn_w = 200;
-    if (task_btn_w < 60)  task_btn_w = 60;
+    /* ── 2. Quick-launch buttons ── */
+    typedef struct { panel_icon_id_t id; const char *label; } ql_t;
+    static const ql_t QL[] = {
+        { ICON_FILES,    "Files" },
+        { ICON_SETTINGS, "Sett"  },
+        { ICON_TERMINAL, "Term"  },
+    };
+    for (int i = 0; i < 3; i++) {
+        draw_button_shape(conn, win, x, btn_y, QLNCH_W, btn_h, QLNCH_CORNER, NEX_PANEL_QLNCH_BG);
+        draw_icon_or_placeholder(conn, win, QL[i].id, x + 4, icon_y, NEX_PANEL_ICON_SIZE, NEX_PANEL_QLNCH_BG);
+        draw_button_text(conn, win, x + QLNCH_ICON_W + 2, text_y, QL[i].label,
+                         NEX_PANEL_FG, NEX_PANEL_QLNCH_BG);
+        x += QLNCH_W + QLNCH_GAP;
+    }
 
-    xcb_gc_t gc_accent = make_gc(conn, win, NEX_PANEL_ACCENT, NEX_PANEL_ACCENT);
+    /* ── Separator ── */
+    {
+        draw_button_shape(conn, win, x + SEP_PAD, btn_y + 3, SEP_W, btn_h - 6, 0, NEX_PANEL_SEP);
+        x += SEP_W + SEP_PAD * 2;
+    }
 
-    for (int i = 0; i < s->count && x < width - right_zone_w; i++) {
-        int is_active = (s->wins[i] == s->active);
-        uint32_t bg = is_active ? CLR_WIN_ACT : CLR_WIN_BG;
-        uint32_t fg = CLR_FG;
-        xcb_gc_t gc_t = make_gc(conn, win, fg, bg);
-        fill_rect(conn, win, gc_t, x + 1, 3, task_btn_w - 2, height - 6);
+    /* ── 3. Workspace pager ── */
+    for (int i = 0; i < s->ws_count; i++) {
+        int active = (i == s->current_ws);
+        uint32_t wbg = active ? NEX_PANEL_WS_ACTIVE   : NEX_PANEL_WS_INACTIVE;
+        uint32_t wfg = active ? NEX_PANEL_WS_FG_ACT   : NEX_PANEL_WS_FG_INACT;
 
-        if (is_active) {
-            fill_rect(conn, win, gc_accent, x + 3, height - 5, task_btn_w - 6, 2);
+        draw_button_shape(conn, win, x, btn_y, WS_BTN_W, btn_h, WS_CORNER, wbg);
+
+        int ws_num = (i + 1 > 99) ? 99 : (i + 1);
+        char lbl[8];
+        snprintf(lbl, sizeof(lbl), "%d", ws_num);
+        int lx = x + (WS_BTN_W - (int)strlen(lbl) * QLNCH_CHAR_W) / 2;
+        draw_button_text(conn, win, lx, text_y, lbl, wfg, wbg);
+        x += WS_BTN_W + WS_BTN_GAP;
+    }
+    x += SEP_PAD;
+
+    /* ── 4. Taskbar ── */
+    int taskbar_right = width - RZ_TOTAL;
+    int taskbar_avail = taskbar_right - x;
+    int task_w = (s->count > 0) ? (taskbar_avail / s->count) : 0;
+    if (task_w > TASK_MAX_W) task_w = TASK_MAX_W;
+    if (task_w < TASK_MIN_W) task_w = TASK_MIN_W;
+
+    for (int i = 0; i < s->count && x + task_w <= taskbar_right; i++) {
+        int active = (s->wins[i] == s->active);
+        uint32_t tbg = active ? NEX_PANEL_TASK_ACTIVE : NEX_PANEL_TASK_BG;
+
+        draw_button_shape(conn, win, x + 1, btn_y, task_w - 2, btn_h, TASK_CORNER, tbg);
+
+        if (active) {
+            draw_button_shape(conn, win, x + 5, btn_y + btn_h - TASK_ACCENT_H,
+                              task_w - 12, TASK_ACCENT_H, 0, NEX_PANEL_TASK_ACCENT);
         }
 
-        char title_buf[32];
-        char label[36];
-        truncate_text(s->titles[i], title_buf, (int)sizeof(title_buf) - 1);
-        snprintf(label, sizeof(label), "%s%s", is_active ? "* " : "  ", title_buf);
-        draw_text(conn, win, gc_t, x + 4, text_y, label);
-        xcb_free_gc(conn, gc_t);
-        x += task_btn_w;
+        char title[24];
+        trunc_str(s->titles[i], title, (int)sizeof(title) - 1);
+        draw_button_text(conn, win, x + 7, text_y, title, NEX_PANEL_FG, tbg);
+        x += task_w;
     }
-    xcb_free_gc(conn, gc_accent);
 
-    /* ── 5. Right zone: Controls, Live Clock, Power ─ */
-    int ctrl_btn_w  = 34;
-    int close_btn_x = width - 245;
-    int max_btn_x   = width - 207;
-    int full_btn_x  = width - 169;
-    int clock_x     = width - 128;
-    int power_btn_x = width - 34;
+    /* ── 5. Right zone ── */
+    int rx = width - RZ_TOTAL + PANEL_PAD;
 
-    xcb_gc_t gc_ctrl = make_gc(conn, win, CLR_FG, CLR_WS_INACT);
+    /* Volume icon */
+    {
+        draw_icon_or_placeholder(conn, win, ICON_VOLUME, rx, icon_y, NEX_PANEL_ICON_SIZE, bg);
+        rx += RZ_VOL_W + 4;
+    }
 
-    fill_rect(conn, win, gc_ctrl, close_btn_x, 3, 30, height - 6);
-    draw_text(conn, win, gc_ctrl, close_btn_x + 10, text_y, "X");
+    /* Clock */
+    {
+        time_t now = time(NULL);
+        struct tm *t = localtime(&now);
+        char clock_str[24];
+        strftime(clock_str, sizeof(clock_str), "%a %d %b %H:%M", t);
+        draw_button_text(conn, win, rx, text_y, clock_str, NEX_PANEL_FG, bg);
+        rx += RZ_CLOCK_W + 4;
+    }
 
-    fill_rect(conn, win, gc_ctrl, max_btn_x, 3, ctrl_btn_w, height - 6);
-    draw_text(conn, win, gc_ctrl, max_btn_x + 6, text_y, "Max");
-
-    fill_rect(conn, win, gc_ctrl, full_btn_x, 3, ctrl_btn_w, height - 6);
-    draw_text(conn, win, gc_ctrl, full_btn_x + 6, text_y, "Full");
-    xcb_free_gc(conn, gc_ctrl);
-
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    char clock_str[24];
-    strftime(clock_str, sizeof(clock_str), "%a %H:%M", t);
-
-    xcb_gc_t gc_fg = make_gc(conn, win, CLR_FG, CLR_BG);
-    draw_text(conn, win, gc_fg, clock_x, text_y, clock_str);
-    xcb_free_gc(conn, gc_fg);
-
-    /* Power / Session button (far right, red-tinted) */
-    xcb_gc_t gc_pwr = make_gc(conn, win, 0x11111b, 0xe78284);
-    fill_rect(conn, win, gc_pwr, power_btn_x, 3, 30, height - 6);
-    draw_text(conn, win, gc_pwr, power_btn_x + 3, text_y, "Pwr");
-    xcb_free_gc(conn, gc_pwr);
+    /* Power button */
+    {
+        draw_button_shape(conn, win, rx, btn_y, RZ_POWER_W, btn_h, RZ_POWER_CORNER, NEX_PANEL_POWER_BG);
+        if (g_icons[ICON_POWER]) {
+            int ix = rx + (RZ_POWER_W - NEX_PANEL_ICON_SIZE) / 2;
+            xcb_gc_t gc_pw = make_gc(conn, win, NEX_PANEL_POWER_FG, NEX_PANEL_POWER_BG);
+            nex_icon_draw(conn, win, gc_pw, g_icons[ICON_POWER], ix, icon_y, NEX_PANEL_POWER_BG);
+            xcb_free_gc(conn, gc_pw);
+        } else {
+            draw_button_text(conn, win, rx + (RZ_POWER_W - 7)/2, text_y, "I",
+                             NEX_PANEL_POWER_FG, NEX_PANEL_POWER_BG);
+        }
+    }
 
     xcb_flush(conn);
 }
 
-/* ─── click handling ─────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CLICK HANDLING
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void spawn_app(const char *name, const char *path1, const char *path2)
 {
@@ -419,153 +579,103 @@ static void spawn_app(const char *name, const char *path1, const char *path2)
     if (pid < 0) return;
     if (pid == 0) {
         setsid();
-        /* Close X file descriptors so child does not inherit the panel's
-         * X connection — otherwise xterm and other X clients may hang. */
         for (int fd = 3; fd < 256; fd++) close(fd);
-        /* Try bare name via PATH first */
         execlp(name, name, (char *)NULL);
-        /* PATH lookup failed — try explicit absolute paths */
         if (path1) execl(path1, name, (char *)NULL);
         if (path2) execl(path2, name, (char *)NULL);
         _exit(1);
     }
-    /* Reap asynchronously so we do not leave zombies */
     (void)waitpid(pid, NULL, WNOHANG);
 }
 
 static void handle_click(xcb_connection_t *conn, xcb_window_t root,
-                         panel_state_t *s, int click_x, int panel_w, uint8_t button)
+                          panel_state_t *s, int cx, int panel_w,
+                          int panel_h, uint8_t button)
 {
-    /* ── Right zone layout (must match render()) ──────────────────────────── */
-    int right_zone_w = 250;
-    int close_btn_x  = panel_w - 245;
-    int max_btn_x    = panel_w - 207;
-    int full_btn_x   = panel_w - 169;
-    int ctrl_btn_w   = 34;
-    int power_btn_x  = panel_w - 34;
+    (void)panel_h;
+    int x = PANEL_PAD;
 
-    /* Power button (far right) */
-    if (click_x >= power_btn_x) {
-        spawn_app("nex-session", "./bin/nex-session", "/usr/local/bin/nex-session");
-        return;
-    }
-
-    /* Window Controls (Close, Max, Full) */
-    if (click_x >= close_btn_x && click_x < close_btn_x + 30) {
-        if (s->active) {
-            char cmd[48];
-            snprintf(cmd, sizeof(cmd), "close %u", (unsigned)s->active);
-            ipc_send(cmd);
-        } else {
-            ipc_send("close");
-        }
-        return;
-    }
-
-    if (click_x >= max_btn_x && click_x < max_btn_x + ctrl_btn_w) {
-        if (s->active) {
-            char cmd[48];
-            snprintf(cmd, sizeof(cmd), "maximize %u", (unsigned)s->active);
-            ipc_send(cmd);
-        } else {
-            ipc_send("maximize");
-        }
-        return;
-    }
-
-    if (click_x >= full_btn_x && click_x < full_btn_x + ctrl_btn_w) {
-        if (s->active) {
-            char cmd[48];
-            snprintf(cmd, sizeof(cmd), "fullscreen %u", (unsigned)s->active);
-            ipc_send(cmd);
-        } else {
-            ipc_send("fullscreen");
-        }
-        return;
-    }
-
-    int x = 4;
-
-    /* 1. Start Menu button */
-    if (click_x >= x && click_x < x + 60) {
+    /* 1. Start button */
+    if (cx >= x && cx < x + START_W) {
         spawn_app("nex-launcher", "./bin/nex-launcher", "/usr/local/bin/nex-launcher");
         return;
     }
-    x += 64;
+    x += START_W + PANEL_PAD;
 
-    /* 2. Quick Launchers */
-    /* Files Launcher */
-    if (click_x >= x && click_x < x + 50) {
-        spawn_app("nex-fm", "./bin/nex-fm", "/usr/local/bin/nex-fm");
-        return;
+    /* 2. Quick launchers */
+    typedef struct { const char *name; const char *p1; const char *p2; } ql_app_t;
+    static const ql_app_t QL_APPS[] = {
+        { "nex-fm",       "./bin/nex-fm",       "/usr/local/bin/nex-fm"       },
+        { "nex-settings", "./bin/nex-settings", "/usr/local/bin/nex-settings" },
+        { "nex-terminal", "./bin/nex-terminal", "/usr/local/bin/nex-terminal" },
+    };
+    for (int i = 0; i < 3; i++) {
+        if (cx >= x && cx < x + QLNCH_W) {
+            spawn_app(QL_APPS[i].name, QL_APPS[i].p1, QL_APPS[i].p2);
+            return;
+        }
+        x += QLNCH_W + QLNCH_GAP;
     }
-    x += 54;
-
-    /* Settings Launcher */
-    if (click_x >= x && click_x < x + 46) {
-        spawn_app("nex-settings", "./bin/nex-settings", "/usr/local/bin/nex-settings");
-        return;
-    }
-    x += 50;
-
-    /* Terminal Launcher */
-    if (click_x >= x && click_x < x + 46) {
-        spawn_app("nex-terminal", "./bin/nex-terminal", "/usr/local/bin/nex-terminal");
-        return;
-    }
-    x += 50;
-
-    x += 7; /* separator + gap */
+    x += SEP_W + SEP_PAD * 2;
 
     /* 3. Workspace buttons */
-    int ws_btn_w = 24;
     for (int i = 0; i < s->ws_count; i++) {
-        if (click_x >= x && click_x < x + ws_btn_w) {
+        if (cx >= x && cx < x + WS_BTN_W) {
             char cmd[32];
             snprintf(cmd, sizeof(cmd), "workspace %d", i + 1);
             ipc_send(cmd);
             return;
         }
-        x += ws_btn_w + 2;
+        x += WS_BTN_W + WS_BTN_GAP;
     }
-    x += 7;  /* separator + gap */
+    x += SEP_PAD;
 
-    /* 4. Taskbar buttons */
-    int taskbar_w  = panel_w - x - right_zone_w;
-    int task_btn_w = (s->count > 0) ? (taskbar_w / s->count) : 0;
-    if (task_btn_w > 200) task_btn_w = 200;
-    if (task_btn_w < 60)  task_btn_w = 60;
+    /* 4. Right zone */
+    int rx = panel_w - RZ_TOTAL + PANEL_PAD;
+    rx += RZ_VOL_W + 4;
+    rx += RZ_CLOCK_W + 4;
 
-    for (int i = 0; i < s->count; i++) {
-        if (click_x >= x && click_x < x + task_btn_w) {
+    /* Power button */
+    if (cx >= rx && cx < rx + RZ_POWER_W) {
+        spawn_app("nex-session", "./bin/nex-session", "/usr/local/bin/nex-session");
+        return;
+    }
+
+    /* 4. Taskbar */
+    int taskbar_right = panel_w - RZ_TOTAL;
+    int taskbar_avail = taskbar_right - x;
+    int task_w = (s->count > 0) ? (taskbar_avail / s->count) : 0;
+    if (task_w > TASK_MAX_W) task_w = TASK_MAX_W;
+    if (task_w < TASK_MIN_W) task_w = TASK_MIN_W;
+
+    for (int i = 0; i < s->count && x + task_w <= taskbar_right; i++) {
+        if (cx >= x && cx < x + task_w) {
             if (button == XCB_BUTTON_INDEX_2) {
-                /* Middle Click → Close window */
                 char cmd[48];
                 snprintf(cmd, sizeof(cmd), "close %u", (unsigned)s->wins[i]);
                 ipc_send(cmd);
             } else if (button == XCB_BUTTON_INDEX_3) {
-                /* Right Click → Toggle floating */
                 char cmd[48];
                 snprintf(cmd, sizeof(cmd), "toggle-floating %u", (unsigned)s->wins[i]);
                 ipc_send(cmd);
             } else {
-                /* Left Click → Focus or Minimize */
                 if (s->wins[i] == s->active) {
                     char cmd[48];
                     snprintf(cmd, sizeof(cmd), "minimize %u", (unsigned)s->wins[i]);
                     ipc_send(cmd);
                 } else {
-                    ewmh_focus(conn, root, s->wins[i]);
+                    ewmh_activate(conn, root, s->wins[i]);
                 }
             }
             return;
         }
-        x += task_btn_w;
+        x += task_w;
     }
-    (void)panel_w;
 }
 
-/* ─── public API ──────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PUBLIC API
+ * ═══════════════════════════════════════════════════════════════════════════ */
 
 int nex_panel_init(nex_panel_ctx_t *ctx)
 {
@@ -579,20 +689,21 @@ int nex_panel_init(nex_panel_ctx_t *ctx)
     xcb_screen_iterator_t iter   = xcb_setup_roots_iterator(setup);
     xcb_screen_t         *screen = iter.data;
     ctx->screen  = screen;
-    ctx->width   = screen->width_in_pixels;
+    ctx->width   = (int)screen->width_in_pixels;
     ctx->height  = NEX_PANEL_HEIGHT;
     ctx->running = 1;
 
     init_atoms(ctx->conn);
+    icons_load();
 
-    /* Panel Y position */
-    int y = (NEX_PANEL_POSITION == 0) ? 0
-                                       : (int)screen->height_in_pixels - NEX_PANEL_HEIGHT;
+    int y = (NEX_PANEL_POSITION == 0)
+            ? 0
+            : (int)screen->height_in_pixels - NEX_PANEL_HEIGHT;
 
     uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK;
     uint32_t vals[3] = {
-        CLR_BG,
-        1,  /* override_redirect: skip WM management */
+        NEX_PANEL_BG,
+        1,
         XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS |
         XCB_EVENT_MASK_PROPERTY_CHANGE
     };
@@ -600,24 +711,23 @@ int nex_panel_init(nex_panel_ctx_t *ctx)
     ctx->win = xcb_generate_id(ctx->conn);
     xcb_create_window(ctx->conn, XCB_COPY_FROM_PARENT,
                       ctx->win, screen->root,
-                      0, (int16_t)y, (uint16_t)ctx->width, (uint16_t)ctx->height, 0,
+                      0, (int16_t)y, (uint16_t)ctx->width,
+                      (uint16_t)ctx->height, 0,
                       XCB_WINDOW_CLASS_INPUT_OUTPUT,
                       screen->root_visual, mask, vals);
 
-    /* Window class / name */
     xcb_change_property(ctx->conn, XCB_PROP_MODE_REPLACE, ctx->win,
                         XCB_ATOM_WM_NAME, XCB_ATOM_STRING, 8,
-                        strlen("nex-panel"), "nex-panel");
+                        9, "nex-panel");
 
     set_strut(ctx->conn, ctx->win, ctx->width, ctx->height, NEX_PANEL_POSITION);
 
-    /* Subscribe to root window property changes to track WM state */
     uint32_t root_mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
-    xcb_change_window_attributes(ctx->conn, screen->root, XCB_CW_EVENT_MASK, &root_mask);
+    xcb_change_window_attributes(ctx->conn, screen->root,
+                                 XCB_CW_EVENT_MASK, &root_mask);
 
     xcb_map_window(ctx->conn, ctx->win);
 
-    /* Raise panel above all other windows (including nex-desktop) */
     uint32_t raise_vals[1] = { XCB_STACK_MODE_ABOVE };
     xcb_configure_window(ctx->conn, ctx->win,
                          XCB_CONFIG_WINDOW_STACK_MODE, raise_vals);
@@ -638,7 +748,6 @@ void nex_panel_run(nex_panel_ctx_t *ctx)
     struct pollfd fds[1] = {{ xcb_fd, POLLIN, 0 }};
 
     while (ctx->running) {
-        /* Poll with 1-second timeout to refresh clock */
         int ready = poll(fds, 1, 1000);
         if (ready < 0 && errno != EINTR) break;
 
@@ -653,14 +762,17 @@ void nex_panel_run(nex_panel_ctx_t *ctx)
             case XCB_BUTTON_PRESS: {
                 xcb_button_press_event_t *bp = (xcb_button_press_event_t *)ev;
                 if (bp->event == ctx->win) {
-                    handle_click(ctx->conn, root, &state, bp->event_x, ctx->width, bp->detail);
+                    handle_click(ctx->conn, root, &state,
+                                 bp->event_x, ctx->width, ctx->height,
+                                 bp->detail);
                     update_state(ctx->conn, root, &state);
                     need_redraw = 1;
                 }
                 break;
             }
             case XCB_PROPERTY_NOTIFY: {
-                xcb_property_notify_event_t *pn = (xcb_property_notify_event_t *)ev;
+                xcb_property_notify_event_t *pn =
+                    (xcb_property_notify_event_t *)ev;
                 if (pn->atom == g_atoms.net_client_list  ||
                     pn->atom == g_atoms.net_active_window ||
                     pn->atom == g_atoms.net_current_desktop) {
@@ -674,10 +786,8 @@ void nex_panel_run(nex_panel_ctx_t *ctx)
             free(ev);
         }
 
-        /* Refresh clock every poll tick regardless */
         need_redraw = 1;
         if (need_redraw) {
-            /* Always keep panel on top before drawing */
             uint32_t raise_vals[1] = { XCB_STACK_MODE_ABOVE };
             xcb_configure_window(ctx->conn, ctx->win,
                                  XCB_CONFIG_WINDOW_STACK_MODE, raise_vals);
@@ -690,6 +800,7 @@ void nex_panel_run(nex_panel_ctx_t *ctx)
 
 void nex_panel_cleanup(nex_panel_ctx_t *ctx)
 {
+    icons_free();
     if (ctx->conn) {
         xcb_destroy_window(ctx->conn, ctx->win);
         xcb_disconnect(ctx->conn);
@@ -697,13 +808,10 @@ void nex_panel_cleanup(nex_panel_ctx_t *ctx)
     }
 }
 
-/* ─── entry point ─────────────────────────────────────────────────────────── */
-
 int main(void)
 {
     nex_panel_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
-
     if (nex_panel_init(&ctx) < 0) return 1;
     nex_panel_run(&ctx);
     nex_panel_cleanup(&ctx);

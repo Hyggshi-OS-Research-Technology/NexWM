@@ -273,6 +273,187 @@ int nex_client_frame_resize_hit(const nex_client_t *c, int fx, int fy, int *edge
     return e != NEX_RESIZE_NONE;
 }
 
+
+/* ── EWMH/ICCCM title helpers ────────────────────────────────────────────── */
+
+/*
+ * Read a UTF-8 EWMH title first, then fall back to the legacy ICCCM WM_NAME.
+ *
+ * Qt applications normally publish _NET_WM_NAME as UTF8_STRING. Reading only
+ * WM_NAME through xcb_icccm_get_wm_name() can therefore produce truncated or
+ * incorrectly decoded titles on modern applications.
+ */
+static xcb_atom_t nex_client_intern_atom(const char *name)
+{
+    if (!name || !*name)
+        return XCB_ATOM_NONE;
+
+    xcb_intern_atom_cookie_t cookie =
+        xcb_intern_atom(g_conn, 0, (uint16_t)strlen(name), name);
+
+    xcb_intern_atom_reply_t *reply =
+        xcb_intern_atom_reply(g_conn, cookie, NULL);
+
+    if (!reply)
+        return XCB_ATOM_NONE;
+
+    xcb_atom_t atom = reply->atom;
+    free(reply);
+    return atom;
+}
+
+static int nex_client_copy_property_string(xcb_get_property_reply_t *reply,
+                                           char *dst,
+                                           size_t dst_size)
+{
+    if (!reply || !dst || dst_size == 0)
+        return 0;
+
+    int len = xcb_get_property_value_length(reply);
+    if (len <= 0)
+        return 0;
+
+    size_t copy_len = (size_t)len;
+    if (copy_len >= dst_size)
+        copy_len = dst_size - 1;
+
+    memcpy(dst, xcb_get_property_value(reply), copy_len);
+    dst[copy_len] = '\0';
+
+    return (int)copy_len;
+}
+
+static int nex_client_read_title(xcb_window_t window,
+                                 char *dst,
+                                 size_t dst_size)
+{
+    if (!dst || dst_size == 0)
+        return 0;
+
+    dst[0] = '\0';
+
+    /*
+     * Preferred EWMH property:
+     *   _NET_WM_NAME / UTF8_STRING
+     */
+    xcb_atom_t net_wm_name =
+        nex_client_intern_atom("_NET_WM_NAME");
+
+    xcb_atom_t utf8_string =
+        nex_client_intern_atom("UTF8_STRING");
+
+    if (net_wm_name != XCB_ATOM_NONE &&
+        utf8_string != XCB_ATOM_NONE) {
+
+        xcb_get_property_cookie_t cookie =
+            xcb_get_property(
+                g_conn,
+                0,
+                window,
+                net_wm_name,
+                utf8_string,
+                0,
+                1024
+            );
+
+        xcb_get_property_reply_t *reply =
+            xcb_get_property_reply(g_conn, cookie, NULL);
+
+        if (reply) {
+            int result =
+                nex_client_copy_property_string(
+                    reply,
+                    dst,
+                    dst_size
+                );
+
+            free(reply);
+
+            if (result > 0)
+                return result;
+        }
+    }
+
+    /*
+     * ICCCM fallback:
+     *   WM_NAME / STRING
+     *
+     * xcb_icccm_get_wm_name() is intentionally not used here because we want
+     * to explicitly control the byte length and NUL termination.
+     */
+    xcb_get_property_cookie_t cookie =
+        xcb_get_property(
+            g_conn,
+            0,
+            window,
+            XCB_ATOM_WM_NAME,
+            XCB_ATOM_STRING,
+            0,
+            1024
+        );
+
+    xcb_get_property_reply_t *reply =
+        xcb_get_property_reply(g_conn, cookie, NULL);
+
+    if (reply) {
+        int result =
+            nex_client_copy_property_string(
+                reply,
+                dst,
+                dst_size
+            );
+
+        free(reply);
+
+        if (result > 0)
+            return result;
+    }
+
+    dst[0] = '\0';
+    return 0;
+}
+
+/*
+ * Update the cached title and redraw the frame if necessary.
+ * Returns non-zero when the title actually changed.
+ */
+int nex_client_update_title(nex_client_t *c)
+{
+    if (!c)
+        return 0;
+
+    char new_title[sizeof(c->title)];
+    nex_client_read_title(
+        c->window,
+        new_title,
+        sizeof(new_title)
+    );
+
+    if (strcmp(c->title, new_title) == 0)
+        return 0;
+
+    memcpy(c->title, new_title, sizeof(c->title));
+    c->title[sizeof(c->title) - 1] = '\0';
+
+    if (!c->title[0] && c->class[0]) {
+        /*
+         * Keep title empty internally. The titlebar already falls back to
+         * c->class when drawing.
+         */
+    }
+
+    if (c->frame != XCB_WINDOW_NONE)
+        nex_client_redraw_titlebar(c);
+
+    NEX_INFO(
+        "Updated client title: window=0x%x, title=\"%s\"",
+        c->window,
+        c->title[0] ? c->title : c->class
+    );
+
+    return 1;
+}
+
 /* ── lifecycle ───────────────────────────────────────────────────────────── */
 
 nex_client_t *nex_client_create(xcb_window_t window)
@@ -308,12 +489,8 @@ nex_client_t *nex_client_create(xcb_window_t window)
         xcb_icccm_get_wm_class_reply_wipe(&wm_class);
     }
 
-    xcb_icccm_get_text_property_reply_t title_reply;
-    xcb_get_property_cookie_t title_cookie = xcb_icccm_get_wm_name(g_conn, window);
-    if (xcb_icccm_get_wm_name_reply(g_conn, title_cookie, &title_reply, NULL)) {
-        strncpy(c->title, title_reply.name ? title_reply.name : "", sizeof(c->title) - 1);
-        xcb_icccm_get_text_property_reply_wipe(&title_reply);
-    }
+    /* Read modern UTF-8 _NET_WM_NAME, with WM_NAME fallback. */
+    nex_client_read_title(window, c->title, sizeof(c->title));
 
     uint32_t values[1];
     values[0] = g_config.border_width;
