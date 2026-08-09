@@ -515,7 +515,6 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
     QByteArray out;
     int key = event->key();
     bool ctrl = event->modifiers() & Qt::ControlModifier;
-    bool shift = event->modifiers() & Qt::ShiftModifier;
     bool alt   = event->modifiers() & Qt::AltModifier;
 
     if (ctrl && key >= Qt::Key_A && key <= Qt::Key_Z) {
@@ -550,7 +549,7 @@ void TerminalWidget::keyPressEvent(QKeyEvent *event)
         out.append("\x1b[2~");
     } else {
         QString text = event->text();
-        if (!text.isEmpty() && !ctrl && !shift)
+        if (!text.isEmpty() && !ctrl)
             out.append(text.toUtf8());
     }
 
