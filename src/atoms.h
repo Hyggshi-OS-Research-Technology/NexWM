@@ -21,6 +21,9 @@ typedef struct {
     xcb_atom_t net_wm_state_maximized_vert;
     xcb_atom_t net_wm_state_maximized_horz;
     xcb_atom_t net_wm_window_type;
+    xcb_atom_t net_wm_window_type_dock;
+    xcb_atom_t net_wm_strut;
+    xcb_atom_t net_wm_strut_partial;
     xcb_atom_t net_wm_name;
     xcb_atom_t net_workarea;
     xcb_atom_t net_wm_pid;

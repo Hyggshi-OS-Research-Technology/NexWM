@@ -1,5 +1,27 @@
 /*
  * client.c - Client window management implementation for NexWM
+ *
+ * NOTE ON DECORATION FRAMES:
+ * client.h declares a `frame` field and a set of decoration helpers
+ * (nex_client_decorate, nex_client_reframe, nex_client_titlebar_hit, ...)
+ * for a future titlebar/reparenting model, matching the diagram below.
+ * The lifecycle code in this file (create/destroy/move/resize/...) does
+ * NOT reparent clients yet - it manages c->window directly, borders only,
+ * no titlebar - matching how wm.c/events.c currently call it. `c->frame`
+ * is therefore unused (left 0 / XCB_WINDOW_NONE) until reparenting is
+ * implemented. The size-hint helpers below already account for a titlebar
+ * strip so they're ready to drop in once nex_client_reframe/nex_client_decorate
+ * are written; until then only nex_client_read_size_hints() is called
+ * (from nex_client_create()) and nex_client_apply_size_hints() sits ready
+ * but unused.
+ *
+ *   ┌──────────────────────────────── frame (c->x, c->y, c->width, c->height)
+ *   │  ┌──────────────────────── titlebar (NEX_TITLEBAR_H, painted)
+ *   │  │  Title text        [—] [□] [X]
+ *   │  ├─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+ *   │  │  ┌───────────────── client window (reparented, holds app content)
+ *   │  │  │
+ *   │  │  │
  */
 
 #include "client.h"
@@ -11,14 +33,69 @@
 #include "log.h"
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 nex_client_t *g_clients = NULL;
 nex_client_t *g_focused = NULL;
 
 extern xcb_connection_t *g_conn;
 extern xcb_screen_t *g_screen;
+extern xcb_window_t g_root;
 extern nex_atoms_t g_atoms;
 extern nex_config_t g_config;
+
+/* ICCCM WM_STATE values (set on the client window as WM_STATE property). */
+enum {
+    NEX_WM_STATE_WITHDRAWN = 0,
+    NEX_WM_STATE_NORMAL = 1,
+    NEX_WM_STATE_ICONIC = 3
+};
+
+/* Flag-bits of the X WM_NORMAL_HINTS property. */
+enum {
+    NEX_HINT_POSITION      = 4,    /* PPosition  */
+    NEX_HINT_SIZE          = 8,    /* PSize      */
+    NEX_HINT_MIN_SIZE      = 16,   /* PMinSize   */
+    NEX_HINT_MAX_SIZE      = 32,   /* PMaxSize   */
+    NEX_HINT_RESIZE_INC    = 64,   /* PResizeInc */
+    NEX_HINT_ASPECT        = 128,  /* PAspect    */
+    NEX_HINT_BASE_SIZE     = 256,  /* PBaseSize  */
+    NEX_HINT_WIN_GRAVITY   = 512   /* PWinGravity*/
+};
+
+/* ── small drawing helpers (local, style matches NexPanel) ──────────────── */
+/* Reserved for nex_client_decorate()/nex_client_redraw_titlebar() once the
+ * decoration-frame model above is implemented; not called yet. */
+
+static xcb_gc_t make_gc(int fg, int bg) __attribute__((unused));
+static void fill_rect(xcb_drawable_t d, xcb_gc_t gc, int x, int y, int w, int h) __attribute__((unused));
+static void draw_text8(xcb_drawable_t d, xcb_gc_t gc, int x, int y, const char *text) __attribute__((unused));
+
+static xcb_gc_t make_gc(int fg, int bg)
+{
+    xcb_gc_t gc = xcb_generate_id(g_conn);
+    uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_BACKGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+    uint32_t vals[3] = { (uint32_t)fg, (uint32_t)bg, 0 };
+    xcb_create_gc(g_conn, gc, g_root, mask, vals);
+    return gc;
+}
+
+static void fill_rect(xcb_drawable_t d, xcb_gc_t gc, int x, int y, int w, int h)
+{
+    xcb_rectangle_t r = { (int16_t)x, (int16_t)y,
+                          (uint16_t)(w > 0 ? w : 0),
+                          (uint16_t)(h > 0 ? h : 0) };
+    xcb_poly_fill_rectangle(g_conn, d, gc, 1, &r);
+}
+
+static void draw_text8(xcb_drawable_t d, xcb_gc_t gc, int x, int y, const char *text)
+{
+    if (!text || !*text) return;
+    xcb_image_text_8(g_conn, (uint8_t)strlen(text), d, gc,
+                     (int16_t)x, (int16_t)y, text);
+}
+
+/* ── lifecycle ───────────────────────────────────────────────────────────── */
 
 nex_client_t *nex_client_create(xcb_window_t window)
 {
@@ -29,6 +106,7 @@ nex_client_t *nex_client_create(xcb_window_t window)
     }
 
     c->window = window;
+    c->frame = XCB_WINDOW_NONE; /* no decoration frame yet - see file header note */
     c->workspace = 0;
     c->flags = 0;
     c->next = NULL;
@@ -70,6 +148,7 @@ nex_client_t *nex_client_create(xcb_window_t window)
     xcb_change_window_attributes(g_conn, window, XCB_CW_EVENT_MASK, &mask);
 
     nex_client_grab_buttons(c);
+    nex_client_read_size_hints(c);
 
     NEX_INFO("Created client: window=0x%x, class=\"%s\", title=\"%s\"",
              window, c->class, c->title);
@@ -113,6 +192,8 @@ void nex_client_destroy(nex_client_t *c)
     free(c);
 }
 
+/* ── lookup helpers ─────────────────────────────────────────────────────── */
+
 nex_client_t *nex_client_find(xcb_window_t window)
 {
     nex_client_t *c;
@@ -121,6 +202,17 @@ nex_client_t *nex_client_find(xcb_window_t window)
     }
     return NULL;
 }
+
+nex_client_t *nex_client_find_frame(xcb_window_t frame)
+{
+    nex_client_t *c;
+    for (c = g_clients; c; c = c->next) {
+        if (c->frame == frame) return c;
+    }
+    return NULL;
+}
+
+/* ── focus / stacking / geometry ────────────────────────────────────────── */
 
 void nex_client_focus(nex_client_t *c)
 {
@@ -158,6 +250,7 @@ void nex_client_resize(nex_client_t *c, int w, int h)
 void nex_client_set_border(nex_client_t *c, uint32_t color)
 {
     if (!c) return;
+    c->border_color = color;
     uint32_t values[] = { color };
     xcb_change_window_attributes(g_conn, c->window, XCB_CW_BORDER_PIXEL, values);
 }
@@ -173,6 +266,8 @@ void nex_client_unmap(nex_client_t *c)
     if (!c) return;
     xcb_unmap_window(g_conn, c->window);
 }
+
+/* ── minimize / fullscreen / maximize ───────────────────────────────────── */
 
 void nex_client_minimize(nex_client_t *c)
 {
@@ -287,6 +382,8 @@ void nex_client_kill(nex_client_t *c)
     }
 }
 
+/* ── client list ─────────────────────────────────────────────────────────── */
+
 void nex_client_list_add(nex_client_t *c)
 {
     if (!c) return;
@@ -303,4 +400,122 @@ void nex_client_list_remove(nex_client_t *c)
     else g_clients = c->next;
     c->next = NULL;
     c->prev = NULL;
+}
+
+/* ── size hints (WM_NORMAL_HINTS / WM_SIZE_HINTS) ──────────────────────── */
+
+void nex_client_read_size_hints(nex_client_t *c)
+{
+    if (!c) return;
+    c->minw = 1;
+    c->minh = 1;
+    c->maxw = INT_MAX;
+    c->maxh = INT_MAX;
+    c->basew = 0;
+    c->baseh = 0;
+    c->incw = 1;
+    c->inch = 1;
+
+    /* WM_SIZE_HINTS is a packed array of 18 int32 values (ICCCM §4.1.2.3).
+     * Field offsets: 0=flags 1=x 2=y 3=w 4=h 5=min_w 6=min_h 7=max_w
+     * 8=max_h 9=w_inc 10=h_inc 11=min_aspect_x 12=min_aspect_y
+     * 13=max_aspect_x 14=max_aspect_y 15=base_w 16=base_h 17=win_gravity. */
+    xcb_get_property_cookie_t pc = xcb_get_property(
+        g_conn, 0, c->window, g_atoms.wm_normal_hints,
+        XCB_ATOM_WM_SIZE_HINTS, 0, 18);
+    xcb_get_property_reply_t *rep = xcb_get_property_reply(g_conn, pc, NULL);
+    if (!rep || rep->type == XCB_ATOM_NONE) {
+        free(rep);
+        return;
+    }
+
+    int len = xcb_get_property_value_length(rep);
+    if (len < 9 * (int)sizeof(int32_t)) {
+        free(rep);
+        return;
+    }
+    const int32_t *d = (const int32_t *)xcb_get_property_value(rep);
+    int n = len / (int)sizeof(int32_t);
+    if (n > 18) n = 18;
+    uint32_t flags = (uint32_t)d[0];
+
+    if ((flags & NEX_HINT_MIN_SIZE) && n > 6) {
+        c->minw = (int)d[5];
+        c->minh = (int)d[6];
+    }
+    if ((flags & NEX_HINT_MAX_SIZE) && n > 8) {
+        c->maxw = (int)d[7];
+        c->maxh = (int)d[8];
+    }
+    if ((flags & NEX_HINT_RESIZE_INC) && n > 10) {
+        c->incw = (int)d[9];
+        c->inch = (int)d[10];
+    }
+    if ((flags & NEX_HINT_BASE_SIZE) && n > 16) {
+        c->basew = (int)d[15];
+        c->baseh = (int)d[16];
+    }
+
+    /* Sanitize: increments >= 1, maximums >= minimums. */
+    if (c->incw < 1) c->incw = 1;
+    if (c->inch < 1) c->inch = 1;
+    if (c->minw < 1) c->minw = 1;
+    if (c->minh < 1) c->minh = 1;
+    if (c->maxw > 0 && c->maxw < c->minw) c->maxw = c->minw;
+    if (c->maxh > 0 && c->maxh < c->minh) c->maxh = c->minh;
+
+    free(rep);
+    NEX_DEBUG("Size hints for 0x%x: min %dx%d max %dx%d inc %dx%d base %dx%d",
+              c->window, c->minw, c->minh,
+              c->maxw == INT_MAX ? -1 : c->maxw,
+              c->maxh == INT_MAX ? -1 : c->maxh,
+              c->incw, c->inch, c->basew, c->baseh);
+}
+
+/* Apply WM_NORMAL_HINTS to a desired FRAME size. *w / *h are in frame
+ * coordinates; hints are expressed in client coordinates, so the titlebar
+ * strip and the border are subtracted before clamping.
+ *
+ * Not called yet: nothing reparents clients into a decoration frame, so
+ * there's no titlebar strip to subtract. Wire this into nex_client_reframe()
+ * / interactive resize once that lands. */
+void nex_client_apply_size_hints(nex_client_t *c, int *w, int *h)
+{
+    if (!c || !w || !h) return;
+    int bw = (int)g_config.border_width;
+    int cw = *w - 2 * bw;               /* client width  */
+    int ch = *h - NEX_TITLEBAR_H - bw;  /* client height */
+
+    if (cw < 1) cw = 1;
+    if (ch < 1) ch = 1;
+
+    if (cw < c->minw) cw = c->minw;
+    if (ch < c->minh) ch = c->minh;
+    if (c->maxw > 0 && cw > c->maxw) cw = c->maxw;
+    if (c->maxh > 0 && ch > c->maxh) ch = c->maxh;
+
+    /* Honor resize increments (round up, then fall back below the maximum). */
+    if (c->incw > 1) {
+        int rw = cw - c->basew;
+        if (rw < 0) rw = 0;
+        int stepped = c->basew + ((rw + c->incw - 1) / c->incw) * c->incw;
+        if (c->maxw > 0 && stepped > c->maxw) {
+            int cur = stepped - c->incw;
+            stepped = (cur >= c->minw) ? cur : c->minw;
+        }
+        cw = stepped;
+    }
+    if (c->inch > 1) {
+        int rh = ch - c->baseh;
+        if (rh < 0) rh = 0;
+        int stepped = c->baseh + ((rh + c->inch - 1) / c->inch) * c->inch;
+        if (c->maxh > 0 && stepped > c->maxh) {
+            int cur = stepped - c->inch;
+            stepped = (cur >= c->minh) ? cur : c->minh;
+        }
+        ch = stepped;
+    }
+
+    *w = cw + 2 * bw;
+    *h = ch + NEX_TITLEBAR_H + bw;
 }

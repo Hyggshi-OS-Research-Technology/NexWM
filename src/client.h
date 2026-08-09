@@ -12,6 +12,8 @@
 #define NEX_TITLEBAR_H 24
 /* Titlebar button size (px) - each button is a square of this size. */
 #define NEX_TITLEBAR_BTN 24
+/* Hit-test tolerance (px) for interactive edge/corner resize. */
+#define NEX_RESIZE_EDGE 8
 
 /* Titlebar button hit-test results */
 enum {
@@ -19,6 +21,19 @@ enum {
     NEX_BTN_MINIMIZE = 1,
     NEX_BTN_MAXIMIZE = 2,
     NEX_BTN_CLOSE = 3
+};
+
+/* Interactive resize directions (bitmask; any edge/corner combination). */
+enum {
+    NEX_RESIZE_NONE = 0,
+    NEX_RESIZE_N  = (1 << 0),
+    NEX_RESIZE_NE = (1 << 1),
+    NEX_RESIZE_E  = (1 << 2),
+    NEX_RESIZE_SE = (1 << 3),
+    NEX_RESIZE_S  = (1 << 4),
+    NEX_RESIZE_SW = (1 << 5),
+    NEX_RESIZE_W  = (1 << 6),
+    NEX_RESIZE_NW = (1 << 7)
 };
 
 typedef enum {
@@ -80,5 +95,15 @@ void nex_client_redraw_titlebar(nex_client_t *c);
 void nex_client_reframe(nex_client_t *c);
 int  nex_client_titlebar_hit(const nex_client_t *c, int fx, int fy, int *button);
 int  nex_client_titlebar_press(const nex_client_t *c, int fy);
+
+/* ── frame geometry helpers ──────────────────────────────────────────────── */
+nex_client_t *nex_client_find_frame(xcb_window_t frame);
+void nex_client_place_client(nex_client_t *c);
+void nex_client_set_geometry(nex_client_t *c, int x, int y, int w, int h);
+void nex_client_read_size_hints(nex_client_t *c);
+void nex_client_apply_size_hints(nex_client_t *c, int *w, int *h);
+void nex_client_sync_wm_state(nex_client_t *c);
+void nex_client_unmanage(nex_client_t *c);
+int  nex_client_frame_resize_hit(const nex_client_t *c, int fx, int fy, int *edge);
 
 #endif

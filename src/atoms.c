@@ -41,6 +41,9 @@ int nex_atoms_init(xcb_connection_t *conn, nex_atoms_t *atoms)
     atoms->net_wm_state_maximized_vert = intern_atom(conn, "_NET_WM_STATE_MAXIMIZED_VERT");
     atoms->net_wm_state_maximized_horz = intern_atom(conn, "_NET_WM_STATE_MAXIMIZED_HORZ");
     atoms->net_wm_window_type        = intern_atom(conn, "_NET_WM_WINDOW_TYPE");
+    atoms->net_wm_window_type_dock   = intern_atom(conn, "_NET_WM_WINDOW_TYPE_DOCK");
+    atoms->net_wm_strut              = intern_atom(conn, "_NET_WM_STRUT");
+    atoms->net_wm_strut_partial      = intern_atom(conn, "_NET_WM_STRUT_PARTIAL");
     atoms->net_wm_name               = intern_atom(conn, "_NET_WM_NAME");
     atoms->net_workarea              = intern_atom(conn, "_NET_WORKAREA");
     atoms->net_wm_pid                = intern_atom(conn, "_NET_WM_PID");
