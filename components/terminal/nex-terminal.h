@@ -42,8 +42,6 @@ public:
     // Mandatory startup smoke test for the scrolling frame.
     bool runScrollbackSmokeTest();
 
-    // Mandatory startup smoke test for the scrolling frame.
-
 protected:
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;

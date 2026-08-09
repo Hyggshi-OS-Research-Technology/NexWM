@@ -100,10 +100,10 @@ static bool saveConfig(const NexConfig &cfg) {
 }
 
 static void applyIPC(const NexConfig &cfg) {
-    QProcess::execute("nexwmctl", {"set-gap", QString::number(cfg.gaps)});
-    QProcess::execute("nexwmctl", {"set-layout", cfg.defaultLayout});
-    QProcess::execute("nexwmctl", {"workspace-count", QString::number(cfg.workspaceCount)});
-    QProcess::execute("nexwmctl", {"reload"});
+    QProcess::startDetached("nexwmctl", {"set-gap", QString::number(cfg.gaps)});
+    QProcess::startDetached("nexwmctl", {"set-layout", cfg.defaultLayout});
+    QProcess::startDetached("nexwmctl", {"workspace-count", QString::number(cfg.workspaceCount)});
+    QProcess::startDetached("nexwmctl", {"reload"});
 }
 
 class SettingsWindow : public QWidget {

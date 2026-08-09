@@ -409,7 +409,7 @@ void FileManagerWindow::actionNewFile()
     bool ok;
     QString name = QInputDialog::getText(this, "New File", "File Name:", QLineEdit::Normal, "new_file.txt", &ok);
     if (ok && !name.isEmpty()) {
-        QString fullPath = currDir + "/" + name;
+        QString fullPath = QDir(currDir).filePath(name);
         QFile file(fullPath);
         if (file.open(QIODevice::WriteOnly)) {
             file.close();
@@ -484,7 +484,7 @@ void FileManagerWindow::actionPaste()
     QString targetDir = m_pathEdit->text();
     for (const QString &src : m_clipboardPaths) {
         QFileInfo fi(src);
-        QString dest = targetDir + "/" + fi.fileName();
+        QString dest = QDir(targetDir).filePath(fi.fileName());
 
         if (m_clipboardIsCut) {
             QFile::rename(src, dest);

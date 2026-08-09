@@ -141,7 +141,7 @@ static void handle_unmap_notify(xcb_unmap_notify_event_t *ev)
         xcb_get_window_attributes_cookie_t cookie = xcb_get_window_attributes(g_conn, window);
         xcb_get_window_attributes_reply_t *reply = xcb_get_window_attributes_reply(g_conn, cookie, NULL);
         if (reply) {
-            if (reply->map_state == XCB_MAP_STATE_UNMAPPED && !ev->send_event) {
+            if (reply->map_state == XCB_MAP_STATE_UNMAPPED && !(ev->response_type & 0x80)) {
                 nex_workspace_remove_client(c->workspace, c);
                 nex_client_destroy(c);
                 nex_ewmh_set_client_list();
@@ -213,7 +213,17 @@ static void handle_client_message(xcb_client_message_event_t *ev)
         }
     } else if (type == g_atoms.wm_protocols) {
         if (ev->data.data32[0] == g_atoms.wm_take_focus) {
-            xcb_set_input_focus(g_conn, XCB_INPUT_FOCUS_POINTER_ROOT, window, XCB_CURRENT_TIME);
+            xcb_get_window_attributes_cookie_t ac =
+                xcb_get_window_attributes(g_conn, window);
+            xcb_get_window_attributes_reply_t *ar =
+                xcb_get_window_attributes_reply(g_conn, ac, NULL);
+            if (ar) {
+                if (ar->map_state == XCB_MAP_STATE_VIEWABLE) {
+                    xcb_set_input_focus(g_conn, XCB_INPUT_FOCUS_POINTER_ROOT,
+                                        window, XCB_CURRENT_TIME);
+                }
+                free(ar);
+            }
         }
     }
 }
@@ -276,7 +286,9 @@ static void handle_button_press(xcb_button_press_event_t *ev)
         if (frame_client && ev->detail == XCB_BUTTON_INDEX_1 &&
             !(c->flags & (NEX_CLIENT_FULLSCREEN | NEX_CLIENT_MAXIMIZED | NEX_CLIENT_FIXED))) {
             int edge = NEX_RESIZE_NONE;
-            if (nex_client_frame_resize_hit(c, ev->event_x, ev->event_y, &edge)) {
+            int fx = ev->event_x - c->x;
+            int fy = ev->event_y - c->y;
+            if (nex_client_frame_resize_hit(c, fx, fy, &edge)) {
                 begin_resize(c, ev, edge);
                 xcb_allow_events(g_conn, XCB_ALLOW_ASYNC_POINTER, ev->time);
                 xcb_flush(g_conn);
@@ -287,7 +299,9 @@ static void handle_button_press(xcb_button_press_event_t *ev)
         /* Server-side titlebar controls. */
         if (frame_client && ev->detail == XCB_BUTTON_INDEX_1) {
             int button = NEX_BTN_NONE;
-            if (nex_client_titlebar_hit(c, ev->event_x, ev->event_y, &button)) {
+            int fx = ev->event_x - c->x;
+            int fy = ev->event_y - c->y;
+            if (nex_client_titlebar_hit(c, fx, fy, &button)) {
                 if (button == NEX_BTN_MINIMIZE) {
                     nex_client_minimize(c);
                 } else if (button == NEX_BTN_MAXIMIZE) {

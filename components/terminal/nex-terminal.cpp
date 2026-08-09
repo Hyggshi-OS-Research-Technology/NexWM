@@ -78,7 +78,7 @@ TerminalWidget::TerminalWidget(QWidget *parent)
     setupScrollingFrame();
 
     m_pollTimer = new QTimer(this);
-    m_pollTimer->setInterval(8);
+    m_pollTimer->setInterval(16);
     connect(m_pollTimer, &QTimer::timeout, this, &TerminalWidget::pollPty);
 }
 
@@ -752,7 +752,7 @@ void TerminalWidget::dispatchCSI()
     if (m_csi.isEmpty())
         return;
 
-    const char final = m_csi.at(m_csi.size() - 1);
+    const char csiFinal = m_csi.at(m_csi.size() - 1);
     QByteArray body = m_csi.left(m_csi.size() - 1);
 
     bool privateMode = false;
@@ -788,7 +788,7 @@ void TerminalWidget::dispatchCSI()
         return (index >= 0 && index < params.size()) ? params[index] : fallback;
     };
 
-    switch (final) {
+    switch (csiFinal) {
     case 'A':
         moveCursor(0, -positiveParam(params, 0));
         break;
@@ -865,7 +865,7 @@ void TerminalWidget::dispatchCSI()
     case 'h':
     case 'l':
         if (privateMode) {
-            const bool set = (final == 'h');
+            const bool set = (csiFinal == 'h');
             for (const int mode : params) {
                 switch (mode) {
                 case 1:   m_appCursorKeys = set; break; // DECCKM

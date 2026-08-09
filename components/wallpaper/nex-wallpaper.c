@@ -95,6 +95,10 @@ static int set_solid_color(Display *dpy, unsigned int rgb)
     }
 
     GC gc = XCreateGC(dpy, root, 0, NULL);
+    if (!gc) {
+        fprintf(stderr, "nex-wallpaper: XCreateGC failed\n");
+        return -1;
+    }
     XSetForeground(dpy, gc, col.pixel);
     XFillRectangle(dpy, root, gc,
                    0, 0,
@@ -109,8 +113,16 @@ static int set_solid_color(Display *dpy, unsigned int rgb)
                                (unsigned int)DisplayWidth(dpy, scr),
                                (unsigned int)DisplayHeight(dpy, scr),
                                (unsigned int)DefaultDepth(dpy, scr));
+    if (!pix) {
+        fprintf(stderr, "nex-wallpaper: XCreatePixmap failed\n");
+        return -1;
+    }
 
     GC pix_gc = XCreateGC(dpy, pix, 0, NULL);
+    if (!pix_gc) {
+        fprintf(stderr, "nex-wallpaper: XCreateGC for pixmap failed\n");
+        return -1;
+    }
     XSetForeground(dpy, pix_gc, col.pixel);
     XFillRectangle(dpy, pix, pix_gc, 0, 0,
                    (unsigned int)DisplayWidth(dpy, scr),

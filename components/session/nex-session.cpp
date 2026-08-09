@@ -131,7 +131,7 @@ void SessionWindow::actionLock()
 
 void SessionWindow::actionLogout()
 {
-    QProcess::execute("nexwmctl", {"quit"});
+    QProcess::startDetached("nexwmctl", {"quit"});
     close();
 }
 

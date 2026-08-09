@@ -215,6 +215,7 @@ static void ipc_send(const char *cmd)
     const char *path = getenv("NEX_SOCKET");
     strncpy(addr.sun_path, path ? path : NEX_PANEL_SOCKET,
             sizeof(addr.sun_path) - 1);
+    addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0)
         send(fd, cmd, strlen(cmd), 0);
     close(fd);
@@ -433,6 +434,10 @@ static void update_state(xcb_connection_t *conn, xcb_window_t root,
 
 static void trunc_str(const char *src, char *dst, int max_chars)
 {
+    if (!src || !dst || max_chars <= 0) {
+        if (dst && max_chars > 0) dst[0] = '\0';
+        return;
+    }
     int len = (int)strlen(src);
     if (len < max_chars) {
         memcpy(dst, src, (size_t)len + 1);
@@ -786,7 +791,6 @@ void nex_panel_run(nex_panel_ctx_t *ctx)
             free(ev);
         }
 
-        need_redraw = 1;
         if (need_redraw) {
             uint32_t raise_vals[1] = { XCB_STACK_MODE_ABOVE };
             xcb_configure_window(ctx->conn, ctx->win,

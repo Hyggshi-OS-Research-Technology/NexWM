@@ -586,7 +586,20 @@ void nex_client_focus(nex_client_t *c)
         xcb_change_window_attributes(g_conn, c->frame, XCB_CW_BORDER_PIXEL, &bc);
     }
     nex_client_redraw_titlebar(c);
-    xcb_set_input_focus(g_conn, XCB_INPUT_FOCUS_POINTER_ROOT, c->window, XCB_CURRENT_TIME);
+
+    /* Only focus the window if it is actually viewable (mapped). */
+    xcb_get_window_attributes_cookie_t attr_cookie =
+        xcb_get_window_attributes(g_conn, c->window);
+    xcb_get_window_attributes_reply_t *attr =
+        xcb_get_window_attributes_reply(g_conn, attr_cookie, NULL);
+    if (attr) {
+        if (attr->map_state == XCB_MAP_STATE_VIEWABLE) {
+            xcb_set_input_focus(g_conn, XCB_INPUT_FOCUS_POINTER_ROOT,
+                                c->window, XCB_CURRENT_TIME);
+        }
+        free(attr);
+    }
+
     NEX_INFO("Focused client: window=0x%x", c->window);
 }
 

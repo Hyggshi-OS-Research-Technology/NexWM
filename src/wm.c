@@ -133,7 +133,7 @@ int nex_wm_init(void)
         NEX_FATAL("Failed to initialize atoms");
         return -1;
     }
-    if (nex_ewmh_init(g_conn, g_screen) < 0) {
+    if (nex_ewmh_init(g_screen) < 0) {
         NEX_FATAL("Failed to initialize EWMH");
         return -1;
     }

@@ -3,7 +3,7 @@
 
 CC      ?= gcc
 CFLAGS  ?= -Wall -Wextra -Wpedantic -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude
-LDFLAGS ?= -lxcb -lX11 $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-keysyms.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-util.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-randr.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-ewmh.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-icccm.so*)
+LDFLAGS ?= -lxcb -lX11 -lxcb-randr -lxcb-ewmh -lxcb-icccm $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-keysyms.so*) $(wildcard /usr/lib/x86_64-linux-gnu/libxcb-util.so*)
 
 # Panel & Desktop components XCB flags
 # Panel & Desktop link libpng for PNG icon loading (nex_icon.c)

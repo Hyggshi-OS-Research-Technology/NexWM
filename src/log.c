@@ -4,6 +4,7 @@
 
 #include "log.h"
 #include <stdlib.h>
+#include <string.h>
 
 nex_logger_t g_logger = {
     .level = NEX_LOG_INFO,
@@ -43,7 +44,7 @@ void nex_log(nex_log_level_t level, const char *file, int line, const char *fmt,
     if (tm_info) {
         strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
     } else {
-        snprintf(time_buf, sizeof(time_buf), "??-??-?? ??:??:??");
+        snprintf(time_buf, sizeof(time_buf), "%s", "-- -- -- --:--:--");
     }
 
     const char *basename = strrchr(file, '/');
