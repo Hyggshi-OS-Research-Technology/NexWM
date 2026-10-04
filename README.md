@@ -1,6 +1,6 @@
 # HDE – Hyggshi Desktop Environment (C + GTK3)
 
-Thành phần: `hde-session` (quản lý phiên, tự restart khi crash, autostart), `hde-panel` (menu ứng dụng theo nhóm, taskbar, workspace pager, đồng hồ, đăng xuất/tắt máy), `hde-desktop` (hình nền, icon từ ~/Desktop, chuột phải: terminal/đổi nền/làm mới).
+Thành phần: `hde-session` (quản lý phiên, tự restart khi crash, autostart), `hde-panel` (menu ứng dụng theo nhóm, taskbar, workspace pager, đồng hồ, đăng xuất/tắt máy), `hde-desktop` (hình nền, icon từ ~/Desktop, context menu kiểu desktop hiện đại với New Folder, Paste, Select All, Arrange By, Files/Terminal, Background, Desktop Icons Settings, Display Settings, Settings và About).
 
 ## Cài đặt
 Debian/Ubuntu: `sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev librsvg2-common openbox dbus-x11`

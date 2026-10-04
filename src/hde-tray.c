@@ -74,7 +74,7 @@ static void xembed_init(void)
     opcode_atom = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE", False);
 
     if (XGetSelectionOwner(dpy, sel) != None) {
-        g_printerr("hde-panel: đã có system tray khác, bỏ qua XEmbed\n");
+        g_printerr("hde-panel: another system tray is already running; skipping XEmbed\n");
         return;
     }
     XSetSelectionOwner(dpy, sel, xid, CurrentTime);
@@ -576,7 +576,7 @@ static void on_remote_unregistered(GDBusConnection *c, const gchar *sender, cons
     const char *svc = NULL;
     g_variant_get(params, "(&s)", &svc);
     if (!svc) return;
-    /* chuẩn hoá giống register_item: "bus/path" hoặc chỉ "bus" */
+    /* chuẩn hoá giống register_item: "bus/path" or only "bus" */
     char *key = strchr(svc, '/') ? g_strdup(svc) : g_strdup_printf("%s/StatusNotifierItem", svc);
     Item *it = g_hash_table_lookup(items, key);
     if (it) item_remove(it);
@@ -640,7 +640,7 @@ static void on_watcher_vanished(GDBusConnection *c, const gchar *name, gpointer 
 static void start_client(void)
 {
     if (client_watch_id) return;
-    g_printerr("hde-panel: đã có StatusNotifierWatcher khác, chuyển sang chế độ client\n");
+    g_printerr("hde-panel: another StatusNotifierWatcher is already running; switching to client mode\n");
     char *host = g_strdup_printf("org.kde.StatusNotifierHost-%d", (int)getpid());
     host_own_id = g_bus_own_name_on_connection(bus, host, G_BUS_NAME_OWNER_FLAGS_NONE,
                                                on_host_acquired, NULL, NULL, NULL);
@@ -669,7 +669,7 @@ static void on_name_lost(GDBusConnection *c, const gchar *name, gpointer d)
 static void sni_init(void)
 {
     bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
-    if (!bus) { g_printerr("hde-panel: không có D-Bus session, bỏ qua StatusNotifier\n"); return; }
+    if (!bus) { g_printerr("hde-panel: no D-Bus session; skipping StatusNotifier\n"); return; }
 
     watcher_info = g_dbus_node_info_new_for_xml(watcher_xml, NULL);
     static const GDBusInterfaceVTable vt = { watcher_method, watcher_get, NULL, { 0 } };

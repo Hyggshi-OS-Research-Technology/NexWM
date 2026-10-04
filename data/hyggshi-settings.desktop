@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Hyggshi Settings
+Comment=Configure Hyggshi Desktop
+Exec=@PREFIX@/bin/hde-settings
+Icon=preferences-system
+Terminal=false
+Type=Application
+Categories=Settings;DesktopSettings;
+StartupNotify=true

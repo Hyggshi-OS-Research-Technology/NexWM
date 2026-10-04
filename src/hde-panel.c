@@ -1,4 +1,4 @@
-/* hde-panel: thanh panel dưới màn hình — menu ứng dụng, taskbar, workspace, đồng hồ */
+/* hde-panel: bottom panel — application menu, taskbar, workspace, and clock */
 #define WNCK_I_KNOW_THIS_IS_UNSTABLE 1
 #include <gtk/gtk.h>
 #include <gio/gdesktopappinfo.h>
@@ -20,26 +20,30 @@ typedef struct {
 
 static const Category categories[] = {
     { "Internet",          "applications-internet",    { "Network", "WebBrowser", "Email", NULL } },
-    { "Văn phòng",         "applications-office",      { "Office", NULL } },
-    { "Đồ họa",            "applications-graphics",    { "Graphics", NULL } },
-    { "Âm thanh & Video",  "applications-multimedia",  { "AudioVideo", "Audio", "Video", NULL } },
-    { "Lập trình",         "applications-development",{ "Development", NULL } },
-    { "Trò chơi",          "applications-games",       { "Game", NULL } },
-    { "Tiện ích",          "applications-utilities",   { "Utility", NULL } },
-    { "Hệ thống",          "applications-system",      { "System", "Settings", NULL } },
+    { "Office",         "applications-office",      { "Office", NULL } },
+    { "Graphics",            "applications-graphics",    { "Graphics", NULL } },
+    { "Audio & Video",  "applications-multimedia",  { "AudioVideo", "Audio", "Video", NULL } },
+    { "Programming",         "applications-development",{ "Development", NULL } },
+    { "Games",          "applications-games",       { "Game", NULL } },
+    { "Utilities",          "applications-utilities",   { "Utility", NULL } },
+    { "System",          "applications-system",      { "System", "Settings", NULL } },
 };
 #define N_CATS G_N_ELEMENTS(categories)
 
 static GtkWidget *clock_label;
+static GtkWidget *date_label;
 static GtkWidget *app_menu;
 
 /* ---------- đồng hồ ---------- */
 static gboolean update_clock(gpointer data)
 {
     GDateTime *now = g_date_time_new_now_local();
-    char *s = g_date_time_format(now, "%H:%M   %d/%m/%Y");
-    gtk_label_set_text(GTK_LABEL(clock_label), s);
-    g_free(s);
+    char *time_s = g_date_time_format(now, "%H:%M");
+    char *date_s = g_date_time_format(now, "%a  %d/%m/%Y");
+    gtk_label_set_text(GTK_LABEL(clock_label), time_s);
+    gtk_label_set_text(GTK_LABEL(date_label), date_s);
+    g_free(time_s);
+    g_free(date_s);
     g_date_time_unref(now);
     return G_SOURCE_CONTINUE;
 }
@@ -146,7 +150,7 @@ static GtkWidget *build_menu(void)
     for (GList *l = apps; l; l = l->next)
         if (!g_hash_table_contains(placed, l->data)) { add_app(other, l->data); n_other++; }
     if (n_other) {
-        GtkWidget *it = make_item("Khác", NULL, "applications-other");
+        GtkWidget *it = make_item("Other", NULL, "applications-other");
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), other);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
     } else gtk_widget_destroy(other);
@@ -154,9 +158,9 @@ static GtkWidget *build_menu(void)
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
     struct { const char *label, *icon, *cmd; } sys[] = {
-        { "Đăng xuất", "system-log-out",  NULL },
-        { "Khởi động lại", "system-reboot", "systemctl reboot" },
-        { "Tắt máy", "system-shutdown",   "systemctl poweroff" },
+        { "Log Out", "system-log-out",  NULL },
+        { "Restart", "system-reboot", "systemctl reboot" },
+        { "Shut Down", "system-shutdown",   "systemctl poweroff" },
     };
     for (int i = 0; i < 3; i++) {
         GtkWidget *it = make_item(sys[i].label, NULL, sys[i].icon);
@@ -179,6 +183,50 @@ static void on_menu_clicked(GtkButton *btn, gpointer data)
     g_object_ref_sink(app_menu);
     gtk_menu_popup_at_widget(GTK_MENU(app_menu), GTK_WIDGET(btn),
                              GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_SOUTH_WEST, NULL);
+}
+
+static void on_run_command(GtkButton *btn, gpointer data)
+{
+    (void)btn;
+    (void)data;
+
+    GtkWidget *dialog = gtk_dialog_new_with_buttons(
+        "Run Command", NULL, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Cancel", GTK_RESPONSE_CANCEL,
+        "Run", GTK_RESPONSE_ACCEPT,
+        NULL);
+
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 440, 120);
+    GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 12);
+    gtk_container_add(GTK_CONTAINER(content), box);
+
+    GtkWidget *label = gtk_label_new("Enter a command to run:");
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+    gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
+
+    GtkWidget *entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "e.g. xterm, thunar, hde-settings");
+    gtk_box_pack_start(GTK_BOX(box), entry, FALSE, FALSE, 0);
+    gtk_widget_show_all(dialog);
+    gtk_widget_grab_focus(entry);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        const char *cmd = gtk_entry_get_text(GTK_ENTRY(entry));
+        if (cmd && *cmd) {
+            GError *err = NULL;
+            if (!g_spawn_command_line_async(cmd, &err) && err) {
+                GtkWidget *m = gtk_message_dialog_new(GTK_WINDOW(dialog),
+                    GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE,
+                    "Could not run command: %s", err->message);
+                gtk_dialog_run(GTK_DIALOG(m));
+                gtk_widget_destroy(m);
+                g_clear_error(&err);
+            }
+        }
+    }
+    gtk_widget_destroy(dialog);
 }
 
 static void on_show_desktop(GtkButton *btn, gpointer data)
@@ -213,6 +261,11 @@ static void load_css(void)
         ".hde-panel button:checked { background: #3d6fd9; color: white; }"
         ".hde-panel .menu-btn { font-weight: bold; background: #3d6fd9; }"
         ".hde-panel .menu-btn:hover { background: #5585ea; }"
+        ".hde-panel .run-btn { background: #303744; }"
+        ".hde-panel .run-btn:hover { background: #414b5d; }"
+        ".hde-panel .clock-box { padding: 0 8px; min-width: 116px; }"
+        ".hde-panel .clock-time { font-weight: 700; font-size: 12px; }"
+        ".hde-panel .clock-date { font-size: 8px; color: #aeb7c6; }"
         ".hde-panel label { color: #e6e9ef; }";
     GtkCssProvider *p = gtk_css_provider_new();
     gtk_css_provider_load_from_data(p, css, -1, NULL);
@@ -258,9 +311,16 @@ int main(int argc, char **argv)
 
     /* nút hiện desktop */
     GtkWidget *desk_btn = gtk_button_new_from_icon_name("user-desktop-symbolic", GTK_ICON_SIZE_BUTTON);
-    gtk_widget_set_tooltip_text(desk_btn, "Hiện màn hình nền");
+    gtk_widget_set_tooltip_text(desk_btn, "Show Desktop");
     g_signal_connect(desk_btn, "clicked", G_CALLBACK(on_show_desktop), NULL);
     gtk_box_pack_start(GTK_BOX(box), desk_btn, FALSE, FALSE, 0);
+
+    /* nút mở lệnh */
+    GtkWidget *run_btn = gtk_button_new_with_label("⌘ Run");
+    gtk_style_context_add_class(gtk_widget_get_style_context(run_btn), "run-btn");
+    gtk_widget_set_tooltip_text(run_btn, "Run a command");
+    g_signal_connect(run_btn, "clicked", G_CALLBACK(on_run_command), NULL);
+    gtk_box_pack_start(GTK_BOX(box), run_btn, FALSE, FALSE, 0);
 
     /* taskbar */
     GtkWidget *tasks = wnck_tasklist_new();
@@ -275,11 +335,23 @@ int main(int argc, char **argv)
     wnck_pager_set_n_rows(WNCK_PAGER(pager), 1);
     gtk_box_pack_start(GTK_BOX(box), pager, FALSE, FALSE, 4);
 
-    /* đồng hồ */
+    /* đồng hồ: giờ lớn + ngày nhỏ, luôn cập nhật mỗi giây */
+    GtkWidget *clock_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_style_context_add_class(gtk_widget_get_style_context(clock_box), "clock-box");
+    gtk_widget_set_valign(clock_box, GTK_ALIGN_CENTER);
+
     clock_label = gtk_label_new("");
-    gtk_box_pack_end(GTK_BOX(box), clock_label, FALSE, FALSE, 10);
+    gtk_style_context_add_class(gtk_widget_get_style_context(clock_label), "clock-time");
+    gtk_label_set_xalign(GTK_LABEL(clock_label), 0.5f);
+    gtk_box_pack_start(GTK_BOX(clock_box), clock_label, FALSE, FALSE, 0);
+
+    date_label = gtk_label_new("");
+    gtk_style_context_add_class(gtk_widget_get_style_context(date_label), "clock-date");
+    gtk_label_set_xalign(GTK_LABEL(date_label), 0.5f);
+    gtk_box_pack_start(GTK_BOX(clock_box), date_label, FALSE, FALSE, 0);
 
     /* system tray (nằm bên trái đồng hồ) */
+    gtk_box_pack_end(GTK_BOX(box), clock_box, FALSE, FALSE, 4);
     gtk_box_pack_end(GTK_BOX(box), hde_tray_new(), FALSE, FALSE, 4);
     update_clock(NULL);
     g_timeout_add_seconds(1, update_clock, NULL);

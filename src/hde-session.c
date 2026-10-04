@@ -61,10 +61,10 @@ static void on_exit_cb(GObject *src, GAsyncResult *res, gpointer data)
     else c->fails = 0;
 
     if (c->fails >= 5) {
-        g_printerr("hde-session: %s liên tục lỗi, ngừng khởi động lại\n", c->name);
+        g_printerr("hde-session: %s failed repeatedly; stopping restart attempts\n", c->name);
         return;
     }
-    g_printerr("hde-session: %s thoát, khởi động lại...\n", c->name);
+    g_printerr("hde-session: %s exited; restarting...\n", c->name);
     g_timeout_add_seconds(1, restart_cb, c);
 }
 
@@ -78,15 +78,15 @@ static void start_comp(Comp *c)
         c->proc = g_subprocess_new(G_SUBPROCESS_FLAGS_INHERIT_FDS, &err, path, NULL);
         g_free(path);
         if (!c->proc) {
-            g_printerr("hde-session: không chạy được %s: %s\n", *n, err->message);
+            g_printerr("hde-session: failed to start %s: %s\n", *n, err->message);
             g_clear_error(&err);
             continue;
         }
-        g_printerr("hde-session: đã chạy %s (%s)\n", c->name, *n);
+        g_printerr("hde-session: started %s (%s)\n", c->name, *n);
         g_subprocess_wait_async(c->proc, NULL, on_exit_cb, c);
         return;
     }
-    g_printerr("hde-session: CẢNH BÁO: không tìm thấy %s\n", c->name);
+    g_printerr("hde-session: WARNING: %s not found\n", c->name);
 }
 
 static gboolean run_autostart(gpointer data)
@@ -130,7 +130,7 @@ static gboolean on_signal(gpointer data)
 {
     if (quitting) return G_SOURCE_CONTINUE;
     quitting = TRUE;
-    g_printerr("hde-session: đang đăng xuất...\n");
+    g_printerr("hde-session: logging out...\n");
     for (guint i = N_COMPS; i-- > 0;)
         if (comps[i].proc) g_subprocess_send_signal(comps[i].proc, SIGTERM);
     g_timeout_add(800, finish_cb, NULL);
