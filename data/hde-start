@@ -1,0 +1,6 @@
+#!/bin/sh
+# Khởi động phiên HDE, tự tạo D-Bus session nếu chưa có
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- hde-session
+fi
+exec hde-session

@@ -1,3 +1,4 @@
+```sh
 #!/bin/sh
 
 # test-nexde — Launch NexDE inside a Xephyr window
@@ -6,8 +7,24 @@
 #   ./scripts/test-nexde
 #   ./scripts/test-nexde 1920x1080
 #   ./scripts/test-nexde 1280x720 :2
+#
+# Requirements:
+#   - Xephyr
+#   - xdpyinfo
+#   - NexDE binaries built in bin/
+#
+# Components:
+#   nexwm
+#   nex-wallpaper
+#   nex-desktop
+#   nex-panel
+#   nex-notify
 
 set -eu
+
+# ─────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────
 
 SCREEN="${1:-1280x720}"
 DISPLAY_NUM="${2:-:1}"
@@ -16,56 +33,161 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 BINDIR="$ROOT_DIR/bin"
 
-# ── Sanity checks ─────────────────────────────────────────────
+XEphyr_PID=""
+CHILD_PIDS=""
+CLEANED_UP=0
+
+# ─────────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────────
+
+info()
+{
+    printf '%s\n' "[NexDE] $*"
+}
+
+error()
+{
+    printf '%s\n' "[NexDE] Error: $*" >&2
+}
+
+# ─────────────────────────────────────────────────────────────
+# Cleanup
+# ─────────────────────────────────────────────────────────────
+
+cleanup()
+{
+    # Prevent cleanup from running twice.
+    if [ "$CLEANED_UP" -eq 1 ]; then
+        return
+    fi
+
+    CLEANED_UP=1
+
+    echo ""
+    info "Stopping NexDE..."
+
+    # Stop NexDE components.
+    if [ -n "$CHILD_PIDS" ]; then
+        for pid in $CHILD_PIDS; do
+            if kill -0 "$pid" 2>/dev/null; then
+                kill "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # Give applications a moment to terminate normally.
+    sleep 0.2
+
+    # Force remaining components if necessary.
+    if [ -n "$CHILD_PIDS" ]; then
+        for pid in $CHILD_PIDS; do
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # Stop Xephyr.
+    if [ -n "$XEphyr_PID" ]; then
+        if kill -0 "$XEphyr_PID" 2>/dev/null; then
+            kill "$XEphyr_PID" 2>/dev/null || true
+        fi
+
+        sleep 0.2
+
+        if kill -0 "$XEphyr_PID" 2>/dev/null; then
+            kill -KILL "$XEphyr_PID" 2>/dev/null || true
+        fi
+    fi
+
+    # Reap child processes.
+    if [ -n "$CHILD_PIDS" ]; then
+        for pid in $CHILD_PIDS; do
+            wait "$pid" 2>/dev/null || true
+        done
+    fi
+
+    if [ -n "$XEphyr_PID" ]; then
+        wait "$XEphyr_PID" 2>/dev/null || true
+    fi
+
+    info "NexDE test session stopped."
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# ─────────────────────────────────────────────────────────────
+# Sanity checks
+# ─────────────────────────────────────────────────────────────
 
 if ! command -v Xephyr >/dev/null 2>&1; then
-    echo "Error: Xephyr not found."
+    error "Xephyr not found."
+    echo ""
     echo "Install with:"
     echo "  sudo apt install xserver-xephyr"
     exit 1
 fi
 
-if [ ! -x "$BINDIR/nexwm" ]; then
-    echo "Error: bin/nexwm not found."
+if ! command -v xdpyinfo >/dev/null 2>&1; then
+    error "xdpyinfo not found."
+    echo ""
+    echo "Install with:"
+    echo "  sudo apt install x11-utils"
+    exit 1
+fi
+
+if [ ! -d "$BINDIR" ]; then
+    error "bin directory not found:"
+    echo "  $BINDIR"
+    echo ""
     echo "Run 'make' first."
     exit 1
 fi
 
-for component in \
-    nex-wallpaper \
-    nex-desktop \
-    nex-panel \
-    nex-notify
-do
+# ─────────────────────────────────────────────────────────────
+# Verify binaries
+# ─────────────────────────────────────────────────────────────
+
+REQUIRED_COMPONENTS="
+nexwm
+nex-wallpaper
+nex-desktop
+nex-panel
+nex-notify
+"
+
+for component in $REQUIRED_COMPONENTS; do
     if [ ! -x "$BINDIR/$component" ]; then
-        echo "Error: bin/$component not found."
+        error "bin/$component not found or not executable."
+        echo ""
+        echo "Run 'make' first."
         exit 1
     fi
 done
 
-# ── Cleanup ───────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Check whether display is already in use
+# ─────────────────────────────────────────────────────────────
 
-XEphyr_PID=""
-
-cleanup() {
+if xdpyinfo -display "$DISPLAY_NUM" >/dev/null 2>&1; then
+    error "Display $DISPLAY_NUM is already running."
     echo ""
-    echo "Stopping NexDE..."
+    echo "Try another display:"
+    echo "  ./scripts/test-nexde 1280x720 :2"
+    exit 1
+fi
 
-    if [ -n "$XEphyr_PID" ]; then
-        kill "$XEphyr_PID" 2>/dev/null || true
-    fi
+# ─────────────────────────────────────────────────────────────
+# Start Xephyr
+# ─────────────────────────────────────────────────────────────
 
-    # Kill components started by this script
-    pkill -P $$ 2>/dev/null || true
-}
+info "Starting Xephyr on $DISPLAY_NUM at $SCREEN..."
 
-trap cleanup EXIT INT TERM
-
-# ── Start Xephyr ──────────────────────────────────────────────
-
-echo "Starting Xephyr on $DISPLAY_NUM at $SCREEN..."
-
-Xephyr "$DISPLAY_NUM" \
+Xephyr \
+    "$DISPLAY_NUM" \
     -ac \
     -br \
     -noreset \
@@ -73,52 +195,172 @@ Xephyr "$DISPLAY_NUM" \
 
 XEphyr_PID=$!
 
-# Give X server time to start
-sleep 1
+info "Xephyr PID: $XEphyr_PID"
 
-# Verify display
-if ! xdpyinfo -display "$DISPLAY_NUM" >/dev/null 2>&1; then
-    echo "Error: Xephyr failed to start on $DISPLAY_NUM."
+# ─────────────────────────────────────────────────────────────
+# Wait for X server
+# ─────────────────────────────────────────────────────────────
+
+info "Waiting for X server..."
+
+X_READY=0
+
+i=0
+
+while [ "$i" -lt 50 ]; do
+    if ! kill -0 "$XEphyr_PID" 2>/dev/null; then
+        error "Xephyr terminated unexpectedly."
+        exit 1
+    fi
+
+    if xdpyinfo -display "$DISPLAY_NUM" >/dev/null 2>&1; then
+        X_READY=1
+        break
+    fi
+
+    sleep 0.1
+    i=$((i + 1))
+done
+
+if [ "$X_READY" -ne 1 ]; then
+    error "Xephyr failed to start on $DISPLAY_NUM."
     exit 1
 fi
 
-# ── Environment ───────────────────────────────────────────────
+info "X server is ready."
+
+# ─────────────────────────────────────────────────────────────
+# Environment
+# ─────────────────────────────────────────────────────────────
 
 export DISPLAY="$DISPLAY_NUM"
 export PATH="$BINDIR:$PATH"
+export NEXDE_BINDIR="$BINDIR"
 
-echo "X11 display: $DISPLAY"
-echo "NexDE binaries: $BINDIR"
+# Optional XDG environment for the test session.
+export XDG_CURRENT_DESKTOP="NexDE"
+export XDG_SESSION_DESKTOP="NexDE"
 
-# ── Start desktop components ──────────────────────────────────
+info "X11 display      : $DISPLAY"
+info "Screen           : $SCREEN"
+info "NexDE binaries   : $BINDIR"
+info "Desktop          : $XDG_CURRENT_DESKTOP"
 
-echo "Starting wallpaper..."
+# ─────────────────────────────────────────────────────────────
+# Start wallpaper
+# ─────────────────────────────────────────────────────────────
+
+info "Starting wallpaper..."
+
 "$BINDIR/nex-wallpaper" \
     --color 0x1a1a2e &
 
-echo "Starting desktop..."
+CHILD_PIDS="$CHILD_PIDS $!"
+
+sleep 0.1
+
+# ─────────────────────────────────────────────────────────────
+# Start desktop
+# ─────────────────────────────────────────────────────────────
+
+info "Starting desktop..."
+
 "$BINDIR/nex-desktop" &
 
-echo "Starting panel..."
+CHILD_PIDS="$CHILD_PIDS $!"
+
+sleep 0.1
+
+# ─────────────────────────────────────────────────────────────
+# Start panel
+# ─────────────────────────────────────────────────────────────
+
+info "Starting panel..."
+
 "$BINDIR/nex-panel" &
 
-echo "Starting notification daemon..."
-"$BINDIR/nex-notify" &
+CHILD_PIDS="$CHILD_PIDS $!"
+
+sleep 0.1
+
+# ─────────────────────────────────────────────────────────────
+# Start notification
+# ─────────────────────────────────────────────────────────────
+
+info "Starting welcome notification..."
+
+"$BINDIR/nex-notify" \
+    "NexDE" \
+    "Test session ready" \
+    2500 &
+
+CHILD_PIDS="$CHILD_PIDS $!"
 
 sleep 0.5
 
-# ── Start NexWM ───────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Test session information
+# ─────────────────────────────────────────────────────────────
 
 echo ""
-echo "╔══════════════════════════════════════════════╗"
-echo "║              NexDE TEST SESSION             ║"
-echo "╠══════════════════════════════════════════════╣"
-echo "║ Display : $DISPLAY"
-echo "║ Screen  : $SCREEN"
-echo "║ WM      : NexWM"
-echo "╠══════════════════════════════════════════════╣"
-echo "║ Close this terminal / press Ctrl+C to quit. ║"
-echo "╚══════════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║                  NexDE TEST SESSION                     ║"
+echo "╠══════════════════════════════════════════════════════════╣"
+printf "║ Display : %-44s ║\n" "$DISPLAY"
+printf "║ Screen  : %-44s ║\n" "$SCREEN"
+printf "║ WM      : %-44s ║\n" "NexWM"
+echo "╠══════════════════════════════════════════════════════════╣"
+echo "║ Components                                             ║"
+echo "║   • nex-wallpaper                                      ║"
+echo "║   • nex-desktop                                        ║"
+echo "║   • nex-panel                                          ║"
+echo "║   • nex-notify                                         ║"
+echo "║   • nexwm                                              ║"
+echo "╠══════════════════════════════════════════════════════════╣"
+echo "║ Close NexWM or press Ctrl+C to quit.                  ║"
+echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
-exec "$BINDIR/nexwm"
+# ─────────────────────────────────────────────────────────────
+# Start NexWM
+# ─────────────────────────────────────────────────────────────
+
+info "Starting NexWM..."
+
+"$BINDIR/nexwm" &
+
+NEXWM_PID=$!
+CHILD_PIDS="$CHILD_PIDS $NEXWM_PID"
+
+# ─────────────────────────────────────────────────────────────
+# Wait for NexWM
+# ─────────────────────────────────────────────────────────────
+
+wait "$NEXWM_PID" 2>/dev/null || true
+
+info "NexWM exited."
+
+# Cleanup is automatically executed by EXIT trap.
+exit 0
+```
+
+### Chạy
+
+```bash
+chmod +x scripts/test-nexde
+./scripts/test-nexde
+```
+
+Hoặc:
+
+```bash
+./scripts/test-nexde 1920x1080
+```
+
+Display khác:
+
+```bash
+./scripts/test-nexde 1280x720 :2
+```
+
+Bản này đặc biệt tránh `pkill -P $$`, nên **không đụng nhầm các tiến trình NexDE đang chạy bên ngoài test session**. Khi `nexwm` thoát hoặc bạn `Ctrl+C`, script sẽ dừng các component mà chính nó đã khởi chạy rồi đóng Xephyr.

@@ -17,6 +17,8 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
+          build-essential \
+          pkg-config \
           libx11-dev \
           libxcb1-dev \
           libxcb-util-dev \
@@ -24,25 +26,22 @@ jobs:
           libxcb-ewmh-dev \
           libxcb-icccm4-dev \
           libxcb-keysyms1-dev \
-          qt6-base-dev \
-          pkg-config \
-          xserver-xephyr \
+          libpng-dev \
           xterm
 
     - name: Build NexWM + nexwmctl
       run: make wm ctl
 
-    - name: Build Phase 1 components (panel, launcher, wallpaper)
+    - name: Build desktop components
       run: make phase1
 
-    - name: Build NexWM (debug)
-      run: make debug
+    - name: Build all
+      run: make
 
     - name: Check compiler warnings (Werror)
       run: |
         make clean
-        make CFLAGS="-Wall -Wextra -Wpedantic -Werror -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE" 2>&1 | tee build.log
-        if grep -i "error:" build.log; then exit 1; fi
+        make CFLAGS="-Wall -Wextra -Wpedantic -Werror -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude"
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -54,6 +53,10 @@ jobs:
           bin/nex-panel
           bin/nex-launcher
           bin/nex-wallpaper
+          bin/nex-desktop
+          bin/nex-notify
+          bin/nex-settings
+          bin/nex-session
 
   test-xephyr:
     runs-on: ubuntu-latest
@@ -66,6 +69,8 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
+          build-essential \
+          pkg-config \
           libx11-dev \
           libxcb1-dev \
           libxcb-util-dev \
@@ -73,9 +78,7 @@ jobs:
           libxcb-ewmh-dev \
           libxcb-icccm4-dev \
           libxcb-keysyms1-dev \
-          qt6-base-dev \
-          pkg-config \
-          xserver-xephyr \
+          libpng-dev \
           xterm \
           xvfb
 
@@ -97,10 +100,8 @@ jobs:
 
     - name: Test nexwmctl (IPC smoke test)
       run: |
-        export DISPLAY=:99
-        # nexwm should not be running; expect connect error (not crash)
-        ./bin/nexwmctl reload 2>&1 | grep -q "cannot connect" || true
         ./bin/nexwmctl --help 2>&1 || true
+        ./bin/nexwmctl reload 2>&1 | grep -q "cannot connect" || true
 
     - name: Test nex-launcher --list
       run: |
@@ -108,4 +109,4 @@ jobs:
 
     - name: Test nex-wallpaper --color (no display, expect graceful failure)
       run: |
-        ./bin/nex-wallpaper --color 0x1a1a2e 2>&1 | grep -q "cannot open display" || true
+        env -u DISPLAY ./bin/nex-wallpaper --color 0x1a1a2e 2>&1 | grep -q "cannot open display" || true

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=HDE
+Comment=Lightweight GTK desktop environment
+Exec=@PREFIX@/bin/hde-start
+TryExec=@PREFIX@/bin/hde-session
+Type=Application
+DesktopNames=HDE
