@@ -2,14 +2,14 @@
 #define HDE_SEARCH_H
 #include <gtk/gtk.h>
 
-/* Ô tìm ứng dụng (mở từ Start menu: gõ phím bất kỳ, mục "Search", hoặc `hde-panel --search`).
- * Tìm theo tên / tên chung / từ khoá / lệnh (g_desktop_app_info_search), Enter để mở,
- * gõ một lệnh có trong PATH để chạy trực tiếp. time = timestamp X (0 = lấy từ server). */
+/* App search box (opened from the Start menu: typing any key, the "Search" item, or `hde-panel --search`).
+ * Matches name / generic name / keywords / command (g_desktop_app_info_search), Enter opens,
+ * typing a command found in PATH runs it directly. time = X timestamp (0 = ask the server). */
 void hde_search_show(const char *initial_text, guint32 time);
 gboolean hde_search_visible(void);
 void hde_search_hide(void);
 
-/* Kích hoạt (focus) cửa sổ theo kiểu pager (_NET_ACTIVE_WINDOW source=2) — WM luôn chấp nhận. */
+/* Activate (focus) a window the way a pager does (_NET_ACTIVE_WINDOW source=2) — the WM always accepts it. */
 void hde_window_force_activate(GtkWidget *window, guint32 time);
 
 #endif

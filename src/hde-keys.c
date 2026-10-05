@@ -1,9 +1,9 @@
-/* hde-keys: phím tắt toàn cục cho panel — PrtSc / SysRq dùng công cụ chụp màn hình có sẵn.
- *   Print        -> chụp toàn màn hình
- *   Alt+Print    -> chụp cửa sổ đang focus   (Alt+PrtSc = SysRq trên bàn phím vật lý)
- *   Shift+Print  -> chụp vùng chọn
- * Công cụ được thử lần lượt: xfce4-screenshooter, gnome-screenshot, spectacle,
- * flameshot, maim, scrot. Ảnh (maim/scrot) lưu vào ~/Pictures/Screenshot_*.png.
+/* hde-keys: global shortcuts for the panel — PrtSc / SysRq use an installed screenshot tool.
+ *   Print        -> screenshot of the whole screen
+ *   Alt+Print    -> screenshot of the focused window   (Alt+PrtSc = SysRq on physical keyboards)
+ *   Shift+Print  -> screenshot of a selected area
+ * Tools are tried in this order: xfce4-screenshooter, gnome-screenshot, spectacle,
+ * flameshot, maim, scrot. Images (maim/scrot) are saved to ~/Pictures/Screenshot_*.png.
  */
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
@@ -14,7 +14,7 @@
 
 typedef struct {
     const char *bin;
-    const char *full, *win, *area;   /* %f = đường dẫn file (đã quote), %d = thư mục ảnh */
+    const char *full, *win, *area;   /* %f = file path (already quoted), %d = pictures folder */
 } ShotTool;
 
 static const ShotTool tools[] = {
@@ -109,7 +109,7 @@ void hde_keys_init(void)
     print_key = XKeysymToKeycode(dpy, XK_Print);
     if (!print_key) { g_printerr("hde-panel: no Print key on this keyboard\n"); return; }
 
-    /* Grab cho mọi tổ hợp NumLock (Mod2) / CapsLock (Lock) để phím vẫn chạy khi đang bật chúng. */
+    /* Grab every NumLock (Mod2) / CapsLock (Lock) combination so the keys still work while those are on. */
     const unsigned locks[] = { 0, LockMask, Mod2Mask, LockMask | Mod2Mask };
     const unsigned mods[]  = { 0, Mod1Mask, ShiftMask };
     gboolean failed = FALSE;

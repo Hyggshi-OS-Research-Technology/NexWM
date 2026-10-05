@@ -1,8 +1,8 @@
-/* hde-panel: panel dưới cùng — Start menu, taskbar, workspace, trạng thái, thông báo và đồng hồ.
+/* hde-panel: the bottom panel — Start menu, taskbar, workspaces, status, notifications and clock.
  *
- * Điều khiển từ tiến trình khác (xem hde-ipc.h):
+ * Controlled from other processes (see hde-ipc.h):
  *   hde-panel --menu | --search | --run | --power | --osd-volume | --refresh
- * hde-hotkeys dùng kênh này cho phím Super (mở/đóng Start menu) và OSD âm lượng/độ sáng.
+ * hde-hotkeys uses this channel for the Super key (open/close the Start menu) and the volume/brightness OSD.
  */
 #define WNCK_I_KNOW_THIS_IS_UNSTABLE 1
 #include <gtk/gtk.h>
@@ -32,7 +32,7 @@ typedef struct {
 } Category;
 
 static const Category categories[] = {
-    /* icon: các tên thay thế cách nhau bởi '|' (theme Adwaita mới đã bỏ nhiều tên applications-*) */
+    /* icon: alternative names separated by '|' (newer Adwaita themes dropped many applications-* names) */
     { "Internet",       "applications-internet|web-browser|emblem-web|network-workgroup|web-browser-symbolic",
                         { "Network", "WebBrowser", "Email", NULL } },
     { "Office",         "applications-office|x-office-document|x-office-document-symbolic", { "Office", NULL } },
@@ -55,14 +55,14 @@ static GtkWidget *menu_btn;
 static GtkWidget *app_menu;
 static GtkCssProvider *panel_css;
 static Atom cmd_atom;
-static gboolean debug_on;          /* HDE_DEBUG=1: ghi log chẩn đoán ra stderr (~/.cache/hde/session.log) */
+static gboolean debug_on;          /* HDE_DEBUG=1: write diagnostic logs to stderr (~/.cache/hde/session.log) */
 #define DBG(...) do { if (debug_on) { g_printerr("hde-panel: " __VA_ARGS__); g_printerr("\n"); } } while (0)
 
 static void run_cmd(GtkMenuItem *item, gpointer cmd);
 static void show_power_dialog(GtkMenuItem *item, gpointer data);
 static void on_run_command(GtkButton *btn, gpointer data);
 
-/* ---------- đồng hồ + lịch ---------- */
+/* ---------- clock + calendar ---------- */
 static GtkWidget *cal_win, *cal_title, *cal;
 
 static gboolean update_clock(gpointer data)
@@ -230,7 +230,7 @@ static void add_app(GtkWidget *menu, GAppInfo *app)
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
 }
 
-/* Gõ chữ khi đang mở menu -> chuyển sang ô tìm ứng dụng (giống Start menu của Windows). */
+/* Typing while the menu is open -> switch to the app search box (like the Windows Start menu). */
 static gboolean on_menu_key(GtkWidget *w, GdkEventKey *e, gpointer d)
 {
     (void)w; (void)d;
@@ -264,7 +264,7 @@ static void on_settings_item(GtkMenuItem *item, gpointer data)
     hde_open_settings(NULL);
 }
 
-/* Launcher riêng trong ~/.config/hde/start-apps/ hiện trong submenu Custom. */
+/* Custom launchers in ~/.config/hde/start-apps/ appear in the Custom submenu. */
 static void add_custom_start_apps(GtkWidget *menu)
 {
     char *dir = g_build_filename(g_get_user_config_dir(), "hde", "start-apps", NULL);
@@ -292,7 +292,7 @@ static void add_custom_start_apps(GtkWidget *menu)
     if (count > 0) {
         GtkWidget *it = make_item("Custom", NULL, "applications-other|application-x-executable");
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), sub);
-        gtk_menu_shell_insert(GTK_MENU_SHELL(menu), it, 2);     /* ngay dưới ô Search */
+        gtk_menu_shell_insert(GTK_MENU_SHELL(menu), it, 2);     /* right below the Search item */
     } else {
         gtk_widget_destroy(sub);
     }
@@ -363,8 +363,8 @@ static GtkWidget *build_menu(void)
     return menu;
 }
 
-/* Sự kiện "giả" để GTK grab bàn phím/chuột đúng cách khi menu được mở bằng phím Super
- * (lệnh tới qua ClientMessage nên không có GdkEvent hiện hành). */
+/* A "fake" event so that GTK grabs keyboard/pointer properly when the menu is opened with the Super key
+ * (the command arrives as a ClientMessage, so there is no current GdkEvent). */
 static GdkEvent *make_key_trigger(guint32 time)
 {
     GdkWindow *gw = gtk_widget_get_window(panel_win);
@@ -393,7 +393,7 @@ static gboolean retry_menu(gpointer d)
 static void open_menu(guint32 time, gboolean keyboard)
 {
     if (app_menu) {
-        gtk_widget_destroy(app_menu);                /* dựng lại để luôn có app mới cài */
+        gtk_widget_destroy(app_menu);                /* rebuilt every time so newly installed apps always show up */
         g_object_unref(app_menu);
     }
     app_menu = build_menu();
@@ -404,7 +404,7 @@ static void open_menu(guint32 time, gboolean keyboard)
     if (keyboard) {
         DBG("menu popup by keyboard (time %u): mapped=%d retry=%d", time, gtk_widget_get_mapped(app_menu), menu_retry);
         if (!gtk_widget_get_mapped(app_menu) && debug_on) {
-            /* tìm nguyên nhân: ai đang giữ grab bàn phím / chuột? */
+            /* find the cause: who is holding the keyboard / pointer grab? */
             GdkSeat *seat = gdk_display_get_default_seat(gdk_display_get_default());
             GdkWindow *pw = gtk_widget_get_window(panel_win);
             GdkGrabStatus k = gdk_seat_grab(seat, pw, GDK_SEAT_CAPABILITY_KEYBOARD, TRUE, NULL, NULL, NULL, NULL);
@@ -414,7 +414,7 @@ static void open_menu(guint32 time, gboolean keyboard)
             DBG("grab probe: keyboard=%d pointer=%d (0 ok, 1 already grabbed, 2 invalid time, 3 not viewable, 4 frozen)", k, p);
         }
         if (!gtk_widget_get_mapped(app_menu) && menu_retry < 3) {
-            menu_retry++;                            /* WM vẫn đang giữ grab của phím Super: thử lại */
+            menu_retry++;                            /* the WM still holds the grab of the Super key: retry */
             g_timeout_add(120, retry_menu, NULL);
             return;
         }
@@ -571,7 +571,7 @@ static void on_show_desktop(GtkButton *btn, gpointer data)
     wnck_screen_toggle_showing_desktop(scr, !wnck_screen_get_showing_desktop(scr));
 }
 
-/* ---------- kênh lệnh (hde-ipc.h) ---------- */
+/* ---------- command channel (hde-ipc.h) ---------- */
 typedef struct { long cmd, arg; guint32 time; } PanelCmd;
 
 static gboolean run_panel_cmd(gpointer p)
@@ -608,7 +608,7 @@ static GdkFilterReturn cmd_filter(GdkXEvent *xev, GdkEvent *ev, gpointer data)
         c->cmd = x->xclient.data.l[0];
         c->time = (guint32)x->xclient.data.l[1];
         c->arg = x->xclient.data.l[2];
-        g_idle_add(run_panel_cmd, c);       /* không chạy dialog/menu ngay trong filter */
+        g_idle_add(run_panel_cmd, c);       /* do not run dialogs/menus from inside the filter */
         return GDK_FILTER_REMOVE;
     }
     return GDK_FILTER_CONTINUE;
@@ -657,7 +657,7 @@ static gboolean panel_running(void)
     return w != 0;
 }
 
-/* ---------- strut: chừa chỗ để cửa sổ không đè lên panel ---------- */
+/* ---------- strut: reserve space so windows do not cover the panel ---------- */
 static void set_strut(GtkWidget *win, GdkRectangle *mon)
 {
     GdkWindow *gw = gtk_widget_get_window(win);
@@ -675,7 +675,7 @@ static void set_strut(GtkWidget *win, GdkRectangle *mon)
                         (const guchar *)s4, 4);
 }
 
-/* ---------- CSS: sáng/tối theo Settings > Appearance ---------- */
+/* ---------- CSS: light/dark according to Settings > Appearance ---------- */
 static void load_css(void)
 {
     HdeThemeInfo ti;
@@ -710,7 +710,7 @@ static void load_css(void)
         ".hde-panel label { color: %s; }"
         ".hde-osd, .hde-notification, .hde-search, .hde-calendar { background: %s; color: %s;"
         "  border: 1px solid %s; border-radius: 0; }"
-        /* bo góc chỉ khi WM có compositing (hde_popup_setup_alpha thêm lớp .rounded), tránh góc đen */
+        /* rounded corners only when the WM composites (hde_popup_setup_alpha adds the .rounded class), avoiding black corners */
         ".hde-osd.rounded, .hde-notification.rounded, .hde-search.rounded, .hde-calendar.rounded { border-radius: 10px; }"
         ".hde-osd label, .hde-notification label, .hde-search label, .hde-calendar label { color: %s; }"
         ".hde-osd levelbar trough { min-height: 6px; border-radius: 3px; background: %s; border: none; }"
@@ -813,7 +813,7 @@ int main(int argc, char **argv)
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
     gtk_window_stick(GTK_WINDOW(win));
-    gtk_window_set_keep_above(GTK_WINDOW(win), TRUE);   /* luôn nằm trên desktop, kể cả khi WM bỏ qua DOCK hint */
+    gtk_window_set_keep_above(GTK_WINDOW(win), TRUE);   /* always above the desktop, even if the WM ignores the DOCK hint */
     gtk_widget_set_size_request(win, geo.width, PANEL_HEIGHT);
     gtk_window_set_default_size(GTK_WINDOW(win), geo.width, PANEL_HEIGHT);
     gtk_window_move(GTK_WINDOW(win), geo.x, geo.y + geo.height - PANEL_HEIGHT);
@@ -852,7 +852,7 @@ int main(int argc, char **argv)
     wnck_pager_set_n_rows(WNCK_PAGER(pager), 1);
     gtk_box_pack_start(GTK_BOX(box), pager, FALSE, FALSE, 4);
 
-    /* bên phải, từ phải sang trái: đồng hồ | chuông thông báo | trạng thái | khay hệ thống */
+    /* right side, from right to left: clock | notification bell | status | system tray */
     clock_btn = gtk_button_new();
     gtk_button_set_relief(GTK_BUTTON(clock_btn), GTK_RELIEF_NONE);
     gtk_style_context_add_class(gtk_widget_get_style_context(clock_btn), "clock-btn");
@@ -878,7 +878,7 @@ int main(int argc, char **argv)
     gtk_widget_show_all(win);
     set_strut(win, &geo);
     publish_panel_window();
-    gdk_window_raise(gtk_widget_get_window(win));   /* không bị hde-desktop phủ lên khi khởi động sai thứ tự */
+    gdk_window_raise(gtk_widget_get_window(win));   /* never covered by hde-desktop if they start in the wrong order */
 
     g_unix_signal_add(SIGTERM, on_unix_signal, NULL);
     g_unix_signal_add(SIGINT, on_unix_signal, NULL);

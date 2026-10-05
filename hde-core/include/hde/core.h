@@ -1,15 +1,15 @@
 #ifndef HDE_CORE_H
 #define HDE_CORE_H
-/* hde-core: khởi tạo backend (X11/Wayland) dùng chung cho hde-session và các tiện ích CLI. */
+/* hde-core: backend initialization (X11/Wayland) shared by hde-session and the CLI tools. */
 #include "hde/backend.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Khởi tạo settings + backend. Gọi nhiều lần cũng an toàn. Trả về 0 nếu thành công. */
+/* Initialize settings + backend. Safe to call several times. Returns 0 on success. */
 int hde_core_init(HDEBackendType type);
-/* Backend đang dùng, hoặc NULL nếu chưa init / init lỗi. */
+/* The backend in use, or NULL if not initialized / initialization failed. */
 HDEBackend *hde_core_backend(void);
 void hde_core_shutdown(void);
 

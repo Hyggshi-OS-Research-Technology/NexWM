@@ -344,23 +344,23 @@ info "NexWM exited."
 exit 0
 ```
 
-### Chạy
+### Run
 
 ```bash
 chmod +x scripts/test-nexde
 ./scripts/test-nexde
 ```
 
-Hoặc:
+Or:
 
 ```bash
 ./scripts/test-nexde 1920x1080
 ```
 
-Display khác:
+Another display:
 
 ```bash
 ./scripts/test-nexde 1280x720 :2
 ```
 
-Bản này đặc biệt tránh `pkill -P $$`, nên **không đụng nhầm các tiến trình NexDE đang chạy bên ngoài test session**. Khi `nexwm` thoát hoặc bạn `Ctrl+C`, script sẽ dừng các component mà chính nó đã khởi chạy rồi đóng Xephyr.
+This version deliberately avoids `pkill -P $$`, so it **never touches NexDE processes running outside the test session by mistake**. When `nexwm` exits or you press `Ctrl+C`, the script stops the components it started itself and then closes Xephyr.

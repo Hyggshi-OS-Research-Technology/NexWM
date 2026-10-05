@@ -1,10 +1,10 @@
-/* Hyggshi Settings — trang Bluetooth: dùng trực tiếp BlueZ qua D-Bus (org.bluez), không cần bluetoothctl.
+/* Hyggshi Settings — Bluetooth page: talks to BlueZ directly over D-Bus (org.bluez), no bluetoothctl needed.
  *
- * - Bật/tắt adapter (tự `rfkill unblock` khi bị chặn), hiển thị với thiết bị khác (Discoverable).
- * - "My devices": thiết bị đã ghép đôi — kết nối / ngắt kết nối / xoá, hiện pin nếu thiết bị báo.
- * - "Other devices": thiết bị tìm thấy khi quét (StartDiscovery, tự dừng sau 45 giây) — ghép đôi.
- * - Agent org.bluez.Agent1 riêng: hỏi PIN / passkey, hiện mã cần nhập trên thiết bị, xác nhận mã.
- * - Danh sách cập nhật trực tiếp theo tín hiệu InterfacesAdded/Removed/PropertiesChanged của BlueZ.
+ * - Adapter on/off (runs `rfkill unblock` automatically when blocked), visibility to other devices (Discoverable).
+ * - "My devices": paired devices — connect / disconnect / remove, battery level if the device reports it.
+ * - "Other devices": devices found while scanning (StartDiscovery, stops by itself after 45 seconds) — pair.
+ * - Own org.bluez.Agent1 agent: asks for a PIN / passkey, shows the code to type on the device, confirms codes.
+ * - The list updates live from BlueZ's InterfacesAdded/Removed/PropertiesChanged signals.
  */
 #include "hde-settings.h"
 #include <string.h>
@@ -25,12 +25,12 @@ static GtkWidget *power_sw, *power_row, *disc_sw, *scan_btn, *scan_spinner, *sca
 static GtkWidget *paired_card, *other_card;
 static guint rebuild_id, scan_stop_id, agent_obj_id;
 static gboolean page_mapped, agent_registered, power_retry;
-static GHashTable *busy;              /* đường dẫn thiết bị đang có thao tác -> mô tả */
+static GHashTable *busy;              /* device path with an operation in progress -> description */
 static int msg_action;                /* 0 none, 1 start service, 2 rfkill unblock */
 
 static void schedule_rebuild(void);
 
-/* ---------------- tiện ích ---------------- */
+/* ---------------- helpers ---------------- */
 static GDBusProxy *iface_proxy(const char *path, const char *iface)
 {
     if (!mgr || !path) return NULL;
@@ -143,7 +143,7 @@ static void set_scan_ui(gboolean on)
     else { gtk_spinner_stop(GTK_SPINNER(scan_spinner)); gtk_widget_hide(scan_spinner); }
 }
 
-/* ---------------- gọi D-Bus ---------------- */
+/* ---------------- D-Bus calls ---------------- */
 typedef enum { OP_POWER, OP_DISCOVERABLE, OP_SCAN_START, OP_SCAN_STOP, OP_PAIR, OP_TRUST, OP_CONNECT,
                OP_DISCONNECT, OP_REMOVE } OpKind;
 
@@ -203,7 +203,7 @@ static void call_done(GObject *src, GAsyncResult *res, gpointer data)
     switch (o->kind) {
     case OP_POWER:
         if (e && o->value && !power_retry && have_program("rfkill")) {
-            power_retry = TRUE;                           /* bị rfkill chặn: bỏ chặn rồi thử lại một lần */
+            power_retry = TRUE;                           /* blocked by rfkill: unblock, then retry once */
             const char *argv[] = { "rfkill", "unblock", "bluetooth", NULL };
             run_argv_async(argv, NULL, 10, on_rfkill_done, NULL);
             break;
@@ -237,7 +237,7 @@ static void call_done(GObject *src, GAsyncResult *res, gpointer data)
         } else {
             settings_status("Paired with %s", name);
             mark_busy(o->path, "Connecting…");
-            set_prop(OP_TRUST, o->path, DEVICE_IFACE, "Trusted", TRUE);   /* để thiết bị tự kết nối lại sau này */
+            set_prop(OP_TRUST, o->path, DEVICE_IFACE, "Trusted", TRUE);   /* so the device reconnects by itself later */
         }
         break;
     }
@@ -270,7 +270,7 @@ static void call_done(GObject *src, GAsyncResult *res, gpointer data)
     op_free(o);
 }
 
-/* ---------------- agent ghép đôi (org.bluez.Agent1) ---------------- */
+/* ---------------- pairing agent (org.bluez.Agent1) ---------------- */
 static const char agent_xml[] =
     "<node><interface name='org.bluez.Agent1'>"
     "<method name='Release'/>"
@@ -285,7 +285,7 @@ static const char agent_xml[] =
     "</interface></node>";
 
 typedef enum { ASK_CONFIRM, ASK_PIN, ASK_PASSKEY, ASK_AUTHORIZE } AskKind;
-static GtkWidget *agent_dialog;          /* hộp thoại agent đang mở (hỏi hoặc hiển thị mã) */
+static GtkWidget *agent_dialog;          /* agent dialog currently open (asking for or displaying a code) */
 
 static void agent_dialog_close(void)
 {
@@ -293,7 +293,7 @@ static void agent_dialog_close(void)
     GtkWidget *d = agent_dialog;
     agent_dialog = NULL;
     GDBusMethodInvocation *inv = g_object_steal_data(G_OBJECT(d), "hde-invocation");
-    if (inv) {                                      /* BlueZ huỷ yêu cầu: vẫn phải trả lời lời gọi đang chờ */
+    if (inv) {                                      /* BlueZ cancelled the request: the pending call must still be answered */
         g_dbus_method_invocation_return_dbus_error(inv, "org.bluez.Error.Canceled", "Canceled");
     }
     gtk_widget_destroy(d);
@@ -302,7 +302,7 @@ static void agent_dialog_close(void)
 static void on_agent_response(GtkDialog *d, int response, gpointer data)
 {
     (void)data;
-    GDBusMethodInvocation *inv = g_object_steal_data(G_OBJECT(d), "hde-invocation");   /* return_* nhận quyền sở hữu */
+    GDBusMethodInvocation *inv = g_object_steal_data(G_OBJECT(d), "hde-invocation");   /* return_* takes ownership */
     AskKind kind = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(d), "hde-kind"));
     GtkWidget *entry = g_object_get_data(G_OBJECT(d), "hde-entry");
     if (inv) {
@@ -355,7 +355,7 @@ static void agent_ask(GDBusMethodInvocation *inv, AskKind kind, const char *devi
         gtk_box_pack_start(GTK_BOX(box), e, FALSE, FALSE, 0);
         g_object_set_data(G_OBJECT(d), "hde-entry", e);
     }
-    g_object_set_data(G_OBJECT(d), "hde-invocation", inv);      /* giữ tham chiếu của handler; return_* sẽ nhả */
+    g_object_set_data(G_OBJECT(d), "hde-invocation", inv);      /* keep the handler's reference; return_* releases it */
     g_object_set_data(G_OBJECT(d), "hde-kind", GINT_TO_POINTER(kind));
     g_signal_connect(d, "response", G_CALLBACK(on_agent_response), NULL);
     gtk_widget_show_all(d);
@@ -463,19 +463,19 @@ static void register_agent(void)
         g_dbus_node_info_unref(info);
         if (!agent_obj_id) return;
     }
-    /* Không chiếm "default agent" (blueman có thể đang giữ): BlueZ dùng agent của chính tiến trình gọi Pair(). */
+    /* Do not claim the "default agent" (blueman may hold it): BlueZ uses the agent of the process that called Pair(). */
     g_dbus_connection_call(sys, BLUEZ, "/org/bluez", "org.bluez.AgentManager1", "RegisterAgent",
                            g_variant_new("(os)", AGENT_PATH, "KeyboardDisplay"), NULL, G_DBUS_CALL_FLAGS_NONE,
                            5000, NULL, on_agent_registered, NULL);
 }
 
-/* ---------------- thao tác từ giao diện ---------------- */
+/* ---------------- UI actions ---------------- */
 static void on_pair(GtkButton *b, gpointer d)
 {
     (void)d;
     const char *path = g_object_get_data(G_OBJECT(b), "hde-path");
     register_agent();
-    if (scan_stop_id && adapter_path)   /* quét làm chậm quá trình ghép đôi: dừng lại */
+    if (scan_stop_id && adapter_path)   /* scanning slows down pairing: stop it */
         bluez_call(OP_SCAN_STOP, adapter_path, ADAPTER_IFACE, "StopDiscovery", NULL, 5000, FALSE);
     mark_busy(path, "Pairing…");
     char *name = device_name(path);
@@ -554,7 +554,7 @@ static gboolean on_power(GtkSwitch *s, gboolean v, gpointer d)
     if (!adapter_path) return TRUE;
     power_retry = FALSE;
     set_prop(OP_POWER, adapter_path, ADAPTER_IFACE, "Powered", v);
-    return TRUE;          /* trạng thái thật cập nhật khi BlueZ báo PropertiesChanged */
+    return TRUE;          /* the real state is updated when BlueZ emits PropertiesChanged */
 }
 
 static gboolean on_discoverable(GtkSwitch *s, gboolean v, gpointer d)
@@ -575,7 +575,7 @@ static void on_msg_button(GtkButton *b, gpointer d)
 {
     (void)b; (void)d;
     if (msg_action == 1) {
-        const char *argv[] = { "systemctl", "start", "bluetooth.service", NULL };   /* polkit hỏi mật khẩu nếu cần */
+        const char *argv[] = { "systemctl", "start", "bluetooth.service", NULL };   /* polkit asks for a password if needed */
         run_argv_async(argv, NULL, 60, on_msg_done, NULL);
     } else if (msg_action == 2) {
         const char *argv[] = { "rfkill", "unblock", "bluetooth", NULL };
@@ -590,7 +590,7 @@ static void on_blueman(GtkButton *b, gpointer d)
     launch_candidates(cmds);
 }
 
-/* ---------------- vẽ ---------------- */
+/* ---------------- drawing ---------------- */
 static void show_message(const char *text, int action, const char *button)
 {
     gtk_label_set_text(GTK_LABEL(msg_label), text);
@@ -767,7 +767,7 @@ static gboolean rebuild(gpointer data)
         if (!di) continue;
         GDBusProxy *p = G_DBUS_PROXY(di);
         char *ad = prop_str(p, "Adapter");
-        if (g_getenv("HDE_DEBUG")) {                     /* chẩn đoán: thuộc tính BlueZ thực sự nhận được */
+        if (g_getenv("HDE_DEBUG")) {                     /* diagnostics: the BlueZ properties actually received */
             gchar **names = g_dbus_proxy_get_cached_property_names(p);
             GString *dbg = g_string_new(NULL);
             for (int k = 0; names && names[k]; k++) {
@@ -797,7 +797,7 @@ static gboolean rebuild(gpointer data)
             if (bat) { d->battery = prop_int(bat, "Percentage", -1); g_object_unref(bat); }
             if (d->paired) g_ptr_array_add(paired, d);
             else if (name || d->connected) g_ptr_array_add(others, d);
-            else { unnamed++; devinfo_free(d); }      /* thiết bị BLE không tên (beacon...) — ẩn */
+            else { unnamed++; devinfo_free(d); }      /* unnamed BLE device (beacon...) — hidden */
             g_free(name);
         }
         g_free(ad);
@@ -898,7 +898,7 @@ static void on_unmap(GtkWidget *w, gpointer d)
 {
     (void)w; (void)d;
     page_mapped = FALSE;
-    if (scan_stop_id) {                /* rời trang thì dừng quét để tiết kiệm pin */
+    if (scan_stop_id) {                /* leaving the page stops the scan to save battery */
         g_source_remove(scan_stop_id);
         scan_stop_id = 0;
         if (adapter_path) bluez_call(OP_SCAN_STOP, adapter_path, ADAPTER_IFACE, "StopDiscovery", NULL, 5000, FALSE);

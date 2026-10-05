@@ -1,16 +1,16 @@
-/* hde-theme.h — Dark mode / theme dùng chung cho hde-panel, hde-desktop và hde-settings.
+/* hde-theme.h — Dark mode / theme shared by hde-panel, hde-desktop and hde-settings.
  *
- * Nguồn cấu hình duy nhất: ~/.config/hde/settings.ini, nhóm [settings]
- *   theme_index          1 = Light, 2 = Dark (0/thiếu = chưa chọn: HDE không đụng vào theme GTK)
- *   gtk_theme            theme gốc người dùng chọn (vd. Adwaita, Yaru, Arc)
- *   gtk_theme_effective  tên theme thực dùng sau khi chọn biến thể tối (vd. Adwaita-dark)
- *   icon_theme_name      theme icon (tuỳ chọn)
- *   font                 font giao diện (tuỳ chọn, vd. "Sans 10")
- *   accent               màu nhấn (#rrggbb)
+ * Single source of configuration: ~/.config/hde/settings.ini, group [settings]
+ *   theme_index          1 = Light, 2 = Dark (0/missing = not chosen: HDE leaves the GTK theme alone)
+ *   gtk_theme            base theme chosen by the user (e.g. Adwaita, Yaru, Arc)
+ *   gtk_theme_effective  theme actually used once the dark variant is picked (e.g. Adwaita-dark)
+ *   icon_theme_name      icon theme (optional)
+ *   font                 UI font (optional, e.g. "Sans 10")
+ *   accent               accent color (#rrggbb)
  *
- * hde-settings ghi các khoá này + ~/.config/gtk-3.0/settings.ini + GSettings; hde-xsettings phát
- * chúng qua XSETTINGS để MỌI ứng dụng GTK đang chạy đổi theme ngay; các thành phần HDE theo dõi
- * settings.ini bằng hde_theme_watch() để tự đổi CSS sáng/tối.
+ * hde-settings writes these keys + ~/.config/gtk-3.0/settings.ini + GSettings; hde-xsettings publishes
+ * them over XSETTINGS so that EVERY running GTK application switches theme immediately; HDE components
+ * watch settings.ini with hde_theme_watch() to switch their own light/dark CSS.
  */
 #ifndef HDE_THEME_H
 #define HDE_THEME_H
@@ -25,38 +25,38 @@ typedef enum {
 
 typedef struct {
     HdeStyle style;
-    char *gtk_theme;        /* theme đã resolve, NULL = không quản lý */
-    char *base_theme;       /* theme gốc (gtk_theme), có thể NULL */
-    char *icon_theme;       /* NULL = không đổi */
-    char *font;             /* NULL = không đổi */
-    char *accent;           /* luôn khác NULL */
+    char *gtk_theme;        /* resolved theme, NULL = not managed */
+    char *base_theme;       /* base theme (gtk_theme), may be NULL */
+    char *icon_theme;       /* NULL = unchanged */
+    char *font;             /* NULL = unchanged */
+    char *accent;           /* never NULL */
 } HdeThemeInfo;
 
 char    *hde_settings_ini_path(void);
 void     hde_theme_info_load(HdeThemeInfo *info);
 void     hde_theme_info_clear(HdeThemeInfo *info);
 
-/* Panel / OSD / popup thông báo dùng giao diện tối, trừ khi người dùng chọn Light. */
+/* Panel / OSD / notification popups use the dark look unless the user picked Light. */
 gboolean hde_theme_shell_dark(void);
 
-/* Áp theme cho chính tiến trình GTK hiện tại (GtkSettings). */
+/* Apply the theme to the current GTK process itself (GtkSettings). */
 void     hde_theme_apply_process(void);
 
 typedef void (*HdeThemeChangedFunc)(gpointer user_data);
-/* Theo dõi settings.ini; khi đổi: áp lại theme cho tiến trình rồi gọi func (có thể NULL). */
+/* Watch settings.ini; on change: re-apply the theme to this process, then call func (may be NULL). */
 void     hde_theme_watch(HdeThemeChangedFunc func, gpointer user_data);
 
-/* --- dùng bởi hde-settings --- */
-/* Tên theme thực dùng cho style + theme gốc; tạo shim Adwaita-dark nếu máy chưa có. */
+/* --- used by hde-settings --- */
+/* Effective theme name for a style + base theme; creates an Adwaita-dark shim if the system has none. */
 char    *hde_theme_resolve_name(HdeStyle style, const char *base);
-/* Theme GTK hiện tại theo ~/.config/gtk-3.0/settings.ini (hoặc "Adwaita"). */
+/* Current GTK theme according to ~/.config/gtk-3.0/settings.ini (or "Adwaita"). */
 char    *hde_theme_current_gtk3(void);
-/* Ghi ~/.config/gtk-3.0/settings.ini (+ gtk-4.0 cho icon/font) và GSettings org.gnome.desktop.interface. */
+/* Write ~/.config/gtk-3.0/settings.ini (+ gtk-4.0 for icons/font) and GSettings org.gnome.desktop.interface. */
 void     hde_theme_write_system(const HdeThemeInfo *info);
-/* Danh sách theme GTK3 (chỉ theme gốc, bỏ biến thể -dark) và theme icon đã cài; g_strfreev. */
+/* Installed GTK3 themes (base themes only, -dark variants skipped) and icon themes; free with g_strfreev. */
 gchar  **hde_theme_list_gtk_themes(void);
 gchar  **hde_theme_list_icon_themes(void);
-/* TRUE nếu tên theme trông như biến thể tối (…-dark, …-Dark, …-darker). */
+/* TRUE if the theme name looks like a dark variant (…-dark, …-Dark, …-darker). */
 gboolean hde_theme_name_is_dark(const char *name);
 
 #endif

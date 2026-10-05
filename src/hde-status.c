@@ -1,10 +1,10 @@
-/* hde-status: khu vực trạng thái trên panel — Fcitx, mạng (Wi-Fi/Ethernet), Bluetooth, âm lượng, pin.
+/* hde-status: the status area of the panel — Fcitx, network (Wi-Fi/Ethernet), Bluetooth, volume, battery.
  *
- * - Mọi lệnh ngoài (nmcli, pactl/wpctl/amixer, fcitx5-remote) chạy BẤT ĐỒNG BỘ và có timeout,
- *   nên panel không bao giờ bị treo.
- * - Bluetooth đọc thẳng từ BlueZ qua D-Bus (không dùng bluetoothctl — nó đứng chờ khi bluetoothd chưa chạy).
- * - Mục nào không có phần cứng/dịch vụ tương ứng thì tự ẩn.
- * - Chuột trái: hành động chính · chuột phải: mở công cụ cấu hình · cuộn chuột trên âm lượng: ±5%.
+ * - Every external command (nmcli, pactl/wpctl/amixer, fcitx5-remote) runs ASYNCHRONOUSLY with a timeout,
+ *   so the panel never freezes.
+ * - Bluetooth is read straight from BlueZ over D-Bus (not bluetoothctl — it hangs while bluetoothd is not running).
+ * - Items without the matching hardware/service hide themselves.
+ * - Left click: main action · right click: open the configuration tool · scrolling on the volume: ±5%.
  */
 #include <gtk/gtk.h>
 #include <gio/gio.h>
@@ -18,7 +18,7 @@
 #define POLL_SECONDS 5
 #define CMD_TIMEOUT_SECONDS 4
 
-/* ---------- chạy lệnh bất đồng bộ ---------- */
+/* ---------- asynchronous commands ---------- */
 typedef void (*RunCb)(gboolean ok, const char *out, gpointer data);
 typedef struct { RunCb cb; gpointer data; GSubprocess *proc; guint timer; } Run;
 
@@ -63,7 +63,7 @@ static void run_async(const char *const *argv, RunCb cb, gpointer data)
     g_subprocess_communicate_utf8_async(p, NULL, NULL, run_done, r);
 }
 
-/* Chạy một đoạn shell bất đồng bộ (không qua g_shell_parse -> không lo dấu nháy). */
+/* Run a shell snippet asynchronously (no g_shell_parse -> no quoting worries). */
 static void run_shell(const char *script)
 {
     gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)script, NULL };
@@ -79,7 +79,7 @@ static void spawn_quiet(const char *cmd)
     if (!g_spawn_command_line_async(cmd, &err)) g_clear_error(&err);
 }
 
-/* Chạy ứng dụng đầu tiên tìm thấy trong danh sách. */
+/* Run the first application found in the list. */
 static void launch_first(const char *const *cmds)
 {
     for (int i = 0; cmds[i]; i++) {
@@ -90,7 +90,7 @@ static void launch_first(const char *const *cmds)
     }
 }
 
-/* hde-settings nằm cạnh hde-panel (bản vừa build) hoặc trong PATH. */
+/* hde-settings lives next to hde-panel (fresh build) or in PATH. */
 void hde_open_settings(const char *page)
 {
     char *self = g_file_read_link("/proc/self/exe", NULL);
@@ -111,7 +111,7 @@ void hde_open_settings(const char *page)
     g_free(path); g_free(self);
 }
 
-/* ---------- widget cho từng mục ---------- */
+/* ---------- widgets for each item ---------- */
 typedef struct { GtkWidget *btn, *img, *lbl; gboolean busy; } Item;
 static Item it_fcitx, it_net, it_bt, it_vol, it_bat;
 
@@ -132,7 +132,7 @@ static void item_init(Item *it, GtkWidget *box, gboolean with_label)
     gtk_widget_add_events(it->btn, GDK_SCROLL_MASK);
     gtk_widget_show_all(it->btn);
     gtk_widget_set_no_show_all(it->btn, TRUE);
-    gtk_widget_hide(it->btn);                    /* chỉ hiện sau khi poll xác nhận có dịch vụ */
+    gtk_widget_hide(it->btn);                    /* only shown once a poll confirms the service exists */
     gtk_box_pack_start(GTK_BOX(box), it->btn, FALSE, FALSE, 0);
 }
 
@@ -149,7 +149,7 @@ static void item_set(Item *it, const char *icon, const char *text, const char *t
 }
 
 /* ================= Fcitx ================= */
-static const char *fcitx_bin;   /* fcitx5-remote hoặc fcitx-remote */
+static const char *fcitx_bin;   /* fcitx5-remote or fcitx-remote */
 
 static char *fcitx_label(const char *name)
 {
@@ -190,7 +190,7 @@ static void poll_fcitx(void)
     run_async(argv, on_fcitx, NULL);
 }
 
-/* ================= Mạng ================= */
+/* ================= Network ================= */
 typedef struct { gboolean any, has_wifi, wifi_on, wifi_off, eth_on; char *wifi, *eth; } NetState;
 
 static void net_apply(NetState *s, int signal)
@@ -240,7 +240,7 @@ static void on_net_signal(gboolean ok, const char *out, gpointer d)
     it_net.busy = FALSE;
 }
 
-/* Không có NetworkManager: đọc thẳng /sys/class/net. */
+/* No NetworkManager: read /sys/class/net directly. */
 static void net_sysfs(NetState *s)
 {
     GDir *d = g_dir_open("/sys/class/net", 0, NULL);
@@ -291,7 +291,7 @@ static void on_net_dev(gboolean ok, const char *out, gpointer d)
         }
         g_strfreev(lines);
     }
-    if (s->wifi_on && ok) {      /* lấy cường độ sóng của mạng đang dùng (không quét lại) */
+    if (s->wifi_on && ok) {      /* signal strength of the network in use (no rescan) */
         const char *argv[] = { "nmcli", "-t", "-f", "IN-USE,SIGNAL", "dev", "wifi", "list", "--rescan", "no", NULL };
         run_async(argv, on_net_signal, s);
         return;
@@ -328,7 +328,7 @@ static void on_bt_objects(GObject *src, GAsyncResult *res, gpointer d)
     it_bt.busy = FALSE;
     GError *e = NULL;
     GVariant *r = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, &e);
-    if (!r) {                                   /* bluetoothd không chạy */
+    if (!r) {                                   /* bluetoothd is not running */
         g_clear_error(&e);
         gtk_widget_hide(it_bt.btn);
         return;
@@ -385,7 +385,7 @@ static void on_sysbus(GObject *src, GAsyncResult *res, gpointer d)
     if (sysbus) poll_bt();
 }
 
-/* ================= Âm lượng (pactl / wpctl / amixer — xem HDE_SH_VOLUME_GET) ================= */
+/* ================= Volume (pactl / wpctl / amixer — see HDE_SH_VOLUME_GET) ================= */
 static int vol_pct = -1;
 
 static const char *vol_icon(int pct, gboolean muted);
@@ -405,7 +405,7 @@ static const char *vol_icon(int pct, gboolean muted)
            pct < 66 ? "audio-volume-medium-symbolic" : "audio-volume-high-symbolic";
 }
 
-/* out = "<phần trăm> <muted>" (xem HDE_SH_VOLUME_GET) */
+/* out = "<percent> <muted>" (see HDE_SH_VOLUME_GET) */
 static gboolean parse_vol(gboolean ok, const char *out, int *pct, gboolean *muted)
 {
     int v = -1, m = 0;
@@ -500,7 +500,7 @@ static void poll_bat(void)
     if (!found) gtk_widget_hide(it_bat.btn);
 }
 
-/* ================= tương tác ================= */
+/* ================= interaction ================= */
 static void refresh_all(void)
 {
     poll_fcitx(); poll_net(); poll_bt(); poll_vol(); poll_bat();
@@ -542,7 +542,7 @@ static gboolean on_press(GtkWidget *w, GdkEventButton *e, gpointer data)
     } else if (!strcmp(id, "bat")) {
         hde_open_settings("power");
     }
-    g_timeout_add(600, refresh_once, NULL);       /* cập nhật ngay sau khi bấm */
+    g_timeout_add(600, refresh_once, NULL);       /* refresh right after the click */
     return TRUE;
 }
 

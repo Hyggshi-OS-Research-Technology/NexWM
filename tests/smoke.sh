@@ -1,10 +1,10 @@
 #!/bin/sh
-# tests/smoke.sh — kiểm thử khói HDE: chạy cả phiên HDE trong Xvfb rồi kiểm tra các tính năng chính
-# (phím Super, F1/F2/F3, thông báo, danh sách Wi-Fi, Dark mode trực tiếp, đổi WM không đăng xuất, tự chạy lại khi crash).
+# tests/smoke.sh — HDE smoke test: runs a whole HDE session in Xvfb, then checks the main features
+# (Super key, F1/F2/F3, notifications, Wi-Fi list, live Dark mode, WM switch without logout, restart after a crash).
 #
-#   make check            (hoặc: BUILD=build sh tests/smoke.sh)
-# Cần: Xvfb xdotool dbus-run-session python3. Tuỳ chọn: metacity openbox pulseaudio notify-send import(ImageMagick)
-# Kết quả: $HDE_TEST_OUT (mặc định /tmp/hde-smoke): results.txt, *.log, ảnh chụp shot-*.png
+#   make check            (or: BUILD=build sh tests/smoke.sh)
+# Needs: Xvfb xdotool dbus-run-session python3. Optional: metacity openbox pulseaudio notify-send import(ImageMagick)
+# Output: $HDE_TEST_OUT (default /tmp/hde-smoke): results.txt, *.log, screenshots shot-*.png
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 BUILD=${BUILD:-build}
@@ -26,7 +26,7 @@ if [ -z "${HDE_SMOKE_INNER:-}" ]; then
     printf '[Desktop Entry]\nType=Link\nName=HDE Website\nURL=https://github.com/Hyggshi-OS-Research-Technology/NexWM\nIcon=web-browser\n' \
         > "$OUT/home/Desktop/hde.desktop"
 
-    # nmcli giả lập: danh sách Wi-Fi cố định, ghi lại mọi lệnh (kiểm tra mật khẩu KHÔNG nằm trên dòng lệnh)
+    # fake nmcli: fixed Wi-Fi list, logs every command (to check that the password is NOT on the command line)
     cat > "$OUT/fakebin/nmcli" <<'EOF'
 #!/bin/sh
 echo "ARGS: $*" >> "${HDE_FAKE_NMCLI_LOG:-/tmp/fake-nmcli.log}"
@@ -60,7 +60,7 @@ EOF
     exit $rc
 fi
 
-# ===================== bên trong dbus-run-session =====================
+# ===================== inside dbus-run-session =====================
 FAILS=0
 pass() { echo "PASS: $*" | tee -a "$OUT/results.txt"; }
 fail() { echo "FAIL: $*" | tee -a "$OUT/results.txt"; FAILS=$((FAILS + 1)); }
@@ -68,7 +68,7 @@ skip() { echo "SKIP: $*" | tee -a "$OUT/results.txt"; }
 check() { desc=$1; shift; if "$@" >/dev/null 2>&1; then pass "$desc"; else fail "$desc"; fi; }
 shot() { command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-$1.png" 2>/dev/null; }
 popups() { $XT popups 2>/dev/null || echo 0; }
-running() { pgrep -x "$1" >/dev/null 2>&1; }       # theo tên tiến trình (không khớp nhầm shell đang kiểm tra)
+running() { pgrep -x "$1" >/dev/null 2>&1; }       # by process name (never matches the shell doing the check)
 SETTINGS_INI="$XDG_CONFIG_HOME/hde/settings.ini"
 
 if command -v pulseaudio >/dev/null 2>&1; then
@@ -76,7 +76,7 @@ if command -v pulseaudio >/dev/null 2>&1; then
     sleep 1.5
 fi
 
-# BlueZ giả lập (python3-dbusmock) trên một "system bus" riêng: kiểm tra danh sách thiết bị Bluetooth
+# Fake BlueZ (python3-dbusmock) on a private "system bus": checks the Bluetooth device list
 BLUEZ_MOCK=""
 SYSBUS_PID=""
 bz() { m=$1; shift; gdbus call --system --dest org.bluez --object-path / --method "org.bluez.Mock.$m" "$@" >> "$OUT/bluez-mock.log" 2>&1; }
@@ -90,7 +90,7 @@ if python3 -c "import dbusmock" >/dev/null 2>&1; then
         for i in $(seq 1 40); do gdbus introspect --system --dest org.bluez --object-path / >/dev/null 2>&1 && break; sleep 0.2; done
         bz AddAdapter "'hci0'" "'HDE test PC'"
         bz AddDevice "'hci0'" "'11:22:33:44:55:66'" "'Galaxy Buds2'"
-        # dbusmock < 0.28 (Ubuntu 22.04): PairDevice(adapter, address, class) — có thêm tham số Class
+        # dbusmock < 0.28 (Ubuntu 22.04): PairDevice(adapter, address, class) — with an extra Class argument
         bz PairDevice "'hci0'" "'11:22:33:44:55:66'" || bz PairDevice "'hci0'" "'11:22:33:44:55:66'" 2360344
         bz ConnectDevice "'hci0'" "'11:22:33:44:55:66'"
         bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" "'MX Keys'"
@@ -108,7 +108,7 @@ export HDE_SESSION_PID=$SESSION
 sleep 7
 shot 01-session
 
-# ---------- 1. phiên khởi động ----------
+# ---------- 1. session startup ----------
 for p in hde-panel hde-desktop hde-hotkeys hde-xsettings; do check "$p is running" running $p; done
 WM=$(sed -n 's/^hde-session: starting window manager \([A-Za-z0-9]*\).*/\1/p' "$OUT/session.log" | head -n1)
 if [ -n "$WM" ]; then pass "window manager started: $WM"; else fail "window manager started"; fi
@@ -119,7 +119,7 @@ fi
 check "panel publishes _HDE_PANEL_WINDOW" sh -c "[ \"\$($XT root-window _HDE_PANEL_WINDOW)\" != 0 ]"
 check "hde-xsettings owns _XSETTINGS_S0" $XT xsettings
 
-# ---------- 2. phím Super -> Start menu ----------
+# ---------- 2. Super key -> Start menu ----------
 n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
 if [ "$n1" -gt "$n0" ]; then pass "Super key opens the Start menu ($n0 -> $n1 popups)"; else fail "Super key opens the Start menu ($n0 -> $n1 popups)"; fi
 shot 02-start-menu
@@ -135,12 +135,12 @@ check "Super+S opens app search" xdotool search --onlyvisible --name "Search app
 n1=$(popups)
 if [ "$n1" -le "$n0" ]; then pass "Super+<key> combination does not pop up the Start menu"; else fail "Super+<key> popped up the Start menu"; fi
 xdotool key Escape; sleep 0.8
-# hồi quy: xdotool nhả Super trước S -> lần nhả đó không tới hde-hotkeys (đang grab Super+S); Super vẫn phải chạy
+# regression: xdotool releases Super before S -> that release never reaches hde-hotkeys (it holds the Super+S grab); Super must still work
 n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
 if [ "$n1" -gt "$n0" ]; then pass "Super still works right after a Super+<key> shortcut"; else fail "Super still works right after a Super+<key> shortcut ($n0 -> $n1)"; fi
 xdotool key Escape; sleep 0.5
 
-# ---------- 3. F1 / F2 / F3 âm lượng ----------
+# ---------- 3. F1 / F2 / F3 volume ----------
 if pactl info >/dev/null 2>&1; then
     vol() { pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -n1 | tr -d %; }
     mut() { pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'; }
@@ -165,7 +165,7 @@ else
     skip "no PulseAudio server: F1/F2/F3 volume tests"
 fi
 
-# ---------- 4. thông báo ----------
+# ---------- 4. notifications ----------
 if command -v gdbus >/dev/null 2>&1; then
     info=$(gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
            --method org.freedesktop.Notifications.GetServerInformation 2>&1)
@@ -186,7 +186,7 @@ check "Settings window opens" xdotool search --onlyvisible --name "Hyggshi Setti
 shot 06-settings-wifi
 if grep -q "device wifi list" "$OUT/nmcli.log" 2>/dev/null; then pass "Network page asks NetworkManager for the Wi-Fi list"; else fail "Network page asks NetworkManager for the Wi-Fi list"; fi
 
-# Super khi một ứng dụng đang có focus (trường hợp dùng thật phổ biến nhất)
+# Super while an application has focus (the most common real-world case)
 n0=$(popups); xdotool key super; sleep 1.5; n1=$(popups)
 if [ "$n1" -gt "$n0" ]; then pass "Super opens the Start menu while an application window has focus ($n0 -> $n1)"
 else
@@ -196,7 +196,7 @@ fi
 shot 06b-menu-over-app
 xdotool key Escape; sleep 0.8
 
-# Kết nối Wi-Fi có mật khẩu: bấm vào dòng "Neighbor 5G" (vị trí cố định: cửa sổ 1020x700 giữa màn hình 1280x800)
+# Wi-Fi connection with a password: click the "Neighbor 5G" row (fixed position: 1020x700 window centered on a 1280x800 screen)
 xdotool mousemove 600 436 click 1; sleep 1.5
 if xdotool search --onlyvisible --name "Wi-Fi Network Authentication" >/dev/null 2>&1; then
     pass "choosing a secured Wi-Fi network asks for its password"
@@ -234,13 +234,13 @@ if [ -n "$BLUEZ_MOCK" ]; then
                   --method org.freedesktop.DBus.Properties.Get org.bluez.Device1 "$2" 2>/dev/null; }
     case "$(bprop 11_22_33_44_55_66 Paired)" in *true*) pass "Bluetooth: paired + connected device is listed (BlueZ mock)" ;;
         *) skip "Bluetooth mock could not pair the test device" ;; esac
-    # Ghép đôi bằng chính Settings: nút "Pair" của "Pixel 8" (thẻ Other devices còn 1 dòng)
+    # Pair through Settings itself: the "Pair" button of "Pixel 8" (the Other devices card has 1 row left)
     xdotool mousemove 1078 556 click 1; sleep 4
     shot 07c-bluetooth-paired-by-settings
     if bprop AA_BB_CC_DD_EE_02 Paired | grep -q true; then
         pass "Settings pairs a Bluetooth device (Device1.Pair)"
         if bprop AA_BB_CC_DD_EE_02 Trusted | grep -q true; then pass "paired device is marked trusted (auto-reconnect)"; else fail "paired device is marked trusted"; fi
-        # Device1.Connect của dbusmock chỉ phát PropertiesChanged, không đổi giá trị Get -> kiểm tra lời gọi trong log mock
+        # dbusmock's Device1.Connect only emits PropertiesChanged without changing the value returned by Get -> check the call in the mock log
         if grep -Eq "^[0-9.]+ Connect( |$)" "$OUT/bluez-mock.log"; then pass "Settings connects the device after pairing (Device1.Connect)"
         else fail "Settings connects the device after pairing (Device1.Connect)"; fi
     else
@@ -271,7 +271,7 @@ if grep -q '^Net/ThemeName=Adwaita$' "$OUT/xsettings-light.txt"; then pass "swit
 else fail "switching back to Light mode ($(grep ThemeName "$OUT/xsettings-light.txt"))"; fi
 kill $SETTINGS 2>/dev/null
 
-# ---------- 7. đổi WM không cần đăng xuất ----------
+# ---------- 7. WM switch without logging out ----------
 if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; then
     sed -i 's/^wm=.*/wm=openbox/' "$SETTINGS_INI"
     "$B/hde-session" wm >/dev/null 2>&1; sleep 7
@@ -286,7 +286,7 @@ else
     skip "live WM switch (needs both openbox and metacity)"
 fi
 
-# ---------- 8. tự chạy lại khi crash ----------
+# ---------- 8. restart after a crash ----------
 pid=$(pgrep -x hde-panel | head -n1)
 if [ -n "$pid" ]; then
     kill -SEGV "$pid"; sleep 4
@@ -295,7 +295,7 @@ if [ -n "$pid" ]; then
 fi
 shot 14-after-restart
 
-# ---------- 9. đăng xuất ----------
+# ---------- 9. logout ----------
 kill -TERM "$SESSION"; sleep 5
 check "logout stops the panel" sh -c "! pgrep -x hde-panel"
 check "logout stops hde-hotkeys" sh -c "! pgrep -x hde-hotkeys"

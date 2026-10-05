@@ -1,11 +1,11 @@
-/* Hyggshi Settings — trung tâm cài đặt GTK3 của Hyggshi Desktop Environment.
+/* Hyggshi Settings — the GTK3 settings center of the Hyggshi Desktop Environment.
  *
- *   hde-settings              mở cửa sổ cài đặt
- *   hde-settings <trang>      mở thẳng một trang: display appearance input sound network bluetooth
+ *   hde-settings              open the settings window
+ *   hde-settings <page>       open a page directly: display appearance input sound network bluetooth
  *                             windows notifications power keyboard users about
- *   hde-settings --apply      áp lại các thiết lập cần chạy mỗi lần đăng nhập rồi thoát (hde-session gọi)
+ *   hde-settings --apply      re-apply the settings needed at every login, then exit (called by hde-session)
  *
- * Các trang lớn nằm ở file riêng: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound}.c
+ * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound}.c
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
@@ -30,7 +30,7 @@ static GtkCssProvider *app_css;
 
 typedef struct { const char *id; const char *icon; const char *title; const char *subtitle; } SettingItem;
 static const SettingItem items[] = {
-    /* icon: nhiều tên thay thế cách nhau bởi '|', dùng tên đầu tiên theme icon có */
+    /* icon: several alternative names separated by '|'; the first one present in the icon theme is used */
     { "display", "video-display-symbolic|preferences-desktop-display-symbolic", "Display", "Resolution, scale and monitors" },
     { "appearance", "preferences-desktop-appearance-symbolic|preferences-desktop-theme-symbolic|applications-graphics-symbolic|weather-clear-night-symbolic",
       "Appearance", "Dark mode, theme, accent, icons and fonts" },
@@ -47,7 +47,7 @@ static const SettingItem items[] = {
     { "about", "help-about-symbolic", "About", "Hyggshi Desktop Environment" },
 };
 
-/* ================= cấu hình ================= */
+/* ================= configuration ================= */
 static char *cfg_path(void) { return hde_settings_ini_path(); }
 
 static GKeyFile *cfg_load(void)
@@ -164,7 +164,7 @@ void cfg_set_string(const char *key, const char *value)
     g_key_file_free(kf);
 }
 
-/* ================= tiện ích giao diện ================= */
+/* ================= UI helpers ================= */
 GtkWidget *settings_window(void) { return window; }
 
 void settings_status(const char *fmt, ...)
@@ -301,7 +301,7 @@ void launch_candidates(const char *const *commands)
     settings_status("No suitable tool found for this action");
 }
 
-/* ================= chạy lệnh bất đồng bộ ================= */
+/* ================= asynchronous commands ================= */
 typedef struct {
     SettingsRunCb cb;
     gpointer data;
@@ -357,7 +357,7 @@ void run_argv_async(const char *const *argv, const char *stdin_text, int timeout
     GSubprocessFlags fl = G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE |
                           (stdin_text ? G_SUBPROCESS_FLAGS_STDIN_PIPE : G_SUBPROCESS_FLAGS_STDIN_INHERIT);
     GSubprocessLauncher *l = g_subprocess_launcher_new(fl);
-    /* thông báo lỗi bằng tiếng Anh để phân tích được; giữ LC_CTYPE (UTF-8) cho tên mạng/thiết bị */
+    /* English error messages so they can be parsed; keep LC_CTYPE (UTF-8) for network/device names */
     g_subprocess_launcher_unsetenv(l, "LC_ALL");
     g_subprocess_launcher_unsetenv(l, "LANGUAGE");
     g_subprocess_launcher_setenv(l, "LC_MESSAGES", "C", TRUE);
@@ -385,7 +385,7 @@ void run_shell_async(const char *script, SettingsRunCb cb, gpointer data)
     run_argv_async(argv, NULL, 30, cb, data);
 }
 
-/* ================= áp thiết lập khi đăng nhập ================= */
+/* ================= apply settings at login ================= */
 static void run_quiet(const char *script)
 {
     gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)script, NULL };
@@ -408,7 +408,7 @@ void apply_keyboard_settings(void)
     }
     if ((cfg_has_key("repeat_rate") || cfg_has_key("repeat_delay")) && have_program("xset")) {
         static const int delays[] = { 250, 500, 800 };
-        int rate = 10 + CLAMP(cfg_get_int("repeat_rate", 50), 0, 100) / 2;      /* 10..60 lần/giây */
+        int rate = 10 + CLAMP(cfg_get_int("repeat_rate", 50), 0, 100) / 2;      /* 10..60 per second */
         int delay = delays[CLAMP(cfg_get_int("repeat_delay", 1), 0, 2)];
         char *cmd = g_strdup_printf("xset r on; xset r rate %d %d", delay, rate);
         run_quiet(cmd);
@@ -428,7 +428,7 @@ void apply_power_settings(void)
     g_free(cmd);
 }
 
-/* libinput qua xinput: chỉ áp những giá trị người dùng đã chỉnh (có trong settings.ini). */
+/* libinput via xinput: only apply values the user has changed (present in settings.ini). */
 void apply_input_settings(void)
 {
     if (!have_program("xinput")) return;
@@ -464,7 +464,7 @@ void apply_input_settings(void)
     g_string_free(env, TRUE);
 }
 
-/* ================= các trang đơn giản ================= */
+/* ================= simple pages ================= */
 static void display_dialog(GtkButton *b, gpointer d)
 {
     (void)b; (void)d;
@@ -721,7 +721,7 @@ static GtkWidget *make_page(const char *id)
     return make_about_page();
 }
 
-/* ================= khung cửa sổ ================= */
+/* ================= window frame ================= */
 static void select_page(const char *id, GtkWidget *button)
 {
     if (!content_stack || !sidebar) return;
@@ -743,13 +743,13 @@ static void cb_sidebar(GtkToggleButton *t, gpointer id)
 {
     if (gtk_toggle_button_get_active(t)) select_page(id, GTK_WIDGET(t));
     else {
-        /* không cho bỏ chọn trang đang mở */
+        /* do not allow deselecting the open page */
         const char *cur = content_stack ? gtk_stack_get_visible_child_name(GTK_STACK(content_stack)) : NULL;
         if (cur && !g_strcmp0(cur, id)) gtk_toggle_button_set_active(t, TRUE);
     }
 }
 
-/* "a|b|c": tên icon đầu tiên có trong theme (theme Adwaita mới đã bỏ nhiều tên cũ) */
+/* "a|b|c": the first icon name present in the theme (newer Adwaita themes dropped many old names) */
 static char *pick_icon(const char *spec)
 {
     char **names = g_strsplit(spec, "|", -1);
@@ -793,7 +793,7 @@ static GtkWidget *make_sidebar(void)
     return box;
 }
 
-/* CSS dựa trên màu của theme GTK (@theme_*) nên tự đúng ở cả chế độ sáng và tối. */
+/* CSS based on the GTK theme colors (@theme_*), so it is right in both light and dark mode. */
 static void load_css(void)
 {
     HdeThemeInfo ti;
@@ -930,14 +930,14 @@ static int on_command_line(GApplication *app, GApplicationCommandLine *cl, gpoin
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "--apply")) {
-        /* chế độ không giao diện: hde-session gọi khi đăng nhập */
+        /* headless mode: called by hde-session at login */
         apply_keyboard_settings();
         apply_power_settings();
         apply_input_settings();
         return 0;
     }
     if (argc > 2 && !strcmp(argv[1], "--style")) {
-        /* hde-settings --style dark|light|toggle : đổi Dark mode không cần mở cửa sổ */
+        /* hde-settings --style dark|light|toggle : switch Dark mode without opening the window */
         gboolean dark;
         if (!strcmp(argv[2], "dark")) dark = TRUE;
         else if (!strcmp(argv[2], "light")) dark = FALSE;
@@ -962,7 +962,7 @@ int main(int argc, char **argv)
     load_css();
     hde_theme_watch(on_theme_changed, NULL);
 
-    /* Một cửa sổ duy nhất: `hde-settings bluetooth` khi đã mở sẽ chuyển trang thay vì mở cửa sổ thứ hai. */
+    /* A single window: `hde-settings bluetooth` while it is already open switches the page instead of opening a second window. */
     GtkApplication *app = gtk_application_new("org.hyggshi.Settings", G_APPLICATION_HANDLES_COMMAND_LINE);
     g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
     g_signal_connect(app, "command-line", G_CALLBACK(on_command_line), NULL);

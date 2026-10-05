@@ -28,52 +28,52 @@ Optional:
     DISPLAY=:2 ./build/hde-session --no-panel
     DISPLAY=:2 ./build/hde-session --no-desktop
 
-## Lỗi "icon / menu Start không bấm được" (bản sửa 2)
+## "Icons / Start menu cannot be clicked" bug (fix 2)
 
-Nguyên nhân thật khi chạy `DISPLAY=:2 ./build/hde-session` trong Xephyr:
+The real causes when running `DISPLAY=:2 ./build/hde-session` in Xephyr:
 
-1. `resolve_component()` dùng *static buffer*: `hde-desktop` và `hde-panel` trỏ cùng một chuỗi ->
-   session chạy **hai panel, không có desktop** (log: `starting desktop: .../hde-panel`).
-2. Host chạy Wayland (`WAYLAND_DISPLAY` được set) nên backend chọn `wayland`, và GTK mở cửa sổ
-   trên host thay vì trong Xephyr. Giờ: có `DISPLAY` thì dùng X11, session set `GDK_BACKEND=x11`.
-3. Binary cũ trong `/usr/local/bin` (log tiếng Việt) được dùng thay vì bản mới. `make` giờ build
-   `hde-desktop`, `hde-panel`, `hde-settings` từ `src/` vào `build/`; session tìm cạnh chính nó trước.
-4. Session không chạy window manager -> thêm (xfwm4, openbox, ...); tắt bằng `--no-wm` hoặc `HDE_NO_WM=1`.
+1. `resolve_component()` used a *static buffer*: `hde-desktop` and `hde-panel` pointed to the same string ->
+   the session ran **two panels and no desktop** (log: `starting desktop: .../hde-panel`).
+2. The host runs Wayland (`WAYLAND_DISPLAY` is set), so the backend picked `wayland` and GTK opened its windows
+   on the host instead of inside Xephyr. Now: if `DISPLAY` is set, X11 is used and the session sets `GDK_BACKEND=x11`.
+3. Old binaries in `/usr/local/bin` (with Vietnamese log messages) were used instead of the new build. `make` now builds
+   `hde-desktop`, `hde-panel`, `hde-settings` from `src/` into `build/`; the session looks next to itself first.
+4. The session did not start a window manager -> added (xfwm4, openbox, ...); disable with `--no-wm` or `HDE_NO_WM=1`.
 
-Chạy lại:
+Run again:
 
     make clean && make
     Xephyr :2 -screen 1280x720 &
     DISPLAY=:2 ./build/hde-session
 
-## Chạy được trong Xephyr nhưng không lên trên máy thật (bản sửa 3)
+## Works in Xephyr but does not start on a real machine (fix 3)
 
-Trên máy thật phiên được gọi qua `hde.desktop` -> `hde-start` -> `hde-session`, nhưng trước đây
-`make install` chỉ cài `hde-session`: không cài `hde.desktop` (xsessions), không cài `hde-start`
-(file cũng không có quyền chạy), và `@PREFIX@` không bao giờ được thay -> màn hình đăng nhập
-không có phiên HDE hợp lệ, hoặc phiên thoát ngay.
+On a real machine the session is started via `hde.desktop` -> `hde-start` -> `hde-session`, but previously
+`make install` only installed `hde-session`: it did not install `hde.desktop` (xsessions) or `hde-start`
+(which was not executable either), and `@PREFIX@` was never substituted -> the login screen
+had no valid HDE session, or the session exited immediately.
 
-Cài đặt:
+Installation:
 
-    sudo apt install libgtk-3-dev libwnck-3-dev openbox   # openbox hoặc xfwm4: window manager
+    sudo apt install libgtk-3-dev libwnck-3-dev openbox   # openbox or xfwm4: window manager
     make clean && make
-    sudo make install            # PREFIX=/usr/local mặc định
+    sudo make install            # PREFIX=/usr/local by default
 
-Sau đó đăng xuất, ở màn hình đăng nhập chọn phiên **HDE** (biểu tượng bánh răng), phiên X11.
-Nếu phiên không lên, xem: `~/.cache/hde/session.log` (và `~/.xsession-errors`).
+Then log out and pick the **HDE** session on the login screen (gear icon), an X11 session.
+If the session does not come up, check `~/.cache/hde/session.log` (and `~/.xsession-errors`).
 
-Không có display manager: `echo 'exec /usr/local/bin/hde-start' > ~/.xinitrc && startx`
+No display manager: `echo 'exec /usr/local/bin/hde-start' > ~/.xinitrc && startx`
 
-## Chuột / input không bấm được (bản sửa 4)
+## Mouse / input clicks do not work (fix 4)
 
-1. **Chạy lồng trong Xephyr trên host Wayland**: GTK3 dùng XInput2 nên không nhận click chuột thật
-   từ Xephyr (xdotool/XTEST vẫn chạy nên khó nhận ra). `hde-session` và `hde-start` giờ tự đặt
-   `GDK_CORE_DEVICE_EVENTS=1` khi có `WAYLAND_DISPLAY` hoặc `HDE_CORE_EVENTS=1`.
-   Tắt bằng `HDE_XI2=1`. Thử thủ công: `GDK_CORE_DEVICE_EVENTS=1 DISPLAY=:2 ./build/hde-session`.
-2. **Hộp Run**: Enter không chạy lệnh (thiếu default response) -> đã sửa, Enter = Run.
-3. `hde-start` đặt con trỏ gốc `left_ptr` (nếu có `xsetroot`) để chuột luôn hiện trên phiên thật.
+1. **Nested in Xephyr on a Wayland host**: GTK3 uses XInput2 and therefore gets no real mouse clicks
+   from Xephyr (xdotool/XTEST still work, which makes it hard to notice). `hde-session` and `hde-start` now set
+   `GDK_CORE_DEVICE_EVENTS=1` automatically when `WAYLAND_DISPLAY` or `HDE_CORE_EVENTS=1` is set.
+   Disable with `HDE_XI2=1`. Manual test: `GDK_CORE_DEVICE_EVENTS=1 DISPLAY=:2 ./build/hde-session`.
+2. **Run dialog**: Enter did not run the command (no default response) -> fixed, Enter = Run.
+3. `hde-start` sets the root cursor to `left_ptr` (if `xsetroot` is available) so the pointer is always visible in a real session.
 
-Chạy lại:
+Run again:
 
     make clean && make
     Xephyr :2 -screen 1280x720 &
@@ -94,46 +94,46 @@ Chạy lại:
 - Settings adds Bluetooth and Window Management pages.
 - `settings.ini` can contain `wm=xfwm4` (or `auto`) and `hde-start` passes it to the session.
 
-## Wi-Fi, Bluetooth, phím Super, F1–F3, WM GTK, Dark mode và các thành phần bắt buộc của DE (bản sửa 5)
+## Wi-Fi, Bluetooth, Super key, F1–F3, GTK WMs, Dark mode and the essential DE components (fix 5)
 
-### Đã sửa / thêm
+### Fixed / added
 
-| Yêu cầu | Trước | Bây giờ |
-|---------|-------|---------|
-| **Danh sách Wi-Fi** | Trang Network chỉ có dòng `nmcli device status` + công tắc Wi-Fi | Danh sách mạng thật (gộp theo SSID, sóng, bảo mật, đang kết nối / đã lưu), **Scan**, kết nối (hỏi mật khẩu — mật khẩu đưa vào `nmcli --ask` qua stdin, không lộ trong `ps`), ngắt kết nối, quên mạng, mạng ẩn, mạng doanh nghiệp (802.1X) mở trình chỉnh sửa nâng cao |
-| **Bluetooth không hiện danh sách** | Chỉ "adapter detected" + công tắc | Đọc thẳng BlueZ qua D-Bus: **My devices** (đã ghép đôi: kết nối/ngắt/xoá, pin) + **Other devices** (quét 45 giây, ghép đôi có agent hỏi PIN/passkey/xác nhận mã), bật/tắt, hiện với thiết bị khác, tự `rfkill unblock`, báo rõ khi bluetoothd không chạy |
-| **Super mở Start menu** | Không có | Nhấn rồi thả **Super** = mở/đóng menu (XInput2 raw events, không chiếm phím nên `Super+phím` của WM/app vẫn chạy). Đang mở menu gõ chữ = tìm ứng dụng |
-| **F1, F2, F3 = âm thanh** | Không có | F1 tắt/bật tiếng, F2 giảm, F3 tăng (tối đa 100%), có OSD; phím media/độ sáng cũng chạy. Tắt F1–F3 trong *Settings → Keyboard & Shortcuts* để trả phím cho ứng dụng |
-| **WM GTK thay cho Openbox/xfwm** | Danh sách xfwm4 → openbox → … | Hỗ trợ **Metacity, Marco, Mutter, Muffin** (ưu tiên ở chế độ Auto — viền cửa sổ theo theme GTK và Dark mode), đổi WM **ngay không cần đăng xuất** (*Settings → Window Management → Apply now* hoặc `hde-session wm`) |
-| **Dark mode trong Settings cho đúng** | Combo "Dark" chỉ lưu số, không làm gì | Áp dụng ngay cho panel, menu, Settings và **mọi ứng dụng GTK đang mở** (trình nền `hde-xsettings`), ghi `~/.config/gtk-3.0/settings.ini`, GSettings `color-scheme` (GTK4/libadwaita), tự tìm biến thể tối của theme (tạo Adwaita-dark nếu thiếu `gnome-themes-extra`). Từ dòng lệnh: `hde-settings --style dark` |
+| Request | Before | Now |
+|---------|--------|-----|
+| **Wi-Fi list** | The Network page only had `nmcli device status` rows + a Wi-Fi switch | Real network list (grouped by SSID, signal, security, connected / saved), **Scan**, connect (asks for the password — fed to `nmcli --ask` through stdin, never visible in `ps`), disconnect, forget, hidden networks, enterprise networks (802.1X) open the advanced editor |
+| **Bluetooth shows no list** | Only "adapter detected" + a switch | Reads BlueZ directly over D-Bus: **My devices** (paired: connect/disconnect/remove, battery) + **Other devices** (45-second scan, pairing with an agent that asks for a PIN/passkey/code confirmation), on/off, visibility to other devices, automatic `rfkill unblock`, a clear message when bluetoothd is not running |
+| **Super opens the Start menu** | Missing | Press and release **Super** = open/close the menu (XInput2 raw events; the key is not grabbed, so `Super+key` shortcuts of the WM/apps keep working). Typing while the menu is open = app search |
+| **F1, F2, F3 = sound** | Missing | F1 mute/unmute, F2 down, F3 up (max 100%), with an OSD; media/brightness keys work too. Turn F1–F3 off in *Settings → Keyboard & Shortcuts* to give the keys back to applications |
+| **GTK WMs instead of Openbox/xfwm** | List xfwm4 → openbox → … | Supports **Metacity, Marco, Mutter, Muffin** (preferred in Auto mode — window borders follow the GTK theme and Dark mode), switch WM **instantly without logging out** (*Settings → Window Management → Apply now* or `hde-session wm`) |
+| **Dark mode in Settings that really works** | The "Dark" combo only stored a number and did nothing | Applies immediately to the panel, menus, Settings and **every open GTK application** (`hde-xsettings` daemon), writes `~/.config/gtk-3.0/settings.ini` and GSettings `color-scheme` (GTK4/libadwaita), finds the dark variant of the theme automatically (creates Adwaita-dark when `gnome-themes-extra` is missing). From the command line: `hde-settings --style dark` |
 
-### Những thứ "DE bắt buộc phải có" đã bổ sung
+### "Must-have" DE components added
 
-- **Trình nền thông báo** (`org.freedesktop.Notifications`) trong panel: popup, nút hành động, ảnh, âm báo, lịch sử ở nút chuông, **Do Not Disturb**.
-- **Polkit agent**: hde-session tự chạy (polkit-gnome / mate / lxpolkit / kde…) để ứng dụng cần quyền admin hỏi được mật khẩu.
-- **XDG autostart**: chạy các mục trong `~/.config/autostart` và `/etc/xdg/autostart` (tôn trọng `OnlyShowIn`/`NotShowIn`/`Hidden`/`TryExec`).
-- **Tự chạy lại khi crash** (panel, desktop, hotkeys, xsettings, WM) có giới hạn số lần.
-- **OSD** âm lượng/độ sáng, **lịch** khi bấm đồng hồ, ô **tìm ứng dụng**, khoá màn hình dùng trình khoá thật (light-locker, xscreensaver, dm-tool, i3lock…).
-- `dbus-update-activation-environment` để các dịch vụ D-Bus (portal, keyring…) biết DISPLAY của phiên.
-- Settings áp dụng thật: âm lượng/mic/thiết bị ra, bố cục bàn phím + tốc độ lặp phím, touchpad (xinput), tắt màn hình, cỡ chữ, hình nền (trước đây Settings lưu hình nền sai file nên desktop không đổi).
-- Sửa build: `hde-core/include/hde/core.h` và `hde-core/integration/core.c` bị `.gitignore` (`core.*`) che nên repo không build được.
+- **Notification daemon** (`org.freedesktop.Notifications`) in the panel: popups, action buttons, images, sounds, history under the bell button, **Do Not Disturb**.
+- **Polkit agent**: started by hde-session (polkit-gnome / mate / lxpolkit / kde…) so applications that need admin rights can ask for a password.
+- **XDG autostart**: runs the entries in `~/.config/autostart` and `/etc/xdg/autostart` (honoring `OnlyShowIn`/`NotShowIn`/`Hidden`/`TryExec`).
+- **Automatic restart after a crash** (panel, desktop, hotkeys, xsettings, WM), rate-limited.
+- Volume/brightness **OSD**, a **calendar** when clicking the clock, an **app search** box, screen locking with a real locker (light-locker, xscreensaver, dm-tool, i3lock…).
+- `dbus-update-activation-environment` so that D-Bus services (portal, keyring…) know the DISPLAY of the session.
+- Settings that really apply: volume/mic/output device, keyboard layout + key repeat rate, touchpad (xinput), screen blanking, font size, wallpaper (Settings used to save the wallpaper to the wrong file, so the desktop never changed).
+- Build fix: `hde-core/include/hde/core.h` and `hde-core/integration/core.c` were hidden by `.gitignore` (`core.*`), so the repo did not build.
 
-### Cài và thử
+### Install and try
 
     sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev
     sudo apt install metacity network-manager bluez pipewire-pulse policykit-1-gnome libnotify-bin
     make clean && make
-    sudo make install          # rồi đăng xuất, chọn phiên HDE
+    sudo make install          # then log out and pick the HDE session
 
-Thử nhanh không cài: `Xephyr :2 -screen 1280x720 & DISPLAY=:2 ./build/hde-session`.
-Kiểm thử tự động (Xvfb): `sudo apt install xvfb xdotool dbus-x11 && make check`.
+Quick try without installing: `Xephyr :2 -screen 1280x720 & DISPLAY=:2 ./build/hde-session`.
+Automated tests (Xvfb): `sudo apt install xvfb xdotool dbus-x11 && make check`.
 
-`make check` chạy cả phiên HDE trong Xvfb và kiểm tra 51 điểm (CI chạy trên Ubuntu 22.04 và 24.04):
-phím Super mở/đóng menu (cả khi đang dùng ứng dụng khác và ngay sau một tổ hợp Super+phím), gõ để tìm ứng dụng,
-F1/F2/F3 đổi âm lượng thật qua PulseAudio (dừng ở 100%, tắt F1–F3 thì trả phím cho ứng dụng), thông báo,
-danh sách Wi-Fi + kết nối có mật khẩu (mật khẩu đi qua stdin, nhập sai thì hỏi lại, huỷ thì không để lại hồ sơ hỏng),
-danh sách Bluetooth + ghép đôi/kết nối qua BlueZ giả lập, Dark mode trực tiếp qua XSETTINGS, đổi WM không đăng xuất,
-tự chạy lại panel khi crash và đăng xuất sạch sẽ. Bật log chẩn đoán: `HDE_DEBUG=1`.
+`make check` runs a whole HDE session in Xvfb and verifies 51 checks (CI runs on Ubuntu 22.04 and 24.04):
+the Super key opens/closes the menu (also while another application is in use and right after a Super+key combo), typing searches for apps,
+F1/F2/F3 really change the volume through PulseAudio (capped at 100%; with F1–F3 turned off the keys go back to applications), notifications,
+the Wi-Fi list + connecting with a password (the password goes through stdin, a wrong password asks again, cancelling leaves no broken profile),
+the Bluetooth list + pairing/connecting through a mock BlueZ, live Dark mode via XSETTINGS, switching WM without logging out,
+automatic panel restart after a crash and a clean logout. Diagnostic logging: `HDE_DEBUG=1`.
 
-Lưu ý: chạy lồng trong Xephyr trên host Wayland, X server lồng có thể không phát XInput2 raw events,
-khi đó phím Super không mở menu (bấm nút Menu hoặc `hde-panel --menu`); trên phiên thật thì bình thường.
+Note: when nested in Xephyr on a Wayland host, the nested X server may not deliver XInput2 raw events;
+the Super key then does not open the menu (click the Menu button or use `hde-panel --menu`); a real session works normally.

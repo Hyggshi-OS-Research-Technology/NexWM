@@ -52,7 +52,7 @@ jobs:
       if: always()
       run: python3 tests/ci-annotate.py /tmp/hde-smoke results
 
-    # Ảnh chụp màn hình dưới dạng check run (chỉ khi commit có "[shots]" hoặc chạy tay)
+    # Screenshots as check runs (only when the commit message contains "[shots]" or on a manual run)
     - name: Publish screenshots
       if: always() && matrix.os == 'ubuntu-22.04' && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
       env:

@@ -1,7 +1,7 @@
-/* hde-osd: OSD âm lượng / độ sáng (cửa sổ popup không lấy focus, nằm trên panel). */
+/* hde-osd: volume / brightness OSD (popup window that never takes focus, above the panel). */
 #include "hde-osd.h"
 
-#define OSD_PANEL_GAP 64      /* khoảng cách từ mép dưới màn hình (panel 34px + lề) */
+#define OSD_PANEL_GAP 64      /* distance from the bottom edge of the screen (34px panel + margin) */
 #define OSD_TIMEOUT_MS 1500
 
 static GtkWidget *osd_win, *osd_icon, *osd_level, *osd_label;
@@ -19,7 +19,7 @@ static gboolean alpha_draw(GtkWidget *w, cairo_t *cr, gpointer d)
     int W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
     gtk_render_background(ctx, cr, 0, 0, W, H);
     gtk_render_frame(ctx, cr, 0, 0, W, H);
-    return FALSE;                      /* GTK vẽ tiếp các widget con */
+    return FALSE;                      /* GTK keeps drawing the child widgets */
 }
 
 void hde_popup_setup_alpha(GtkWidget *window)
@@ -58,7 +58,7 @@ static void osd_build(void)
     gtk_widget_set_size_request(osd_level, 200, 8);
     gtk_widget_set_valign(osd_level, GTK_ALIGN_CENTER);
     gtk_level_bar_set_mode(GTK_LEVEL_BAR(osd_level), GTK_LEVEL_BAR_MODE_CONTINUOUS);
-    /* bỏ các mốc low/high mặc định để thanh luôn một màu */
+    /* drop the default low/high offsets so the bar always has a single color */
     gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(osd_level), GTK_LEVEL_BAR_OFFSET_LOW);
     gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(osd_level), GTK_LEVEL_BAR_OFFSET_HIGH);
     gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(osd_level), "full");

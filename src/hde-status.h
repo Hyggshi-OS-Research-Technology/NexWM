@@ -2,18 +2,18 @@
 #define HDE_STATUS_H
 #include <gtk/gtk.h>
 
-/* Khu vực trạng thái trên panel: Fcitx, Wi-Fi, Bluetooth, âm lượng, pin.
- * Mục nào không có phần cứng/dịch vụ tương ứng sẽ tự ẩn. */
+/* Status area of the panel: Fcitx, Wi-Fi, Bluetooth, volume, battery.
+ * Items without the matching hardware/service hide themselves. */
 GtkWidget *hde_status_new(void);
 
-/* Cập nhật ngay (sau khi đổi âm lượng, bật/tắt Wi-Fi, ...). */
+/* Refresh now (after changing the volume, toggling Wi-Fi, ...). */
 void hde_status_refresh(void);
 
-/* Đọc mức âm lượng / trạng thái micro hiện tại rồi hiện OSD. */
+/* Read the current volume level / microphone state and show the OSD. */
 void hde_status_osd_volume(void);
 void hde_status_osd_mic(void);
 
-/* Mở hde-settings (bản cạnh hde-panel trước, rồi tới PATH); page = NULL hoặc id trang. */
+/* Open hde-settings (the copy next to hde-panel first, then PATH); page = NULL or a page id. */
 void hde_open_settings(const char *page);
 
 #endif

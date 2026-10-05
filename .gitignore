@@ -17,7 +17,7 @@ bin
 
 # Testing
 *.log
-# core dumps (core, core.<pid>) — KHÔNG dùng "core.*" vì nó che mất hde-core/**/core.[ch]
+# core dumps (core, core.<pid>) — do NOT use "core.*": it would hide hde-core/**/core.[ch]
 core
 core.[0-9]*
 vgcore.*

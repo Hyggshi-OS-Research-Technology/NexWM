@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 extern HDEBackend *hde_backend_x11_create(void); extern HDEBackend *hde_backend_wayland_create(void);
-/* Backend Wayland hiện mới là placeholder, còn desktop/panel đều là GTK/X11.
- * Ưu tiên: HDE_BACKEND=x11|wayland  >  có DISPLAY thì X11 (Xephyr/XWayland)  >  chỉ có WAYLAND_DISPLAY thì Wayland.
- * Trước đây chỉ cần host có WAYLAND_DISPLAY là chọn Wayland, dù đang chạy trong Xephyr (DISPLAY=:2). */
+/* The Wayland backend is still only a placeholder; desktop/panel are both GTK/X11.
+ * Priority: HDE_BACKEND=x11|wayland  >  DISPLAY set -> X11 (Xephyr/XWayland)  >  only WAYLAND_DISPLAY -> Wayland.
+ * Previously a WAYLAND_DISPLAY on the host was enough to pick Wayland, even when running inside Xephyr (DISPLAY=:2). */
 HDEBackendType hde_backend_detect(void){
     const char *forced=getenv("HDE_BACKEND");
     if(forced&&!strcmp(forced,"x11"))return HDE_BACKEND_X11;

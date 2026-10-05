@@ -1,4 +1,4 @@
-/* Hyggshi Settings — trang Window Management: chọn WM (ưu tiên WM GTK) và đổi ngay không cần đăng xuất. */
+/* Hyggshi Settings — Window Management page: choose the WM (GTK WMs preferred) and switch instantly without logging out. */
 #include "hde-settings.h"
 #include "hde-wm.h"
 #include <gdk/gdkx.h>

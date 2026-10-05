@@ -1,8 +1,8 @@
-/* hde-wm.h — bảng window manager dùng chung cho hde-session và Hyggshi Settings (header-only, C thuần).
+/* hde-wm.h — window manager table shared by hde-session and Hyggshi Settings (header-only, plain C).
  *
- * Thứ tự cũng là thứ tự chọn của chế độ "auto": các WM dựa trên GTK (Metacity, Marco, Mutter, Muffin)
- * được ưu tiên trước Xfwm4/Openbox vì chúng vẽ thanh tiêu đề bằng chính theme GTK — Dark mode và theme
- * chọn trong Settings áp dụng luôn cho viền cửa sổ, và đổi ngay khi hde-xsettings phát theme mới.
+ * The order is also the selection order of "auto" mode: GTK-based WMs (Metacity, Marco, Mutter, Muffin)
+ * come before Xfwm4/Openbox because they draw title bars with the GTK theme itself — Dark mode and the theme
+ * chosen in Settings apply to window borders too, and switch immediately when hde-xsettings publishes a new theme.
  */
 #ifndef HDE_WM_H
 #define HDE_WM_H
@@ -10,12 +10,12 @@
 #include <string.h>
 
 typedef struct {
-    const char *id;            /* giá trị wm= trong ~/.config/hde/settings.ini */
+    const char *id;            /* the wm= value in ~/.config/hde/settings.ini */
     const char *binary;
     const char *name;
-    const char *const *args;   /* đối số khi chạy; --replace để thay WM đang chạy mà không cần đăng xuất */
-    int gtk;                   /* 1 = WM dựa trên GTK (viền cửa sổ theo theme GTK / Dark mode) */
-    int can_replace;           /* 1 = tự thay thế WM khác (giao thức WM_Sn), 0 = phải dừng WM cũ trước */
+    const char *const *args;   /* launch arguments; --replace takes over from the running WM without logging out */
+    int gtk;                   /* 1 = GTK-based WM (window borders follow the GTK theme / Dark mode) */
+    int can_replace;           /* 1 = replaces another WM by itself (WM_Sn protocol), 0 = the old WM must be stopped first */
     const char *description;
 } HdeWm;
 
@@ -53,7 +53,7 @@ static inline const HdeWm *hde_wm_find(const char *id)
     return NULL;
 }
 
-/* Đoán id từ tên WM đang chạy (_NET_WM_NAME của cửa sổ _NET_SUPPORTING_WM_CHECK). */
+/* Guess the id from the name of the running WM (_NET_WM_NAME of the _NET_SUPPORTING_WM_CHECK window). */
 static inline const HdeWm *hde_wm_from_running_name(const char *name)
 {
     if (!name) return NULL;

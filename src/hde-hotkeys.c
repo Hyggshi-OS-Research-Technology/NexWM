@@ -1,16 +1,16 @@
-/* hde-hotkeys — phím tắt hệ thống của HDE (Xlib + XInput2), chạy độc lập với GTK.
+/* hde-hotkeys — HDE system shortcuts (Xlib + XInput2), runs independently of GTK.
  *
- *  Super (nhấn rồi thả riêng)   mở / đóng Start menu (gửi lệnh tới hde-panel, xem hde-ipc.h)
- *  F1 / F2 / F3                  tắt tiếng / giảm / tăng âm lượng   (settings.ini: fkeys_sound=true)
- *  Phím media                    Mute, Volume-/+, MicMute, Brightness-/+, Play/Pause/Next/Prev
- *  PrtSc, Shift+PrtSc, Alt+PrtSc chụp toàn màn hình / vùng chọn / cửa sổ
- *  Super+L  khoá màn hình        Super+E  trình quản lý file      Super+D  hiện desktop
- *  Super+R, Alt+F2  hộp thoại Run Super+S  tìm ứng dụng           Ctrl+Alt+T  terminal
- *  Ctrl+Alt+Delete  hộp thoại Session / Power
+ *  Super (tapped alone)          open / close the Start menu (command sent to hde-panel, see hde-ipc.h)
+ *  F1 / F2 / F3                  mute / volume down / volume up   (settings.ini: fkeys_sound=true)
+ *  Media keys                    Mute, Volume-/+, MicMute, Brightness-/+, Play/Pause/Next/Prev
+ *  PrtSc, Shift+PrtSc, Alt+PrtSc screenshot of the whole screen / a selected area / a window
+ *  Super+L  lock screen          Super+E  file manager            Super+D  show desktop
+ *  Super+R, Alt+F2  Run dialog   Super+S  app search              Ctrl+Alt+T  terminal
+ *  Ctrl+Alt+Delete  Session / Power dialog
  *
- * Phím Super được nhận qua XInput2 raw events (không grab) nên Super+<phím> của WM và ứng dụng vẫn
- * hoạt động bình thường; menu chỉ mở khi Super được nhấn rồi thả mà không kèm phím/chuột nào khác.
- * Cấu hình (~/.config/hde/settings.ini, tự nạp lại khi file đổi hoặc khi nhận SIGHUP):
+ * The Super key is read through XInput2 raw events (no grab), so the Super+<key> bindings of the WM and
+ * of applications keep working; the menu only opens when Super is pressed and released with no other key/button.
+ * Configuration (~/.config/hde/settings.ini, reloaded automatically when the file changes or on SIGHUP):
  *   super_menu=true  fkeys_sound=true  media_keys=true  system_shortcuts=true
  */
 #define _DEFAULT_SOURCE
@@ -37,12 +37,12 @@
 #include "hde-ipc.h"
 
 static volatile sig_atomic_t stop_flag = 0;
-static int debug_on;               /* HDE_DEBUG=1: log chẩn đoán */
+static int debug_on;               /* HDE_DEBUG=1: diagnostic log */
 static volatile sig_atomic_t reload_flag = 0;
 static Display *dpy;
 static Window root;
 
-/* ---------------- cấu hình ---------------- */
+/* ---------------- configuration ---------------- */
 typedef struct { int super_menu, fkeys, media, shortcuts; } Config;
 static Config cfg = { 1, 1, 1, 1 };
 static char cfg_path[4096];
@@ -79,7 +79,7 @@ static void load_config(void)
     cfg.shortcuts = cfg_bool("system_shortcuts", 1);
 }
 
-/* inode + kích thước + mtime (ns): nhận ra cả hai lần ghi trong cùng một giây */
+/* inode + size + mtime (ns): detects even two writes within the same second */
 static int config_changed(void)
 {
     struct stat st;
@@ -92,7 +92,7 @@ static int config_changed(void)
     return 1;
 }
 
-/* ---------------- tiến trình con ---------------- */
+/* ---------------- child processes ---------------- */
 static void on_signal(int sig) { (void)sig; stop_flag = 1; }
 static void on_hup(int sig) { (void)sig; reload_flag = 1; }
 
@@ -104,7 +104,7 @@ static void on_sigchld(int sig)
     errno = saved;
 }
 
-/* fork + reset tín hiệu để chương trình con không thừa hưởng handler của daemon. */
+/* fork + reset signals so child programs do not inherit the daemon's handlers. */
 static pid_t fork_child(void)
 {
     pid_t p = fork();
@@ -157,7 +157,7 @@ static void notify(const char *summary, const char *body)
     }
 }
 
-/* Gửi lệnh tới hde-panel từ tiến trình con (kết nối X riêng). */
+/* Send a command to hde-panel from a child process (separate X connection). */
 static void child_send_panel(long cmd, long arg)
 {
     Display *d = XOpenDisplay(NULL);
@@ -166,7 +166,7 @@ static void child_send_panel(long cmd, long arg)
     XCloseDisplay(d);
 }
 
-/* Chạy lệnh đổi âm lượng/độ sáng trong tiến trình con (tuần tự hoá bằng flock), rồi báo panel hiện OSD. */
+/* Run the volume/brightness command in a child process (serialized with flock), then ask the panel to show the OSD. */
 static void run_with_osd(const char *script, long osd_cmd, int read_percent)
 {
     pid_t p = fork_child();
@@ -197,7 +197,7 @@ static void run_with_osd(const char *script, long osd_cmd, int read_percent)
     _exit(0);
 }
 
-/* ---------------- hành động ---------------- */
+/* ---------------- actions ---------------- */
 enum {
     A_SHOT_FULL, A_SHOT_AREA, A_SHOT_WIN,
     A_VOL_MUTE, A_VOL_DOWN, A_VOL_UP, A_MIC_MUTE, A_BRIGHT_UP, A_BRIGHT_DOWN,
@@ -332,9 +332,9 @@ static void do_action(int act, Time t)
     }
 }
 
-/* ---------------- grab phím ---------------- */
-/* Nếu WM đã chiếm một phím thì XGrabKey trả BadAccess; handler mặc định của Xlib sẽ thoát cả
- * tiến trình -> bắt lỗi, cảnh báo rồi bỏ qua phím đó. */
+/* ---------------- key grabs ---------------- */
+/* If the WM already owns a key, XGrabKey fails with BadAccess; Xlib's default handler would kill the whole
+ * process -> catch the error, warn and skip that key. */
 static int g_grab_failed = 0;
 static int on_x_error(Display *d, XErrorEvent *e)
 {
@@ -401,7 +401,7 @@ static void handle_key(XKeyEvent *k)
     }
 }
 
-/* ---------------- phím Super (XInput2 raw events) ---------------- */
+/* ---------------- Super key (XInput2 raw events) ---------------- */
 #ifdef HAVE_XI2
 static int xi_opcode = -1;
 static KeyCode super_l, super_r;
@@ -442,10 +442,10 @@ static void xi2_event(XGenericEventCookie *c)
     switch (c->evtype) {
     case XI_RawKeyPress:
         if (is_super) {
-            /* Mỗi lần nhấn Super là một "lần chạm" mới, KHÔNG phụ thuộc trạng thái cũ: khi một tổ hợp
-             * Super+<phím> của chính hde-hotkeys đang được grab, X server lọc bỏ raw event gửi cho client
-             * giữ grab (FilterRawEvents), nên lần nhả Super lúc đó có thể bị mất (vd. nhả Super trước S).
-             * Bỏ qua sự kiện auto-repeat để giữ Super lâu không bị tính là chạm lại. */
+            /* Every Super press starts a new "tap", INDEPENDENT of the previous state: while one of the
+             * Super+<key> combos grabbed by hde-hotkeys itself is active, the X server filters out raw events for
+             * the client holding the grab (FilterRawEvents), so the Super release can get lost (e.g. Super released before S).
+             * Auto-repeat events are ignored so that holding Super down does not count as another tap. */
             if (!(re->flags & XIKeyRepeat)) {
                 super_down = 1;
                 super_other = 0;
@@ -471,7 +471,7 @@ static void xi2_event(XGenericEventCookie *c)
 }
 #endif
 
-/* Chỉ cho phép một hde-hotkeys mỗi màn hình (hai bản sẽ mở rồi đóng menu ngay lập tức). */
+/* Allow only one hde-hotkeys per screen (two instances would open and immediately close the menu again). */
 static int acquire_instance_lock(void)
 {
     char name[64];

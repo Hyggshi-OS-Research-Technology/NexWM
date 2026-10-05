@@ -1,6 +1,6 @@
 #!/bin/sh
-# hde-start — điểm vào của phiên HDE (display manager / startx gọi file này).
-# Log: ~/.cache/hde/session.log  (xem file này nếu phiên không lên)
+# hde-start — entry point of the HDE session (called by the display manager / startx).
+# Log: ~/.cache/hde/session.log  (check this file if the session does not come up)
 
 LOGDIR="${XDG_CACHE_HOME:-$HOME/.cache}/hde"
 mkdir -p "$LOGDIR" 2>/dev/null
@@ -20,36 +20,36 @@ if [ -z "${HDE_WM:-}" ] && [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/hde/settings.
     [ -n "$HDE_WM" ] && export HDE_WM
 fi
 export GDK_BACKEND=x11
-# Lồng trong host Wayland (Xephyr): XInput2 không nhận chuột -> dùng core events.
+# Nested in a Wayland host (Xephyr): XInput2 gets no pointer input -> use core events.
 if [ -z "${HDE_XI2:-}" ] && { [ -n "${HDE_CORE_EVENTS:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }; then
     export GDK_CORE_DEVICE_EVENTS=1
 fi
 
-# PATH của display manager đôi khi không có /usr/local/bin
+# The display manager's PATH sometimes lacks /usr/local/bin
 case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
 export PATH
 
-# Ưu tiên hde-session nằm cạnh file này (đúng bản vừa cài), rồi mới tìm trong PATH
+# Prefer the hde-session next to this file (the copy that was just installed), then search PATH
 HERE="$(dirname "$(readlink -f "$0")")"
 if [ -x "$HERE/hde-session" ]; then SESSION="$HERE/hde-session"
 elif command -v hde-session >/dev/null 2>&1; then SESSION="$(command -v hde-session)"
 else
-    echo "hde-start: không tìm thấy hde-session (HERE=$HERE PATH=$PATH)"
+    echo "hde-start: hde-session not found (HERE=$HERE PATH=$PATH)"
     exit 1
 fi
 
 if [ -z "${DISPLAY:-}" ]; then
-    echo "hde-start: DISPLAY chưa được set — phiên HDE cần X11 (chọn phiên 'HDE' trên màn hình đăng nhập, không phải Wayland, hoặc dùng startx)."
+    echo "hde-start: DISPLAY is not set — the HDE session needs X11 (pick the 'HDE' session on the login screen, not Wayland, or use startx)."
     exit 1
 fi
 
-# Nền tảng đồ hoạ cơ bản: nạp ~/.Xresources, keymap... nếu có
+# Basic graphics setup: load ~/.Xresources, keymap... if present
 [ -f "$HOME/.Xresources" ] && command -v xrdb >/dev/null 2>&1 && xrdb -merge "$HOME/.Xresources"
 
-# Con trỏ chuột gốc: không có thì X hiện dấu "X"/không hiện gì, trông như chuột không hoạt động.
+# Root cursor: without one, X shows an "X" or nothing at all, which looks like the mouse is not working.
 command -v xsetroot >/dev/null 2>&1 && xsetroot -cursor_name left_ptr
 
-echo "hde-start: chạy $SESSION"
+echo "hde-start: running $SESSION"
 if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
     exec dbus-run-session -- "$SESSION"
 fi

@@ -1,15 +1,15 @@
-/* hde-session — trình quản lý phiên HDE.
+/* hde-session — the HDE session manager.
  *
- * Khởi động theo thứ tự: window manager -> hde-xsettings -> áp thiết lập (hde-settings --apply)
- * -> hde-hotkeys -> hde-desktop -> hde-panel -> (sau 2 giây) polkit agent + XDG autostart.
+ * Startup order: window manager -> hde-xsettings -> apply settings (hde-settings --apply)
+ * -> hde-hotkeys -> hde-desktop -> hde-panel -> (2 seconds later) polkit agent + XDG autostart.
  *
- *  - WM: theo `wm=` trong ~/.config/hde/settings.ini (hoặc HDE_WM); "auto" ưu tiên WM dựa trên GTK
- *    (Metacity, Marco, Mutter, Muffin) rồi mới tới Xfwm4/Openbox/... (bảng trong src/hde-wm.h).
- *    WM không chạy được (thoát ngay) -> thử WM kế tiếp; WM crash -> chạy lại.
- *  - Đổi WM ngay, không cần đăng xuất: `hde-session wm` (hoặc SIGUSR2) — Settings > Window Management.
- *  - Thành phần crash (panel, desktop, hotkeys, xsettings, polkit agent) được chạy lại tự động
- *    (giới hạn số lần để không lặp vô hạn); thoát bình thường (exit 0 / SIGTERM) thì không.
- *  - `hde-session restart` (SIGUSR1): chạy lại desktop + panel mà không đăng xuất.
+ *  - WM: from `wm=` in ~/.config/hde/settings.ini (or HDE_WM); "auto" prefers GTK-based WMs
+ *    (Metacity, Marco, Mutter, Muffin) over Xfwm4/Openbox/... (table in src/hde-wm.h).
+ *    A WM that cannot run (exits immediately) -> try the next WM; a WM that crashes -> restart it.
+ *  - Switch WM instantly, no logout needed: `hde-session wm` (or SIGUSR2) — Settings > Window Management.
+ *  - Crashed components (panel, desktop, hotkeys, xsettings, polkit agent) are restarted automatically
+ *    (rate-limited so they never loop forever); a normal exit (exit 0 / SIGTERM) is not restarted.
+ *  - `hde-session restart` (SIGUSR1): restart desktop + panel without logging out.
  */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -31,8 +31,8 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t g_stop = 0;
-static volatile sig_atomic_t g_restart = 0;     /* SIGUSR1: chạy lại desktop + panel */
-static volatile sig_atomic_t g_switch_wm = 0;   /* SIGUSR2: đổi WM theo settings.ini */
+static volatile sig_atomic_t g_restart = 0;     /* SIGUSR1: restart desktop + panel */
+static volatile sig_atomic_t g_switch_wm = 0;   /* SIGUSR2: switch WM according to settings.ini */
 static char g_bindir[4096];
 
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
@@ -56,7 +56,7 @@ static int self_dir(char *out, size_t n, const char *argv0)
     return 0;
 }
 
-/* Tìm chương trình: cạnh hde-session (bản vừa build) -> PATH -> /usr/local/bin, /usr/bin. Kết quả malloc'd. */
+/* Find a program: next to hde-session (the fresh build) -> PATH -> /usr/local/bin, /usr/bin. Result is malloc'd. */
 static char *resolve_component(const char *name, const char *bindir)
 {
     char path[4096];
@@ -130,7 +130,7 @@ static pid_t spawn_shell(const char *cmd)
     return p;
 }
 
-/* Chạy và chờ tối đa timeout_ms (dùng cho các lệnh ngắn lúc khởi động). */
+/* Run and wait at most timeout_ms (used for short commands during startup). */
 static void run_wait(const char *const *argv, int timeout_ms)
 {
     char *path = resolve_component(argv[0], NULL);
@@ -150,7 +150,7 @@ static void stop_pid(pid_t *p)
 {
     if (*p <= 0) return;
     kill(*p, SIGTERM);
-    for (int i = 0; i < 20; ++i) {                /* chờ tối đa ~2s rồi SIGKILL */
+    for (int i = 0; i < 20; ++i) {                /* wait up to ~2s, then SIGKILL */
         if (waitpid(*p, NULL, WNOHANG) != 0) { *p = -1; return; }
         usleep(100 * 1000);
     }
@@ -159,9 +159,9 @@ static void stop_pid(pid_t *p)
     *p = -1;
 }
 
-/* ===================== thành phần được giám sát ===================== */
+/* ===================== supervised components ===================== */
 typedef struct {
-    const char *name;           /* tên chương trình (NULL = đường dẫn đặt lúc chạy, vd. polkit agent) */
+    const char *name;           /* program name (NULL = path set at run time, e.g. the polkit agent) */
     const char *label;
     char path[4096];
     pid_t pid;
@@ -185,7 +185,7 @@ static Component comps[N_COMP] = {
 static void comp_start(Component *c)
 {
     if (!c->enabled || c->pid > 0) return;
-    if (c->name) {                                  /* resolve lại mỗi lần -> dùng đúng bản vừa build/cài */
+    if (c->name) {                                  /* resolve again every time -> always use the freshly built/installed copy */
         char *p = resolve_component(c->name, g_bindir);
         if (!p) {
             fprintf(stderr, "hde-session: %s not found; %s unavailable\n", c->name, c->label);
@@ -210,7 +210,7 @@ static void comp_exited(Component *c, int status)
     int abnormal = WIFSIGNALED(status)
         ? (WTERMSIG(status) != SIGTERM && WTERMSIG(status) != SIGINT && WTERMSIG(status) != SIGHUP)
         : (WIFEXITED(status) && WEXITSTATUS(status) != 0);
-    if (!abnormal) return;                          /* thoát bình thường: không chạy lại */
+    if (!abnormal) return;                          /* normal exit: do not restart */
     time_t now = time(NULL);
     if (now - c->fail_window > 60) { c->fail_window = now; c->fails = 0; }
     if (++c->fails > c->max_fails) {
@@ -225,7 +225,7 @@ static void start_components(void)
 {
     if (comps[C_DESKTOP].enabled) {
         comp_start(&comps[C_DESKTOP]);
-        usleep(400 * 1000);                          /* để desktop map trước; panel còn tự raise lên trên */
+        usleep(400 * 1000);                          /* let the desktop map first; the panel also raises itself on top */
     }
     comp_start(&comps[C_PANEL]);
 }
@@ -242,7 +242,7 @@ static void restart_components(void)
 /* ===================== window manager ===================== */
 static const HdeWm *wm_cands[HDE_N_WMS + 1];
 static int wm_ncands, wm_idx;
-static HdeWm wm_custom;                 /* HDE_WM / wm= là tên chương trình không có trong bảng */
+static HdeWm wm_custom;                 /* HDE_WM / wm= names a program that is not in the table */
 static char wm_custom_name[256];
 static pid_t g_wm = -1, g_wm_old = -1;
 static const HdeWm *wm_cur;
@@ -252,7 +252,7 @@ static int g_use_wm = 1;
 
 static const char *requested_wm(void)
 {
-    /* Settings ghi wm= ; HDE_WM (từ hde-start hoặc người dùng) dùng khi settings.ini chưa có */
+    /* Settings writes wm= ; HDE_WM (from hde-start or the user) is used while settings.ini has none */
     const char *s = hde_settings_get("wm", NULL);
     if (s && *s) return s;
     const char *e = getenv("HDE_WM");
@@ -320,17 +320,17 @@ static void wm_exited(int status)
     fprintf(stderr, "hde-session: window manager %s exited (%s %d)\n", wm_cur ? wm_cur->name : "?",
             WIFSIGNALED(status) ? "signal" : "status", WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status));
     if (clean || termsig) {
-        /* thay bởi WM khác (--replace) hoặc người dùng thoát WM: tôn trọng, không giành lại */
+        /* replaced by another WM (--replace) or the user quit the WM: respect that, do not take over again */
         fprintf(stderr, "hde-session: not restarting the window manager (clean exit)\n");
         return;
     }
-    if (now - wm_started < 5) {                      /* không chạy được: thử WM kế tiếp */
+    if (now - wm_started < 5) {                      /* could not start: try the next WM */
         fprintf(stderr, "hde-session: %s failed to start; trying the next window manager\n", wm_cur ? wm_cur->name : "?");
         wm_restart_at = now;
         return;
     }
     if (now - wm_fail_window > 60) { wm_fail_window = now; wm_fails = 0; }
-    if (++wm_fails <= 3) wm_idx = wm_index_of(wm_cur);    /* crash: chạy lại chính WM đó */
+    if (++wm_fails <= 3) wm_idx = wm_index_of(wm_cur);    /* crash: restart the same WM */
     wm_restart_at = now + 1;
 }
 
@@ -349,11 +349,11 @@ static void wm_switch(void)
     if (g_wm > 0) {
         if (g_wm_old > 0) stop_pid(&g_wm_old);
         if (!target->can_replace || !wm_cur || !wm_cur->can_replace) {
-            pid_t old = g_wm;                         /* WM không hỗ trợ --replace: dừng WM cũ trước */
+            pid_t old = g_wm;                         /* WM without --replace support: stop the old WM first */
             g_wm = -1;
             stop_pid(&old);
         } else {
-            g_wm_old = g_wm;                          /* WM mới tự thay thế (giao thức WM_S0) */
+            g_wm_old = g_wm;                          /* the new WM replaces the old one by itself (WM_S0 protocol) */
             g_wm = -1;
             wm_old_deadline = time(NULL) + 4;
             wm_old_signal = 0;
@@ -366,7 +366,7 @@ static void wm_switch(void)
 
 static void wm_tick(time_t now)
 {
-    if (g_wm_old > 0 && now >= wm_old_deadline) {    /* WM cũ không chịu nhường: ép thoát */
+    if (g_wm_old > 0 && now >= wm_old_deadline) {    /* the old WM refuses to give way: force it to exit */
         kill(g_wm_old, wm_old_signal ? SIGKILL : SIGTERM);
         wm_old_signal = 1;
         wm_old_deadline = now + 2;
@@ -428,7 +428,7 @@ static void strip_field_codes(const char *in, char *out, size_t n)
     for (const char *p = in; *p && o + 1 < n; p++) {
         if (*p == '%' && p[1]) {
             if (p[1] == '%') out[o++] = '%';
-            p++;                                       /* bỏ %f %F %u %U %i %c %k ... */
+            p++;                                       /* skip %f %F %u %U %i %c %k ... */
             continue;
         }
         out[o++] = *p;
@@ -484,14 +484,14 @@ static void autostart_entry(const char *file, int have_polkit)
     }
     char cmd[4096];
     strip_field_codes(exec, cmd, sizeof cmd);
-    /* tên chương trình (từ đầu tiên, bỏ thư mục) để lọc các mục HDE đã tự chạy */
+    /* program name (first word, without directory) to skip entries HDE already starts itself */
     char prog[256];
     size_t pl = strcspn(cmd, " \t");
     snprintf(prog, sizeof prog, "%.*s", (int)(pl < sizeof prog ? pl : sizeof prog - 1), cmd);
     const char *pb = strrchr(prog, '/');
     pb = pb ? pb + 1 : prog;
-    if (!strncmp(pb, "hde-", 4)) return;                                   /* HDE tự chạy các thành phần của mình */
-    if (have_polkit && strstr(pb, "polkit")) return;                       /* đã có polkit agent */
+    if (!strncmp(pb, "hde-", 4)) return;                                   /* HDE starts its own components */
+    if (have_polkit && strstr(pb, "polkit")) return;                       /* a polkit agent is already running */
     printf("hde-session: autostart %s: %s\n", base, cmd);
     spawn_shell(cmd);
 }
@@ -522,7 +522,7 @@ static void run_autostart(void)
         while ((e = readdir(dp))) {
             size_t l = strlen(e->d_name);
             if (l < 9 || strcmp(e->d_name + l - 8, ".desktop")) continue;
-            int dup = 0;                               /* file cùng tên trong thư mục người dùng thắng */
+            int dup = 0;                               /* a file with the same name in the user directory wins */
             for (int s = 0; s < ns && !dup; s++) dup = !strcmp(seen[s], e->d_name);
             if (dup) continue;
             if (ns < 256) snprintf(seen[ns++], sizeof seen[0], "%s", e->d_name);
@@ -535,7 +535,7 @@ static void run_autostart(void)
     fflush(stdout);
 }
 
-/* ===================== điều khiển từ dòng lệnh ===================== */
+/* ===================== command-line control ===================== */
 static int request_signal(int sig)
 {
     const char *env = getenv("HDE_SESSION_PID");
@@ -591,10 +591,10 @@ static void reap_children(void)
     pid_t p;
     while ((p = waitpid(-1, &status, WNOHANG)) > 0) {
         if (p == g_wm) { wm_exited(status); continue; }
-        if (p == g_wm_old) { g_wm_old = -1; continue; }    /* WM cũ nhường chỗ như mong đợi */
+        if (p == g_wm_old) { g_wm_old = -1; continue; }    /* the old WM gave way as expected */
         for (int i = 0; i < N_COMP; i++)
             if (comps[i].pid == p) { comp_exited(&comps[i], status); break; }
-        /* các tiến trình khác (autostart, lệnh phụ) chỉ cần được thu dọn */
+        /* other processes (autostart, helper commands) only need to be reaped */
     }
 }
 
@@ -623,8 +623,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Lồng trong Xephyr trên host Wayland (hoặc HDE_CORE_EVENTS=1): GTK3 dùng XInput2 sẽ không nhận được
-     * click thật từ Xephyr -> ép core events. Đặt HDE_XI2=1 để tắt. Phải làm TRƯỚC khi unsetenv(WAYLAND_DISPLAY). */
+    /* Nested in Xephyr on a Wayland host (or HDE_CORE_EVENTS=1): GTK3 using XInput2 does not receive
+     * real clicks from Xephyr -> force core events. Set HDE_XI2=1 to disable. Must happen BEFORE unsetenv(WAYLAND_DISPLAY). */
     if (!getenv("HDE_XI2") && (getenv("HDE_CORE_EVENTS") || getenv("WAYLAND_DISPLAY")))
         setenv("GDK_CORE_DEVICE_EVENTS", "1", 1);
     if (!hde_core_backend() || hde_core_backend()->type != HDE_BACKEND_WAYLAND) {
@@ -634,12 +634,12 @@ int main(int argc, char **argv)
     {
         char pidbuf[32];
         snprintf(pidbuf, sizeof pidbuf, "%d", (int)getpid());
-        setenv("HDE_SESSION_PID", pidbuf, 1);      /* panel (Log Out), Settings (đổi WM) dùng */
+        setenv("HDE_SESSION_PID", pidbuf, 1);      /* used by the panel (Log Out) and Settings (switch WM) */
         setenv("XDG_CURRENT_DESKTOP", "HDE", 1);
         setenv("XDG_SESSION_DESKTOP", "HDE", 1);
         setenv("DESKTOP_SESSION", "hde", 1);
         setenv("XDG_SESSION_TYPE", "x11", 0);
-        setenv("QT_QPA_PLATFORMTHEME", "gtk3", 0);   /* ứng dụng Qt theo theme GTK / Dark mode */
+        setenv("QT_QPA_PLATFORMTHEME", "gtk3", 0);   /* Qt apps follow the GTK theme / Dark mode */
     }
 
     struct sigaction sa;
@@ -664,7 +664,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--no-wm")) g_use_wm = 0;
     }
 
-    /* Dịch vụ D-Bus kích hoạt theo yêu cầu (portal, keyring, ...) cần biết DISPLAY của phiên này. */
+    /* D-Bus services activated on demand (portal, keyring, ...) need to know the DISPLAY of this session. */
     {
         const char *dua[] = { "dbus-update-activation-environment", "--systemd", "DISPLAY", "XAUTHORITY",
                               "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION", "XDG_SESSION_TYPE",
@@ -672,13 +672,13 @@ int main(int argc, char **argv)
         run_wait(dua, 3000);
     }
 
-    /* 1. Window manager trước mọi ứng dụng GTK */
+    /* 1. Window manager before any GTK application */
     if (g_use_wm) {
         wm_build_candidates(requested_wm());
         if (wm_start_next() == 0) usleep(400 * 1000);
     }
 
-    /* 2. XSETTINGS (theme / Dark mode cho mọi app GTK) + áp lại thiết lập bàn phím, chuột, màn hình */
+    /* 2. XSETTINGS (theme / Dark mode for every GTK app) + re-apply keyboard, mouse and display settings */
     comps[C_XSETTINGS].enabled = 1;
     comp_start(&comps[C_XSETTINGS]);
     {
@@ -690,7 +690,7 @@ int main(int argc, char **argv)
         }
     }
 
-    /* 3. Phím tắt hệ thống, desktop, panel */
+    /* 3. System shortcuts, desktop, panel */
     comps[C_HOTKEYS].enabled = start_panel;
     comps[C_DESKTOP].enabled = start_desktop;
     comps[C_PANEL].enabled = start_panel;
@@ -700,7 +700,7 @@ int main(int argc, char **argv)
     printf("HDE session running on backend: %s\n", hde_core_backend() ? hde_core_backend()->name : "none");
     fflush(stdout);
 
-    time_t autostart_at = time(NULL) + 2;   /* sau khi panel có khay hệ thống cho các applet */
+    time_t autostart_at = time(NULL) + 2;   /* after the panel has a system tray for the applets */
     int autostart_done = 0;
     while (!g_stop) {
         reap_children();

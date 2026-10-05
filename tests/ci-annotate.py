@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ci-annotate.py — đưa kết quả kiểm thử khói của HDE lên GitHub (xem được qua API, không cần artifact).
+"""ci-annotate.py — publish the HDE smoke test results on GitHub (readable through the API, no artifacts needed).
 
-  ci-annotate.py OUTDIR results      tóm tắt PASS/FAIL thành một annotation của job
-  ci-annotate.py OUTDIR checkruns    mỗi ảnh chụp màn hình -> một check run "hde-shot NAME" (JPEG base64
-                                     trong output.summary + output.text). Cần GITHUB_TOKEN có quyền checks:write.
+  ci-annotate.py OUTDIR results      PASS/FAIL summary as a single job annotation
+  ci-annotate.py OUTDIR checkruns    each screenshot -> one check run "hde-shot NAME" (base64 JPEG
+                                     in output.summary + output.text). Needs a GITHUB_TOKEN with checks:write permission.
 """
 import base64
 import glob
@@ -13,7 +13,7 @@ import subprocess
 import sys
 import urllib.request
 
-FIELD = 65000   # giới hạn 65535 ký tự cho mỗi trường output của check run
+FIELD = 65000   # limit of 65535 characters per output field of a check run
 
 
 def esc(s):
@@ -27,7 +27,7 @@ def results(out):
     fails = sum(1 for l in lines if l.startswith("FAIL"))
     passes = sum(1 for l in lines if l.startswith("PASS"))
     level = "error" if fails else "notice"
-    # annotation bị cắt ở 4096 ký tự: đưa các dòng FAIL lên đầu
+    # annotations are cut at 4096 characters: put the FAIL lines first
     ordered = [l for l in lines if l.startswith("FAIL")] + [l for l in lines if not l.startswith("FAIL")]
     print(f"::{level} title=HDE smoke test: {passes} passed, {fails} failed::{esc(chr(10).join(ordered))}")
 

@@ -4,7 +4,7 @@
 #include <string.h>
 #include <sys/stat.h>
 static char path[1100];
-/* Cùng vị trí với g_get_user_config_dir() của các thành phần GTK: $XDG_CONFIG_HOME hoặc ~/.config */
+/* Same location as g_get_user_config_dir() in the GTK components: $XDG_CONFIG_HOME or ~/.config */
 static void init_path(void){const char *x=getenv("XDG_CONFIG_HOME"); const char *h=getenv("HOME"); if(!h)h="/tmp"; char d[1024]; if(x&&*x) snprintf(d,sizeof(d),"%s/hde",x); else snprintf(d,sizeof(d),"%s/.config/hde",h); snprintf(path,sizeof(path),"%.1024s/settings.ini",d); mkdir(d,0755);}
 int hde_settings_init(void){init_path();return 0;}
 int hde_settings_set(const char *key,const char *value){if(!path[0])init_path(); FILE *f=fopen(path,"a"); if(!f)return -1; fprintf(f,"%s=%s\n",key,value); fclose(f); return 0;}

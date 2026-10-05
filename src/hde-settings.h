@@ -1,4 +1,4 @@
-/* hde-settings.h — phần dùng chung giữa các trang của Hyggshi Settings. */
+/* hde-settings.h — code shared by the pages of Hyggshi Settings. */
 #ifndef HDE_SETTINGS_APP_H
 #define HDE_SETTINGS_APP_H
 
@@ -6,9 +6,9 @@
 
 #define CONFIG_GROUP "settings"
 
-/* ---- cấu hình ~/.config/hde/settings.ini ----
- * Mỗi lần ghi đều đọc lại file trước, nên không đè mất thay đổi do hde-panel (vd. Do Not Disturb)
- * hay tiến trình khác ghi trong lúc Settings đang mở. */
+/* ---- configuration ~/.config/hde/settings.ini ----
+ * Every write re-reads the file first, so changes written by hde-panel (e.g. Do Not Disturb)
+ * or by other processes while Settings is open are never lost. */
 gboolean cfg_get_bool(const char *key, gboolean fallback);
 int      cfg_get_int(const char *key, int fallback);
 double   cfg_get_double(const char *key, double fallback);
@@ -18,18 +18,18 @@ void     cfg_set_bool(const char *key, gboolean value);
 void     cfg_set_int(const char *key, int value);
 void     cfg_set_double(const char *key, double value);
 void     cfg_set_string(const char *key, const char *value);
-/* Ghi nhiều khoá trong một lần (một lần ghi file -> các tiến trình theo dõi chỉ nạp lại một lần). */
+/* Write several keys at once (one file write -> watching processes reload only once). */
 GKeyFile *cfg_begin(void);
-void      cfg_commit(GKeyFile *kf);     /* lưu + giải phóng */
+void      cfg_commit(GKeyFile *kf);     /* save + free */
 
-/* ---- giao diện ---- */
+/* ---- UI ---- */
 GtkWidget *settings_window(void);
 void       settings_status(const char *fmt, ...) G_GNUC_PRINTF(1, 2);
 GtkWidget *page_base(void);
 GtkWidget *section(const char *title);
 GtkWidget *row_box(const char *title, const char *description, GtkWidget *control);
 GtkWidget *info_label(const char *text);
-GtkWidget *card_new(void);                 /* GtkListBox dạng thẻ, không chọn hàng */
+GtkWidget *card_new(void);                 /* card-style GtkListBox, rows not selectable */
 void       card_clear(GtkWidget *card);
 GtkWidget *card_placeholder(const char *text);
 GtkWidget *icon_button(const char *icon_name, const char *tooltip);
@@ -37,13 +37,13 @@ void       message_dialog(GtkMessageType type, const char *title, const char *de
 gboolean   have_program(const char *name);
 void       launch_candidates(const char *const *commands);
 
-/* ---- chạy lệnh bất đồng bộ (không bao giờ chặn giao diện) ---- */
+/* ---- asynchronous commands (never block the UI) ---- */
 typedef void (*SettingsRunCb)(gboolean ok, int exit_status, const char *out, const char *err, gpointer data);
-/* stdin_text != NULL: ghi vào stdin của tiến trình (vd. mật khẩu cho `nmcli --ask`) */
+/* stdin_text != NULL: written to the process's stdin (e.g. the password for `nmcli --ask`) */
 void run_argv_async(const char *const *argv, const char *stdin_text, int timeout_sec, SettingsRunCb cb, gpointer data);
 void run_shell_async(const char *script, SettingsRunCb cb, gpointer data);
 
-/* ---- các trang ---- */
+/* ---- pages ---- */
 GtkWidget *page_network_new(void);
 GtkWidget *page_bluetooth_new(void);
 GtkWidget *page_appearance_new(void);
@@ -51,10 +51,10 @@ GtkWidget *page_windows_new(void);
 GtkWidget *page_keyboard_new(void);
 GtkWidget *page_sound_new(void);
 
-/* Áp các thiết lập cần chạy lại mỗi lần đăng nhập (bàn phím, lặp phím, tắt màn hình, ...).
- * Gọi bởi `hde-settings --apply` (hde-session chạy khi khởi động) và khi người dùng đổi giá trị. */
+/* Apply the settings that must be re-applied at every login (keyboard, key repeat, screen blanking, ...).
+ * Called by `hde-settings --apply` (run by hde-session at startup) and when the user changes a value. */
 void apply_keyboard_settings(void);
-/* Đổi Light/Dark cho toàn hệ thống (dùng bởi trang Appearance và `hde-settings --style dark|light`). */
+/* Switch Light/Dark system-wide (used by the Appearance page and `hde-settings --style dark|light`). */
 void appearance_apply_style(gboolean dark);
 void apply_power_settings(void);
 void apply_input_settings(void);

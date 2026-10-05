@@ -1,5 +1,5 @@
-/* Hyggshi Settings — trang Keyboard & Shortcuts.
- * Các công tắc phím tắt được hde-hotkeys đọc từ settings.ini và áp dụng ngay (nó tự nạp lại khi file đổi). */
+/* Hyggshi Settings — Keyboard & Shortcuts page.
+ * The shortcut switches are read from settings.ini by hde-hotkeys and apply immediately (it reloads when the file changes). */
 #include "hde-settings.h"
 
 static guint apply_id;
@@ -38,7 +38,7 @@ static void on_layout(GtkComboBox *c, gpointer d)
 {
     (void)d;
     int i = gtk_combo_box_get_active(c);
-    if (i == 4) {      /* Custom…: để công cụ khác (fcitx, setxkbmap trong ~/.xprofile) quản lý */
+    if (i == 4) {      /* Custom…: leave it to other tools (fcitx, setxkbmap in ~/.xprofile) */
         GKeyFile *kf = cfg_begin();
         g_key_file_remove_key(kf, CONFIG_GROUP, "keyboard_layout", NULL);
         cfg_commit(kf);

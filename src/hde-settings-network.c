@@ -1,11 +1,11 @@
-/* Hyggshi Settings — trang Network: danh sách Wi-Fi thật qua NetworkManager (nmcli).
+/* Hyggshi Settings — Network page: real Wi-Fi list through NetworkManager (nmcli).
  *
- * - Liệt kê mạng Wi-Fi xung quanh (gộp theo SSID, lấy AP mạnh nhất): sóng, bảo mật, đang kết nối, đã lưu.
- * - Kết nối: mạng mở / đã lưu kết nối thẳng; mạng có mật khẩu thì hỏi mật khẩu. Mật khẩu được đưa vào
- *   `nmcli --ask` qua STDIN (không nằm trên dòng lệnh nên không lộ trong `ps` / /proc/<pid>/cmdline).
- * - Ngắt kết nối, quên mạng, kết nối mạng ẩn, bật/tắt Wi-Fi, quét lại.
- * - Thiết bị khác (Ethernet, VPN, ...) và nút mở nm-connection-editor cho cấu hình nâng cao.
- * Mọi lệnh chạy bất đồng bộ nên giao diện không bao giờ bị treo khi quét.
+ * - Lists nearby Wi-Fi networks (grouped by SSID, strongest AP kept): signal, security, connected, saved.
+ * - Connect: open / saved networks connect directly; secured networks ask for the password. The password is fed to
+ *   `nmcli --ask` through STDIN (never on the command line, so it cannot leak via `ps` / /proc/<pid>/cmdline).
+ * - Disconnect, forget a network, connect to a hidden network, Wi-Fi on/off, rescan.
+ * - Other devices (Ethernet, VPN, ...) and a button that opens nm-connection-editor for advanced settings.
+ * Every command runs asynchronously, so the UI never freezes while scanning.
  */
 #include "hde-settings.h"
 #include <string.h>
@@ -13,7 +13,7 @@
 
 typedef struct {
     char *ssid;
-    char *security;     /* "" = mạng mở */
+    char *security;     /* "" = open network */
     char *device;
     int signal;
     gboolean in_use;
@@ -23,9 +23,9 @@ typedef struct {
 static GtkWidget *wifi_switch, *wifi_title_desc, *wifi_card, *wifi_spinner, *wifi_state;
 static GtkWidget *scan_btn, *hidden_btn, *dev_card, *nm_missing_box, *wifi_box;
 static GPtrArray *nets;                 /* WifiNet* */
-static GHashTable *saved_names;         /* tên các kết nối Wi-Fi đã lưu */
-static char *wifi_iface;                /* thiết bị Wi-Fi đầu tiên */
-static char *wifi_active_conn;          /* tên kết nối Wi-Fi đang dùng */
+static GHashTable *saved_names;         /* names of the saved Wi-Fi connections */
+static char *wifi_iface;                /* first Wi-Fi device */
+static char *wifi_active_conn;          /* name of the active Wi-Fi connection */
 static gboolean list_busy, connect_busy, dialog_open, no_rescan_opt, page_mapped;
 static guint refresh_timer;
 
@@ -39,7 +39,7 @@ static void wifi_net_free(gpointer p)
     g_free(n);
 }
 
-/* nmcli -t -e yes: tách theo ':' chưa escape, bỏ escape "\:" và "\\". */
+/* nmcli -t -e yes: split on unescaped ':', unescape "\:" and "\\". */
 static char **split_terse(const char *line)
 {
     GPtrArray *a = g_ptr_array_new();
@@ -87,7 +87,7 @@ static void set_busy(const char *text)
     gtk_widget_set_sensitive(scan_btn, !text);
 }
 
-/* ================= kết nối ================= */
+/* ================= connecting ================= */
 typedef struct {
     char *ssid, *security, *device;
     gboolean hidden, was_saved;
@@ -109,7 +109,7 @@ static void on_show_password(GtkToggleButton *t, gpointer entry)
 static gboolean password_valid(const char *pw, const char *security)
 {
     size_t n = strlen(pw);
-    if (is_wep_only(security)) return n >= 1;              /* WEP: khoá 5/13 ký tự, hex 10/26 hoặc passphrase */
+    if (is_wep_only(security)) return n >= 1;              /* WEP: 5/13-character key, 10/26 hex digits or a passphrase */
     if (is_secured(security)) return n >= 8 && n <= 64;    /* WPA/WPA2/WPA3-Personal */
     return n >= 1;
 }
@@ -121,7 +121,7 @@ static void on_pw_changed(GtkEditable *e, gpointer dlg)
                                       password_valid(gtk_entry_get_text(GTK_ENTRY(e)), sec));
 }
 
-/* Hộp thoại mật khẩu (modal). Trả về mật khẩu (g_free) hoặc NULL nếu huỷ. */
+/* Password dialog (modal). Returns the password (g_free) or NULL if cancelled. */
 static char *ask_password(const char *ssid, const char *security, const char *error_text)
 {
     dialog_open = TRUE;
@@ -226,7 +226,7 @@ static void on_connect_done(gboolean ok, int status, const char *out, const char
             start_connect(c);
             return;
         }
-        if (!c->was_saved) delete_leftover(c->ssid);   /* người dùng huỷ: không để lại hồ sơ hỏng */
+        if (!c->was_saved) delete_leftover(c->ssid);   /* the user cancelled: do not leave a broken profile behind */
         settings_status("Connection to “%s” cancelled", c->ssid);
     } else {
         char *detail = g_strdup(err && *err ? err : "NetworkManager could not activate the connection.");
@@ -291,14 +291,14 @@ static void connect_network(const char *ssid, const char *security, const char *
     c->security = g_strdup(security ? security : "");
     c->device = g_strdup(device);
     c->was_saved = saved;
-    if (is_secured(c->security) && !saved) {        /* mạng mới có mật khẩu: hỏi trước */
+    if (is_secured(c->security) && !saved) {        /* new secured network: ask for the password first */
         c->password = ask_password(c->ssid, c->security, NULL);
         if (!c->password) { connect_ctx_free(c); return; }
     }
     start_connect(c);
 }
 
-/* ================= hành động trên từng mạng ================= */
+/* ================= per-network actions ================= */
 static void on_simple_done(gboolean ok, int status, const char *out, const char *err, gpointer data)
 {
     (void)status; (void)out;
@@ -335,7 +335,7 @@ static void on_forget_clicked(GtkButton *b, gpointer d)
     (void)d;
     WifiNet *n = g_object_get_data(G_OBJECT(b), "hde-net");
     if (!n) return;
-    /* chép chuỗi trước khi mở hộp thoại: danh sách có thể được làm mới trong lúc chờ */
+    /* copy the strings before opening the dialog: the list may be refreshed while waiting */
     char *ssid = g_strdup(n->ssid);
     char *name = g_strdup(n->in_use && wifi_active_conn ? wifi_active_conn : n->ssid);
     dialog_open = TRUE;
@@ -362,7 +362,7 @@ static void on_row_activated(GtkListBox *lb, GtkListBoxRow *row, gpointer d)
     if (n && !n->in_use) connect_network(n->ssid, n->security, n->device, n->saved);
 }
 
-/* ================= vẽ danh sách ================= */
+/* ================= drawing the list ================= */
 static gint cmp_net(gconstpointer a, gconstpointer b)
 {
     const WifiNet *x = *(WifiNet *const *)a, *y = *(WifiNet *const *)b;
@@ -461,12 +461,12 @@ static void render_list(int hidden_count)
     g_free(hid);
 }
 
-/* ================= đọc dữ liệu từ nmcli ================= */
+/* ================= reading data from nmcli ================= */
 static void on_wifi_list(gboolean ok, int status, const char *out, const char *err, gpointer data)
 {
     (void)status;
     gboolean rescan = GPOINTER_TO_INT(data);
-    if (!ok && !no_rescan_opt && err && strstr(err, "rescan")) {   /* nmcli < 1.12 không có --rescan */
+    if (!ok && !no_rescan_opt && err && strstr(err, "rescan")) {   /* nmcli < 1.12 has no --rescan */
         no_rescan_opt = TRUE;
         load_wifi_list(rescan);
         return;
@@ -514,7 +514,7 @@ static void on_wifi_list(gboolean ok, int status, const char *out, const char *e
     render_list(hidden);
 }
 
-/* bước cuối của refresh_all (list_busy đã được đặt) */
+/* last step of refresh_all (list_busy is already set) */
 static void load_wifi_list(gboolean rescan)
 {
     if (rescan) set_busy("Scanning for networks…");
@@ -643,7 +643,7 @@ static void refresh_all(gboolean rescan)
     run_argv_async(argv, NULL, 10, on_radio, GINT_TO_POINTER(rescan));
 }
 
-/* ================= điều khiển ================= */
+/* ================= controls ================= */
 static gboolean refresh_later(gpointer d)
 {
     refresh_all(GPOINTER_TO_INT(d));

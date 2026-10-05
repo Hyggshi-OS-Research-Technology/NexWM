@@ -82,7 +82,7 @@ static void load_config(void)
         wallpaper_mode = CLAMP(g_key_file_get_integer(kf, "desktop", "wallpaper_mode", NULL), 0, 3);
     }
     if (!wp) {
-        /* Bản Settings cũ chỉ lưu wallpaper vào settings.ini */
+        /* The old Settings only saved the wallpaper in settings.ini */
         GKeyFile *sk = g_key_file_new();
         char *sp = hde_settings_ini_path();
         if (g_key_file_load_from_file(sk, sp, G_KEY_FILE_NONE, NULL))
@@ -120,10 +120,10 @@ static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
         double pw = gdk_pixbuf_get_width(wallpaper), ph = gdk_pixbuf_get_height(wallpaper);
         double sx, sy;
         switch (wallpaper_mode) {
-        case 1:  sx = sy = MIN(W / pw, H / ph); break;          /* Fit: thấy trọn ảnh */
+        case 1:  sx = sy = MIN(W / pw, H / ph); break;          /* Fit: the whole image is visible */
         case 2:  sx = W / pw; sy = H / ph; break;                /* Stretch */
-        case 3:  sx = sy = 1.0; break;                           /* Center: giữ kích thước gốc */
-        default: sx = sy = MAX(W / pw, H / ph); break;           /* Fill: phủ kín, cắt phần thừa */
+        case 3:  sx = sy = 1.0; break;                           /* Center: keep the original size */
+        default: sx = sy = MAX(W / pw, H / ph); break;           /* Fill: cover the screen, crop the excess */
         }
         if (wallpaper_mode == 1 || wallpaper_mode == 3) {
             cairo_set_source_rgb(cr, 0.10, 0.12, 0.16);
@@ -144,7 +144,7 @@ static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
         cairo_paint(cr);
         cairo_pattern_destroy(g);
     }
-    return FALSE;   /* tiếp tục vẽ các icon con */
+    return FALSE;   /* keep drawing the child icons */
 }
 
 /* ---------- icons ---------- */
@@ -165,7 +165,7 @@ static void activate_target(const char *path)
     char *uri = g_filename_to_uri(path, NULL, NULL);
     if (!uri) return;
     if (!g_app_info_launch_default_for_uri(uri, NULL, &err)) {
-        /* Không có handler mặc định (ISO tối giản): thử xdg-open / file manager. */
+        /* No default handler (minimal ISO): try xdg-open / a file manager. */
         g_printerr("hde-desktop: no default handler for %s: %s\n", uri, err->message);
         g_clear_error(&err);
         const char *openers[] = { "xdg-open", "thunar", "pcmanfm", "nautilus", "dolphin", NULL };
@@ -213,8 +213,8 @@ static void save_icon_position(GtkWidget *ev)
     g_key_file_free(kf);
 }
 
-/* Tự nhận diện double-click thay vì chỉ dựa vào GDK_2BUTTON_PRESS: GDK bỏ qua
- * double-click nếu chuột lệch >5px hoặc dưới Xephyr/touchpad nên icon "không bấm được". */
+/* Detect double-clicks ourselves instead of relying only on GDK_2BUTTON_PRESS: GDK drops a
+ * double-click if the pointer moves >5px, or under Xephyr/touchpads, so icons felt "unclickable". */
 static GtkWidget *last_press_icon = NULL;
 static guint32    last_press_time = 0;
 static gdouble    last_press_x = 0, last_press_y = 0;
@@ -238,7 +238,7 @@ static gboolean on_icon_press(GtkWidget *ev, GdkEventButton *e, gpointer data)
     select_icon(ev);
 
     if (e->type == GDK_2BUTTON_PRESS) {
-        /* Đã mở bởi nhánh tự nhận diện ở lần nhấn thứ 2 thì bỏ qua. */
+        /* Already opened by the self-detection branch on the 2nd press: ignore. */
         if (e->time != last_activate_time && e->time - last_activate_time > 50)
             launch_icon(ev, e->time);
         return TRUE;
@@ -488,7 +488,7 @@ static void reload_icons(void)
         idx++; \
     } while (0)
 
-    /* Thư mục Home luôn có */
+    /* The Home folder is always present */
     GIcon *home_icon = g_themed_icon_new("user-home");
     GtkWidget *home = make_icon("Home", home_icon, g_get_home_dir());
     g_object_unref(home_icon);
@@ -1132,7 +1132,7 @@ static void on_dir_changed(GFileMonitor *m, GFile *f, GFile *o, GFileMonitorEven
     reload_icons();
 }
 
-/* Settings > Appearance ghi hình nền vào config.ini: nạp lại ngay khi file đổi. */
+/* Settings > Appearance writes the wallpaper to config.ini: reload as soon as the file changes. */
 static guint config_reload_id;
 static gboolean config_reload(gpointer d)
 {
@@ -1154,7 +1154,7 @@ static void load_css(void)
     const char *css =
         ".desk-icon { border: 1px solid transparent; border-radius: 8px; padding: 2px; }"
         ".desk-icon label, .desk-icon label:backdrop { color: white; text-shadow: 1px 1px 2px black, 0 0 4px black; }"
-        /* icon dạng symbolic lấy màu chữ: giữ sáng cả khi desktop không có focus (:backdrop) */
+        /* symbolic icons use the text color: keep them bright even when the desktop is unfocused (:backdrop) */
         ".desk-icon image, .desk-icon image:backdrop { color: #eef1f6; -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.65); }"
         ".desk-icon.selected { background: rgba(61,111,217,0.52); border: 2px solid rgba(125,175,255,0.95); border-radius: 8px; box-shadow: 0 0 0 1px rgba(20,50,100,0.65), 0 2px 8px rgba(0,0,0,0.28); }"
         ".desk-icon.selected label { color: #ffffff; font-weight: 600; }"
@@ -1169,7 +1169,7 @@ static void load_css(void)
 int main(int argc, char **argv)
 {
     gtk_init(&argc, &argv);
-    hde_theme_apply_process();          /* menu chuột phải / hộp thoại theo Dark mode */
+    hde_theme_apply_process();          /* right-click menu / dialogs follow Dark mode */
     hde_theme_watch(NULL, NULL);
     load_css();
 
@@ -1188,7 +1188,7 @@ int main(int argc, char **argv)
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
     gtk_window_stick(GTK_WINDOW(win));
-    gtk_window_set_keep_below(GTK_WINDOW(win), TRUE);   /* không bao giờ đè lên panel/cửa sổ khác */
+    gtk_window_set_keep_below(GTK_WINDOW(win), TRUE);   /* never on top of the panel / other windows */
     gtk_widget_set_size_request(win, sw, sh);
     gtk_window_set_default_size(GTK_WINDOW(win), sw, sh);
     gtk_window_move(GTK_WINDOW(win), 0, 0);
@@ -1229,7 +1229,7 @@ int main(int argc, char **argv)
     }
 
     gtk_widget_show_all(win);
-    gdk_window_lower(gtk_widget_get_window(win));         /* kể cả khi không có WM hoặc WM bỏ qua DESKTOP hint */
+    gdk_window_lower(gtk_widget_get_window(win));         /* even without a WM, or when the WM ignores the DESKTOP hint */
     gtk_main();
     return 0;
 }

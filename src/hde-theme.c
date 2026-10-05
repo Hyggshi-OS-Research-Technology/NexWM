@@ -1,4 +1,4 @@
-/* hde-theme.c — Dark mode / theme dùng chung (xem hde-theme.h). */
+/* hde-theme.c — shared Dark mode / theme (see hde-theme.h). */
 #include "hde-theme.h"
 #include <string.h>
 
@@ -66,10 +66,10 @@ gboolean hde_theme_shell_dark(void)
     return dark;
 }
 
-/* ---------- áp cho tiến trình hiện tại ---------- */
+/* ---------- apply to the current process ---------- */
 static void set_or_reset_string(GtkSettings *s, const char *prop, const char *value, char **cache)
 {
-    if (g_strcmp0(value, *cache) == 0) return;          /* tránh nạp lại CSS theme khi không đổi */
+    if (g_strcmp0(value, *cache) == 0) return;          /* avoid reloading the theme CSS when nothing changed */
     if (value) g_object_set(s, prop, value, NULL);
     else gtk_settings_reset_property(s, prop);
     g_free(*cache);
@@ -97,7 +97,7 @@ void hde_theme_apply_process(void)
     hde_theme_info_clear(&i);
 }
 
-/* ---------- theo dõi settings.ini ---------- */
+/* ---------- watching settings.ini ---------- */
 typedef struct { HdeThemeChangedFunc func; gpointer data; } Watcher;
 static GSList *watchers;
 static GFileMonitor *ini_monitor;
@@ -143,7 +143,7 @@ void hde_theme_watch(HdeThemeChangedFunc func, gpointer user_data)
     g_free(path);
 }
 
-/* ---------- tìm theme đã cài ---------- */
+/* ---------- finding installed themes ---------- */
 static GPtrArray *search_dirs(const char *sub, const char *legacy_home)
 {
     GPtrArray *a = g_ptr_array_new_with_free_func(g_free);
@@ -168,7 +168,7 @@ static gboolean gtk3_dir_has_theme(const char *themedir)
 
 static gboolean gtk3_theme_exists(const char *name)
 {
-    if (!g_strcmp0(name, "Adwaita") || !g_strcmp0(name, "HighContrast")) return TRUE;   /* có sẵn trong libgtk */
+    if (!g_strcmp0(name, "Adwaita") || !g_strcmp0(name, "HighContrast")) return TRUE;   /* built into libgtk */
     GPtrArray *dirs = search_dirs("themes", ".themes");
     gboolean found = FALSE;
     for (guint i = 0; i < dirs->len && !found; i++) {
@@ -190,7 +190,7 @@ gboolean hde_theme_name_is_dark(const char *name)
     return r;
 }
 
-/* gnome-themes-extra cung cấp Adwaita-dark; máy chưa cài thì tạo bản tương đương (1 dòng @import). */
+/* gnome-themes-extra provides Adwaita-dark; if it is not installed, create an equivalent (a one-line @import). */
 static void ensure_adwaita_dark(void)
 {
     if (gtk3_theme_exists("Adwaita-dark")) return;
@@ -200,7 +200,7 @@ static void ensure_adwaita_dark(void)
     char *css = g_build_filename(dir, "gtk.css", NULL);
     char *idx = g_build_filename(base, "index.theme", NULL);
     g_file_set_contents(css,
-        "/* Tạo bởi HDE: biến thể tối của Adwaita (giống gói gnome-themes-extra). */\n"
+        "/* Created by HDE: dark variant of Adwaita (like the gnome-themes-extra package). */\n"
         "@import url(\"resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained-dark.css\");\n", -1, NULL);
     g_file_set_contents(idx,
         "[Desktop Entry]\nType=X-GNOME-Metatheme\nName=Adwaita-dark\nComment=Adwaita dark (HDE)\n"
@@ -241,7 +241,7 @@ char *hde_theme_resolve_name(HdeStyle style, const char *base)
             g_free(b);
             return g_strdup("Adwaita-dark");
         }
-        return b;      /* không có biến thể riêng: gtk-application-prefer-dark-theme nạp gtk-dark.css */
+        return b;      /* no dedicated variant: gtk-application-prefer-dark-theme loads gtk-dark.css */
     }
     if (hde_theme_name_is_dark(b)) {
         char *light = strip_dark(b);
@@ -288,7 +288,7 @@ static void update_gtk_ini(const char *subdir, const HdeThemeInfo *info, gboolea
 void hde_theme_write_system(const HdeThemeInfo *info)
 {
     update_gtk_ini("gtk-3.0", info, TRUE);
-    update_gtk_ini("gtk-4.0", info, FALSE);  /* GTK4/libadwaita đọc chế độ tối từ GSettings color-scheme */
+    update_gtk_ini("gtk-4.0", info, FALSE);  /* GTK4/libadwaita read dark mode from the GSettings color-scheme */
 
     GSettingsSchemaSource *src = g_settings_schema_source_get_default();
     GSettingsSchema *schema = src ? g_settings_schema_source_lookup(src, "org.gnome.desktop.interface", TRUE) : NULL;
@@ -361,7 +361,7 @@ gchar **hde_theme_list_icon_themes(void)
             if (g_key_file_load_from_file(kf, idx, G_KEY_FILE_NONE, NULL) &&
                 g_key_file_has_key(kf, "Icon Theme", "Directories", NULL) &&
                 !g_key_file_get_boolean(kf, "Icon Theme", "Hidden", NULL))
-                g_hash_table_add(seen, g_strdup(n));          /* theme chỉ có con trỏ chuột không có Directories */
+                g_hash_table_add(seen, g_strdup(n));          /* cursor-only themes have no Directories */
             g_key_file_free(kf);
             g_free(idx);
         }

@@ -1,12 +1,12 @@
-/* hde-notify: trình nền thông báo freedesktop (org.freedesktop.Notifications) chạy trong hde-panel.
+/* hde-notify: freedesktop notification daemon (org.freedesktop.Notifications) running inside hde-panel.
  *
- * - Popup xếp chồng ở góc dưới-phải, phía trên panel; tối đa MAX_POPUPS cái cùng lúc.
- * - Hỗ trợ: body markup (b/i/u), ảnh (image-data / image-path / icon_data), app_icon, desktop-entry,
- *   nút hành động + hành động "default" (bấm vào thông báo), urgency, resident, transient,
- *   replaces_id, CloseNotification, âm báo (sound-file / sound-name / suppress-sound).
- * - Di chuột lên popup thì tạm dừng đếm giờ.
- * - Do Not Disturb (dnd=true) / notification_popups=false: không hiện popup (trừ mức critical),
- *   thông báo vẫn vào lịch sử ở nút chuông.
+ * - Popups stack up in the bottom-right corner, above the panel; at most MAX_POPUPS at a time.
+ * - Supports: body markup (b/i/u), images (image-data / image-path / icon_data), app_icon, desktop-entry,
+ *   action buttons + the "default" action (clicking the notification), urgency, resident, transient,
+ *   replaces_id, CloseNotification, sounds (sound-file / sound-name / suppress-sound).
+ * - Hovering a popup pauses its timer.
+ * - Do Not Disturb (dnd=true) / notification_popups=false: no popups (except critical ones),
+ *   notifications still go to the history under the bell button.
  */
 #include "hde-notify.h"
 #include "hde-theme.h"
@@ -21,7 +21,7 @@
 
 #define POPUP_WIDTH      360
 #define POPUP_MARGIN     12
-#define PANEL_GAP        46       /* panel 34px + lề */
+#define PANEL_GAP        46       /* 34px panel + margin */
 #define MAX_POPUPS       4
 #define MAX_HISTORY      50
 #define DEFAULT_TIMEOUT  6000
@@ -36,16 +36,16 @@ typedef struct {
     GdkPixbuf *image;
     int urgency;                 /* 0 low, 1 normal, 2 critical */
     gboolean resident, transient;
-    int timeout_ms;              /* 0 = không tự hết hạn */
+    int timeout_ms;              /* 0 = never expires */
     gint64 time_us;
-    gboolean open;               /* chưa đóng (đang hiện hoặc đang chờ hết hạn) */
+    gboolean open;               /* not closed yet (showing or waiting to expire) */
     GtkWidget *popup;
     guint timer;
 } Notif;
 
 static GDBusConnection *bus;
 static guint32 next_id = 1;
-static GList *notifs;            /* mới nhất đứng đầu; gồm cả lịch sử */
+static GList *notifs;            /* newest first; includes the history */
 static guint unread;
 static GtkWidget *bell_btn, *bell_img, *bell_count;
 
@@ -53,7 +53,7 @@ static void notif_close(Notif *n, guint reason);
 static void relayout(void);
 static void bell_update(void);
 
-/* ---------------- cấu hình ---------------- */
+/* ---------------- configuration ---------------- */
 static gboolean cfg_bool(const char *key, gboolean def)
 {
     GKeyFile *kf = g_key_file_new();
@@ -91,7 +91,7 @@ static gboolean have(const char *bin)
     return p != NULL;
 }
 
-/* ---------------- vòng đời ---------------- */
+/* ---------------- lifecycle ---------------- */
 static void notif_free(Notif *n)
 {
     if (n->timer) g_source_remove(n->timer);
@@ -167,7 +167,7 @@ static void invoke_action(Notif *n, const char *key)
     if (!n->resident) notif_close(n, CLOSE_DISMISSED);
 }
 
-/* ---------------- nội dung ---------------- */
+/* ---------------- content ---------------- */
 static char *regex_replace(const char *pattern, const char *text, const char *repl)
 {
     GRegex *re = g_regex_new(pattern, G_REGEX_CASELESS | G_REGEX_DOTALL, 0, NULL);
@@ -176,7 +176,7 @@ static char *regex_replace(const char *pattern, const char *text, const char *re
     return out ? out : g_strdup(text);
 }
 
-/* Markup an toàn cho GtkLabel: giữ b/i/u..., bỏ img/a; markup hỏng thì hiện dạng chữ thường. */
+/* Safe markup for GtkLabel: keep b/i/u..., drop img/a; broken markup is shown as plain text. */
 static char *body_markup(const char *body)
 {
     if (!body || !*body) return NULL;
@@ -313,7 +313,7 @@ static GtkWidget *wrap_label(const char *markup, const char *css_class, gboolean
     GtkWidget *l = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(l), markup ? markup : "");
     gtk_label_set_xalign(GTK_LABEL(l), 0);
-    gtk_label_set_max_width_chars(GTK_LABEL(l), 1);   /* để label theo bề rộng popup thay vì kéo giãn */
+    gtk_label_set_max_width_chars(GTK_LABEL(l), 1);   /* so the label follows the popup width instead of stretching it */
     gtk_widget_set_hexpand(l, TRUE);
     if (wrap) {
         gtk_label_set_line_wrap(GTK_LABEL(l), TRUE);
@@ -406,7 +406,7 @@ static void relayout(void)
     GdkRectangle geo = { 0, 0, 1024, 768 };
     if (m) gdk_monitor_get_geometry(m, &geo);
     int y = geo.y + geo.height - PANEL_GAP;
-    for (GList *l = notifs; l; l = l->next) {        /* mới nhất ở dưới cùng */
+    for (GList *l = notifs; l; l = l->next) {        /* newest at the bottom */
         Notif *n = l->data;
         if (!n->popup) continue;
         int h = 0;
@@ -509,7 +509,7 @@ static guint32 do_notify(const char *app_name, guint32 replaces_id, const char *
         n->image = pixbuf_from_path(ip);
         if (!n->image && ip && *ip && ip[0] != '/' && !g_str_has_prefix(ip, "file://")) {
             g_free(n->app_icon);
-            n->app_icon = g_strdup(ip);                      /* image-path cũng có thể là tên icon */
+            n->app_icon = g_strdup(ip);                      /* image-path may also be an icon name */
         }
     }
 
@@ -632,7 +632,7 @@ void hde_notify_init(void)
                    on_bus_acquired, on_name_acquired, on_name_lost, NULL, NULL);
 }
 
-/* ---------------- nút chuông trên panel ---------------- */
+/* ---------------- bell button on the panel ---------------- */
 static const char *first_icon(const char *const *names)
 {
     GtkIconTheme *t = gtk_icon_theme_get_default();

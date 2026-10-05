@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""xtool.py — trợ giúp kiểm thử HDE trong Xvfb (chỉ cần python3 + libX11, dùng ctypes).
+"""xtool.py — test helper for HDE in Xvfb (needs only python3 + libX11, uses ctypes).
 
-  xtool.py popups              số cửa sổ override-redirect đang hiện (menu, OSD, popup thông báo)
-  xtool.py xsettings           in các giá trị XSETTINGS đang được phát (name=value)
-  xtool.py root-window PROP    in XID trong thuộc tính WINDOW PROP của root (0 nếu không có)
+  xtool.py popups              number of visible override-redirect windows (menus, OSD, notification popups)
+  xtool.py xsettings           print the XSETTINGS values currently published (name=value)
+  xtool.py root-window PROP    print the XID stored in the WINDOW property PROP of the root window (0 if absent)
 """
 import ctypes
 import ctypes.util

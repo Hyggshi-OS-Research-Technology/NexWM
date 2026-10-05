@@ -1,5 +1,5 @@
-/* Hyggshi Settings — trang Sound: âm lượng / tắt tiếng / micro / thiết bị ra thật
- * (PulseAudio hoặc PipeWire qua pactl, PipeWire thuần qua wpctl, ALSA qua amixer). */
+/* Hyggshi Settings — Sound page: real volume / mute / microphone / output device
+ * (PulseAudio or PipeWire via pactl, plain PipeWire via wpctl, ALSA via amixer). */
 #include "hde-settings.h"
 #include "hde-commands.h"
 #include <stdio.h>
@@ -152,7 +152,7 @@ static void on_output(GtkComboBox *c, gpointer d)
     const char *id = gtk_combo_box_get_active_id(c);
     if (!id) return;
     char *q = g_shell_quote(id);
-    /* đổi thiết bị mặc định và chuyển luôn các luồng đang phát sang đó */
+    /* change the default device and also move the streams that are playing to it */
     char *cmd = g_strdup_printf("pactl set-default-sink %s && for i in $(pactl list short sink-inputs 2>/dev/null | cut -f1); "
                                 "do pactl move-sink-input \"$i\" %s; done; exit 0", q, q);
     run_shell_async(cmd, on_sink_set, NULL);

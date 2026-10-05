@@ -12,11 +12,11 @@ WNCK_CFLAGS:=$(shell pkg-config --cflags libwnck-3.0 x11 2>/dev/null)
 WNCK_LIBS:=$(shell pkg-config --libs libwnck-3.0 x11 2>/dev/null)
 GLIBX_CFLAGS:=$(shell pkg-config --cflags glib-2.0 x11 2>/dev/null)
 GLIBX_LIBS:=$(shell pkg-config --libs glib-2.0 x11 2>/dev/null || echo "-lglib-2.0 -lX11")
-# XInput2 (libxi-dev): cần để phím Super mở Start menu. Thiếu thì hde-hotkeys vẫn build, chỉ không có Super.
+# XInput2 (libxi-dev): needed for the Super key to open the Start menu. Without it hde-hotkeys still builds, just without Super.
 XI_CFLAGS:=$(shell pkg-config --exists xi 2>/dev/null && echo "-DHAVE_XI2 `pkg-config --cflags xi`")
 XI_LIBS:=$(shell pkg-config --libs xi 2>/dev/null)
 
-# Cờ cho các chương trình GTK trong src/
+# Flags for the GTK programs in src/
 GUI_CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE
 
@@ -31,8 +31,8 @@ PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsetting
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
-# Desktop / panel / settings thật (GTK3) nằm trong src/. Build vào build/ để hde-session
-# (tìm cạnh chính nó trước) dùng đúng bản mới, không rơi về bản cũ trong /usr/local/bin.
+# The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
+# (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
@@ -56,7 +56,7 @@ $(BUILD)/hde-session: apps/hde-session.c src/hde-wm.h $(CORE_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 backend/x11/x11_backend.o: src/hde-commands.h
 
-# Kiểm thử khói: chạy cả phiên HDE trong Xvfb (cần xvfb, xdotool, dbus-x11). Xem tests/smoke.sh
+# Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
 check: all
 	BUILD=$(BUILD) sh tests/smoke.sh
 
@@ -71,14 +71,14 @@ install: all
 	install -m755 $(BUILD)/hde-session $(DESTDIR)$(PREFIX)/bin/hde-session
 	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings; do \
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
-	  else echo "WARNING: $(BUILD)/$$b missing (thiếu libgtk-3-dev / libwnck-3-dev / libxi-dev?)"; fi; done
+	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hyggshi-settings.desktop > $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop
 	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop
-# Build xong muốn thấy bản mới MÀ KHÔNG PHẢI LOGOUT:
-#   make dev                     chạy lại desktop+panel+hotkeys+xsettings từ ./build (không cần cài)
-#   sudo make install && make reload   cài vào $(PREFIX) rồi bảo hde-session chạy lại desktop+panel
+# To see a new build WITHOUT LOGGING OUT:
+#   make dev                     restart desktop+panel+hotkeys+xsettings from ./build (no install needed)
+#   sudo make install && make reload   install into $(PREFIX), then ask hde-session to restart desktop+panel
 dev: all
 	-pkill -u $$(id -u) -x hde-panel
 	-pkill -u $$(id -u) -x hde-desktop

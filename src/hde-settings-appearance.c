@@ -1,14 +1,14 @@
-/* Hyggshi Settings — trang Appearance: Dark mode, theme GTK, màu nhấn, icon, font, hình nền.
+/* Hyggshi Settings — Appearance page: Dark mode, GTK theme, accent color, icons, font, wallpaper.
  *
- * Chọn Light / Dark sẽ:
- *   1. ghi theme_index / gtk_theme / gtk_theme_effective vào ~/.config/hde/settings.ini
- *      -> hde-panel, hde-desktop, hde-settings đổi giao diện ngay (theo dõi file)
- *      -> hde-xsettings phát Net/ThemeName mới -> MỌI ứng dụng GTK đang chạy đổi theme ngay
- *   2. ghi ~/.config/gtk-3.0/settings.ini (gtk-theme-name, gtk-application-prefer-dark-theme)
- *      cho ứng dụng mở sau này / khi không có hde-xsettings
- *   3. đặt GSettings org.gnome.desktop.interface color-scheme / gtk-theme (GTK4, libadwaita, portal)
- * Biến thể tối được tìm tự động (Yaru -> Yaru-dark, Arc -> Arc-Dark, ...); Adwaita-dark được tạo nếu máy
- * chưa có gói gnome-themes-extra.
+ * Choosing Light / Dark:
+ *   1. writes theme_index / gtk_theme / gtk_theme_effective to ~/.config/hde/settings.ini
+ *      -> hde-panel, hde-desktop, hde-settings switch their look immediately (they watch the file)
+ *      -> hde-xsettings publishes the new Net/ThemeName -> EVERY running GTK application switches theme at once
+ *   2. writes ~/.config/gtk-3.0/settings.ini (gtk-theme-name, gtk-application-prefer-dark-theme)
+ *      for applications started later / when hde-xsettings is not running
+ *   3. sets GSettings org.gnome.desktop.interface color-scheme / gtk-theme (GTK4, libadwaita, portal)
+ * The dark variant is found automatically (Yaru -> Yaru-dark, Arc -> Arc-Dark, ...); Adwaita-dark is created when
+ * the gnome-themes-extra package is not installed.
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
@@ -46,12 +46,12 @@ static char *base_theme(void)
     if (b && *b) return b;
     g_free(b);
     char *cur = hde_theme_current_gtk3();
-    char *light = hde_theme_resolve_name(HDE_STYLE_LIGHT, cur);   /* bỏ hậu tố -dark nếu có */
+    char *light = hde_theme_resolve_name(HDE_STYLE_LIGHT, cur);   /* strip the -dark suffix if present */
     g_free(cur);
     return light;
 }
 
-/* Áp style + theme gốc cho toàn hệ thống. */
+/* Apply style + base theme system-wide. */
 static void apply_style(HdeStyle style, const char *base)
 {
     char *eff = hde_theme_resolve_name(style, base);
@@ -146,7 +146,7 @@ static void on_font(GtkFontButton *b, gpointer d)
     g_free(font);
 }
 
-/* hde-desktop đọc hình nền từ ~/.config/hde/config.ini [desktop] và tự nạp lại khi file đổi. */
+/* hde-desktop reads the wallpaper from ~/.config/hde/config.ini [desktop] and reloads it when the file changes. */
 static void desktop_config_set(const char *key, const char *str, int num)
 {
     char *path = g_build_filename(g_get_user_config_dir(), "hde", "config.ini", NULL);
@@ -198,7 +198,7 @@ static void on_wallpaper_mode(GtkComboBox *c, gpointer d)
 static GtkWidget *style_card(const char *title, gboolean dark, GtkWidget *group)
 {
     GtkWidget *rb = group ? gtk_radio_button_new_from_widget(GTK_RADIO_BUTTON(group)) : gtk_radio_button_new(NULL);
-    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(rb), FALSE);         /* vẽ như thẻ, không có chấm tròn */
+    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(rb), FALSE);         /* drawn as a card, without the radio dot */
     gtk_style_context_add_class(gtk_widget_get_style_context(rb), "style-card");
     GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     GtkWidget *pv = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -227,7 +227,7 @@ static GtkWidget *style_card(const char *title, gboolean dark, GtkWidget *group)
     return rb;
 }
 
-/* settings.ini đổi từ nơi khác (`hde-settings --style`, panel, ...): cập nhật giao diện, không áp lại */
+/* settings.ini changed elsewhere (`hde-settings --style`, panel, ...): update the UI, do not re-apply */
 static void on_external_change(gpointer d)
 {
     (void)d;

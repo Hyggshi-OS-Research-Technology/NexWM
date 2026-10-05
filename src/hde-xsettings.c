@@ -1,18 +1,18 @@
-/* hde-xsettings — trình quản lý XSETTINGS tối giản cho HDE.
+/* hde-xsettings — a minimal XSETTINGS manager for HDE.
  *
- * Giữ selection _XSETTINGS_S<n> và phát thuộc tính _XSETTINGS_SETTINGS theo đặc tả freedesktop
- * (https://specifications.freedesktop.org/xsettings-spec/). Mọi ứng dụng GTK2/3/4 (và Qt dùng
- * platform theme gtk) đọc các giá trị này và ĐỔI NGAY khi chúng thay đổi — nhờ vậy Dark mode, theme,
- * icon, font chọn trong Hyggshi Settings áp dụng tức thì cho cả ứng dụng đang mở.
+ * Owns the _XSETTINGS_S<n> selection and publishes the _XSETTINGS_SETTINGS property as specified by freedesktop
+ * (https://specifications.freedesktop.org/xsettings-spec/). Every GTK2/3/4 application (and Qt using the
+ * gtk platform theme) reads these values and SWITCHES IMMEDIATELY when they change — this is how Dark mode, theme,
+ * icons and font chosen in Hyggshi Settings apply instantly, even to applications that are already open.
  *
- * Nguồn giá trị (tự nạp lại khi file đổi, hoặc khi nhận SIGHUP):
+ * Value sources (reloaded automatically when a file changes, or on SIGHUP):
  *   ~/.config/hde/settings.ini  [settings] theme_index, gtk_theme_effective, icon_theme_name, font,
  *                                          scale, decoration_layout
  *   ~/.config/gtk-3.0/settings.ini [Settings] gtk-theme-name, gtk-icon-theme-name, gtk-font-name,
- *                                          gtk-cursor-theme-name, gtk-cursor-theme-size  (giá trị dự phòng)
+ *                                          gtk-cursor-theme-name, gtk-cursor-theme-size  (fallback values)
  *
- * Dùng: hde-xsettings [--replace]   (hde-session tự chạy; thoát nếu đã có trình quản lý khác,
- *       trừ khi có --replace)
+ * Usage: hde-xsettings [--replace]   (started by hde-session; exits if another manager is already running,
+ *        unless --replace is given)
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -75,7 +75,7 @@ static GKeyFile *load_kf(const char *a, const char *b)
     return kf;
 }
 
-static void add_string(GPtrArray *a, const char *name, char *value /* nhận quyền sở hữu */)
+static void add_string(GPtrArray *a, const char *name, char *value /* takes ownership */)
 {
     if (!value) return;
     XSetting *s = g_new0(XSetting, 1);
@@ -122,7 +122,7 @@ static GPtrArray *read_settings(void)
     add_string(a, "Gtk/DecorationLayout", layout ? layout : g_strdup("menu:minimize,maximize,close"));
     add_int(a, "Gtk/EnableAnimations", 1);
 
-    /* Settings > Display > Scale: 0=100% (không đặt, giữ Xft.dpi của người dùng), 1=125%, 2=150%, 3=200% */
+    /* Settings > Display > Scale: 0=100% (not set, keep the user's Xft.dpi), 1=125%, 2=150%, 3=200% */
     int scale = hde ? g_key_file_get_integer(hde, "settings", "scale", NULL) : 0;
     static const int dpi[] = { 0, 120, 144, 192 };
     if (scale > 0 && scale < 4) add_int(a, "Xft/DPI", dpi[scale] * 1024);
@@ -152,7 +152,7 @@ static void put_pad(GByteArray *b, gsize n)
 static void publish(GPtrArray *next)
 {
     serial++;
-    for (guint i = 0; i < next->len; i++) {           /* giữ last-change-serial cho giá trị không đổi */
+    for (guint i = 0; i < next->len; i++) {           /* keep last-change-serial for unchanged values */
         XSetting *n = next->pdata[i];
         XSetting *o = find_setting(current, n->name);
         gboolean same = o && o->type == n->type &&
@@ -161,7 +161,7 @@ static void publish(GPtrArray *next)
     }
     GByteArray *b = g_byte_array_new();
     union { guint32 i; guint8 c[4]; } probe = { 1 };
-    guint8 order = probe.c[0] == 1 ? LSBFirst : MSBFirst;     /* giá trị ghi theo thứ tự byte của máy */
+    guint8 order = probe.c[0] == 1 ? LSBFirst : MSBFirst;     /* values are written in the machine's byte order */
     guint8 hdr[4] = { order, 0, 0, 0 };
     g_byte_array_append(b, hdr, 4);
     put_card32(b, serial);
@@ -203,8 +203,8 @@ static Time server_time(void)
     return ev.xproperty.time;
 }
 
-/* "Chữ ký" của file: inode + kích thước + mtime tới nano-giây (đổi 2 lần trong cùng 1 giây vẫn nhận ra;
- * g_file_set_contents ghi bằng rename nên inode cũng đổi). */
+/* File "signature": inode + size + mtime in nanoseconds (catches 2 changes within the same second;
+ * g_file_set_contents writes via rename, so the inode changes too). */
 static guint64 file_sig(const char *a, const char *b)
 {
     char *path = g_build_filename(g_get_user_config_dir(), a, b, NULL);

@@ -1,4 +1,4 @@
-/* hde-search: ô tìm ứng dụng của Start menu. */
+/* hde-search: the app search box of the Start menu. */
 #include "hde-search.h"
 #include "hde-osd.h"
 #include <gio/gdesktopappinfo.h>
@@ -25,7 +25,7 @@ void hde_window_force_activate(GtkWidget *window, guint32 time)
     e.xclient.window = GDK_WINDOW_XID(gw);
     e.xclient.message_type = XInternAtom(d, "_NET_ACTIVE_WINDOW", False);
     e.xclient.format = 32;
-    e.xclient.data.l[0] = 2;            /* nguồn: pager -> WM không áp dụng chống-cướp-focus */
+    e.xclient.data.l[0] = 2;            /* source: pager -> the WM does not apply focus-stealing prevention */
     e.xclient.data.l[1] = (long)time;
     XSendEvent(d, DefaultRootWindow(d), False, SubstructureRedirectMask | SubstructureNotifyMask, &e);
     XFlush(d);

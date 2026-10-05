@@ -1,5 +1,5 @@
-/* hde-tray: system tray cho hde-panel
- *  - XEmbed (_NET_SYSTEM_TRAY_Sn): GtkStatusIcon và app cũ
+/* hde-tray: system tray for hde-panel
+ *  - XEmbed (_NET_SYSTEM_TRAY_Sn): GtkStatusIcon and older apps
  *  - StatusNotifierItem (org.kde.StatusNotifierWatcher) + com.canonical.dbusmenu: Electron, Telegram, nm-applet...
  */
 #include <gtk/gtk.h>
@@ -27,7 +27,7 @@ static GtkWidget *tray_box;
 static GDBusConnection *bus;
 static GHashTable *items;               /* key -> Item* */
 static GDBusNodeInfo *watcher_info;
-static gboolean is_watcher;             /* TRUE: hde-panel đang giữ tên watcher */
+static gboolean is_watcher;             /* TRUE: hde-panel holds the watcher name */
 
 /* =====================================================================
  *  XEmbed
@@ -41,7 +41,7 @@ static void xembed_dock(Window w)
     gtk_box_pack_start(GTK_BOX(tray_box), sock, FALSE, FALSE, 0);
     gtk_widget_show(sock);
     gtk_widget_realize(sock);
-    gtk_socket_add_id(GTK_SOCKET(sock), w);   /* plug-removed mặc định sẽ huỷ socket */
+    gtk_socket_add_id(GTK_SOCKET(sock), w);   /* the default plug-removed handler destroys the socket */
 }
 
 static GdkFilterReturn xembed_filter(GdkXEvent *xev, GdkEvent *ev, gpointer data)
@@ -106,7 +106,7 @@ typedef struct {
     char *key, *bus_name, *path, *menu_path;
     gboolean is_menu;
     int last_x, last_y;
-    GdkEvent *press;                 /* sự kiện chuột cuối, làm trigger cho popup menu */
+    GdkEvent *press;                 /* last mouse event, used as the trigger for the popup menu */
     GtkWidget *button, *image;
     guint sub_id, watch_id;
     GCancellable *cancel;
@@ -242,7 +242,7 @@ static void on_item_signal(GDBusConnection *c, const gchar *sender, const gchar 
 }
 
 /* ---------- menu (dbusmenu) ---------- */
-/* icon-name (tên theme hoặc đường dẫn tuyệt đối) hoặc icon-data (PNG) của mục menu */
+/* icon-name (theme name or absolute path) or icon-data (PNG) of a menu item */
 static GdkPixbuf *menu_icon(const char *name, GVariant *data)
 {
     GdkPixbuf *pb = NULL;
@@ -252,7 +252,7 @@ static GdkPixbuf *menu_icon(const char *name, GVariant *data)
         else {
             GtkIconTheme *th = gtk_icon_theme_get_default();
             pb = gtk_icon_theme_load_icon(th, name, MENU_ICON_SIZE, GTK_ICON_LOOKUP_FORCE_SIZE, NULL);
-            if (!pb && !g_str_has_suffix(name, "-symbolic")) {      /* theme chỉ có bản symbolic */
+            if (!pb && !g_str_has_suffix(name, "-symbolic")) {      /* the theme only has the symbolic variant */
                 char *sym = g_strconcat(name, "-symbolic", NULL);
                 pb = gtk_icon_theme_load_icon(th, sym, MENU_ICON_SIZE, GTK_ICON_LOOKUP_FORCE_SIZE, NULL);
                 g_free(sym);
@@ -303,7 +303,7 @@ static void fill_menu(Item *it, GtkWidget *menu, GVariant *kids)
     g_variant_iter_init(&iter, kids);
     while ((v = g_variant_iter_next_value(&iter))) {
         GVariant *c = g_variant_get_variant(v);
-        if (!g_variant_is_of_type(c, G_VARIANT_TYPE("(ia{sv}av)"))) {   /* app gửi dữ liệu sai kiểu */
+        if (!g_variant_is_of_type(c, G_VARIANT_TYPE("(ia{sv}av)"))) {   /* the app sent data of the wrong type */
             g_variant_unref(c); g_variant_unref(v);
             continue;
         }
@@ -402,7 +402,7 @@ static void on_layout(GObject *src, GAsyncResult *res, gpointer data)
         g_variant_unref(props); g_variant_unref(kids);
         g_variant_unref(layout);
     }
-    if (!shown && !r) call_xy(it, "ContextMenu");   /* app tự vẽ menu */
+    if (!shown && !r) call_xy(it, "ContextMenu");   /* the app draws its own menu */
     if (r) g_variant_unref(r);
     g_clear_error(&err);
     item_unref(it);
@@ -439,10 +439,10 @@ static gboolean on_btn_press(GtkWidget *w, GdkEventButton *e, gpointer data)
     return TRUE;
 }
 
-/* ---------- vòng đời item ---------- */
+/* ---------- item lifecycle ---------- */
 static void emit_watcher_signal(const char *sig, const char *key)
 {
-    if (!is_watcher) return;          /* chế độ client: watcher khác tự phát tín hiệu */
+    if (!is_watcher) return;          /* client mode: the other watcher emits the signals itself */
     g_dbus_connection_emit_signal(bus, NULL, WATCHER_PATH, "org.kde.StatusNotifierWatcher", sig,
                                   key ? g_variant_new("(s)", key) : NULL, NULL);
 }
@@ -509,12 +509,12 @@ static void register_item(const char *sender, const char *svc)
 {
     char *bus_name, *path;
     const char *slash;
-    if (svc[0] == '/' && !sender) return;   /* không biết app nào gửi */
+    if (svc[0] == '/' && !sender) return;   /* unknown sender app */
     if (svc[0] == '/') { bus_name = g_strdup(sender); path = g_strdup(svc); }
     else if ((slash = strchr(svc, '/'))) { bus_name = g_strndup(svc, slash - svc); path = g_strdup(slash); }
     else { bus_name = g_strdup(svc); path = g_strdup("/StatusNotifierItem"); }
 
-    /* Item từ watcher của host có thể có tên không hợp lệ -> GDBus in hàng loạt GLib-GIO-CRITICAL. */
+    /* Items from the host's watcher may have invalid names -> GDBus prints a flood of GLib-GIO-CRITICAL. */
     if (!bus_name || !g_dbus_is_name(bus_name)) {
         g_free(bus_name); g_free(path);
         return;
@@ -555,7 +555,7 @@ static GVariant *watcher_get(GDBusConnection *c, const gchar *sender, const gcha
     return NULL;
 }
 
-/* ---------- chế độ client: đã có watcher khác (xfce4-panel, plasma, ...) ---------- */
+/* ---------- client mode: another watcher already exists (xfce4-panel, plasma, ...) ---------- */
 static guint client_watch_id, host_own_id, client_sub_reg, client_sub_unreg;
 static gboolean host_ready, client_registered;
 
@@ -581,7 +581,7 @@ static void on_remote_unregistered(GDBusConnection *c, const gchar *sender, cons
     const char *svc = NULL;
     g_variant_get(params, "(&s)", &svc);
     if (!svc) return;
-    /* chuẩn hoá giống register_item: "bus/path" or only "bus" */
+    /* normalize like register_item: "bus/path" or only "bus" */
     char *key = strchr(svc, '/') ? g_strdup(svc) : g_strdup_printf("%s/StatusNotifierItem", svc);
     Item *it = g_hash_table_lookup(items, key);
     if (it) item_remove(it);
@@ -639,7 +639,7 @@ static void on_watcher_appeared(GDBusConnection *c, const gchar *name, const gch
 
 static void on_watcher_vanished(GDBusConnection *c, const gchar *name, gpointer d)
 {
-    client_stop();      /* các item vẫn sống; nếu ta lên làm watcher thì app sẽ đăng ký lại */
+    client_stop();      /* the items stay alive; if we become the watcher, the apps register again */
 }
 
 static void start_client(void)
@@ -654,11 +654,11 @@ static void start_client(void)
                                                      on_watcher_appeared, on_watcher_vanished, NULL, NULL);
 }
 
-/* ---------- tranh tên watcher ---------- */
+/* ---------- competing for the watcher name ---------- */
 static void on_name_acquired(GDBusConnection *c, const gchar *name, gpointer d)
 {
     if (strcmp(name, WATCHER_NAME) != 0) return;
-    /* GDBus xếp hàng chờ tên: nếu watcher cũ thoát thì ta tự lên thay và vào đây */
+    /* GDBus queues for the name: if the old watcher exits, we take over and end up here */
     client_stop();
     is_watcher = TRUE;
     emit_watcher_signal("StatusNotifierHostRegistered", NULL);
