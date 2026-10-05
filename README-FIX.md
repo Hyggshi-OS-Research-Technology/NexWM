@@ -93,3 +93,40 @@ Chạy lại:
 - Panel status shows input method/Fcitx, Wi-Fi and Bluetooth state from the real machine.
 - Settings adds Bluetooth and Window Management pages.
 - `settings.ini` can contain `wm=xfwm4` (or `auto`) and `hde-start` passes it to the session.
+
+## Wi-Fi, Bluetooth, phím Super, F1–F3, WM GTK, Dark mode và các thành phần bắt buộc của DE (bản sửa 5)
+
+### Đã sửa / thêm
+
+| Yêu cầu | Trước | Bây giờ |
+|---------|-------|---------|
+| **Danh sách Wi-Fi** | Trang Network chỉ có dòng `nmcli device status` + công tắc Wi-Fi | Danh sách mạng thật (gộp theo SSID, sóng, bảo mật, đang kết nối / đã lưu), **Scan**, kết nối (hỏi mật khẩu — mật khẩu đưa vào `nmcli --ask` qua stdin, không lộ trong `ps`), ngắt kết nối, quên mạng, mạng ẩn, mạng doanh nghiệp (802.1X) mở trình chỉnh sửa nâng cao |
+| **Bluetooth không hiện danh sách** | Chỉ "adapter detected" + công tắc | Đọc thẳng BlueZ qua D-Bus: **My devices** (đã ghép đôi: kết nối/ngắt/xoá, pin) + **Other devices** (quét 45 giây, ghép đôi có agent hỏi PIN/passkey/xác nhận mã), bật/tắt, hiện với thiết bị khác, tự `rfkill unblock`, báo rõ khi bluetoothd không chạy |
+| **Super mở Start menu** | Không có | Nhấn rồi thả **Super** = mở/đóng menu (XInput2 raw events, không chiếm phím nên `Super+phím` của WM/app vẫn chạy). Đang mở menu gõ chữ = tìm ứng dụng |
+| **F1, F2, F3 = âm thanh** | Không có | F1 tắt/bật tiếng, F2 giảm, F3 tăng (tối đa 100%), có OSD; phím media/độ sáng cũng chạy. Tắt F1–F3 trong *Settings → Keyboard & Shortcuts* để trả phím cho ứng dụng |
+| **WM GTK thay cho Openbox/xfwm** | Danh sách xfwm4 → openbox → … | Hỗ trợ **Metacity, Marco, Mutter, Muffin** (ưu tiên ở chế độ Auto — viền cửa sổ theo theme GTK và Dark mode), đổi WM **ngay không cần đăng xuất** (*Settings → Window Management → Apply now* hoặc `hde-session wm`) |
+| **Dark mode trong Settings cho đúng** | Combo "Dark" chỉ lưu số, không làm gì | Áp dụng ngay cho panel, menu, Settings và **mọi ứng dụng GTK đang mở** (trình nền `hde-xsettings`), ghi `~/.config/gtk-3.0/settings.ini`, GSettings `color-scheme` (GTK4/libadwaita), tự tìm biến thể tối của theme (tạo Adwaita-dark nếu thiếu `gnome-themes-extra`). Từ dòng lệnh: `hde-settings --style dark` |
+
+### Những thứ "DE bắt buộc phải có" đã bổ sung
+
+- **Trình nền thông báo** (`org.freedesktop.Notifications`) trong panel: popup, nút hành động, ảnh, âm báo, lịch sử ở nút chuông, **Do Not Disturb**.
+- **Polkit agent**: hde-session tự chạy (polkit-gnome / mate / lxpolkit / kde…) để ứng dụng cần quyền admin hỏi được mật khẩu.
+- **XDG autostart**: chạy các mục trong `~/.config/autostart` và `/etc/xdg/autostart` (tôn trọng `OnlyShowIn`/`NotShowIn`/`Hidden`/`TryExec`).
+- **Tự chạy lại khi crash** (panel, desktop, hotkeys, xsettings, WM) có giới hạn số lần.
+- **OSD** âm lượng/độ sáng, **lịch** khi bấm đồng hồ, ô **tìm ứng dụng**, khoá màn hình dùng trình khoá thật (light-locker, xscreensaver, dm-tool, i3lock…).
+- `dbus-update-activation-environment` để các dịch vụ D-Bus (portal, keyring…) biết DISPLAY của phiên.
+- Settings áp dụng thật: âm lượng/mic/thiết bị ra, bố cục bàn phím + tốc độ lặp phím, touchpad (xinput), tắt màn hình, cỡ chữ, hình nền (trước đây Settings lưu hình nền sai file nên desktop không đổi).
+- Sửa build: `hde-core/include/hde/core.h` và `hde-core/integration/core.c` bị `.gitignore` (`core.*`) che nên repo không build được.
+
+### Cài và thử
+
+    sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev
+    sudo apt install metacity network-manager bluez pipewire-pulse policykit-1-gnome libnotify-bin
+    make clean && make
+    sudo make install          # rồi đăng xuất, chọn phiên HDE
+
+Thử nhanh không cài: `Xephyr :2 -screen 1280x720 & DISPLAY=:2 ./build/hde-session`.
+Kiểm thử tự động (Xvfb): `sudo apt install xvfb xdotool dbus-x11 && make check`.
+
+Lưu ý: chạy lồng trong Xephyr trên host Wayland, X server lồng có thể không phát XInput2 raw events,
+khi đó phím Super không mở menu (bấm nút Menu hoặc `hde-panel --menu`); trên phiên thật thì bình thường.

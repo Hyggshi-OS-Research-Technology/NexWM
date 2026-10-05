@@ -7,6 +7,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   build:
     strategy:
@@ -48,21 +52,12 @@ jobs:
       if: always()
       run: python3 tests/ci-annotate.py /tmp/hde-smoke results
 
-    - name: Screenshots 1
-      if: always() && matrix.os == 'ubuntu-22.04'
-      run: python3 tests/ci-annotate.py /tmp/hde-smoke shots 0
-    - name: Screenshots 2
-      if: always() && matrix.os == 'ubuntu-22.04'
-      run: python3 tests/ci-annotate.py /tmp/hde-smoke shots 1
-    - name: Screenshots 3
-      if: always() && matrix.os == 'ubuntu-22.04'
-      run: python3 tests/ci-annotate.py /tmp/hde-smoke shots 2
-    - name: Screenshots 4
-      if: always() && matrix.os == 'ubuntu-22.04'
-      run: python3 tests/ci-annotate.py /tmp/hde-smoke shots 3
-    - name: Screenshots 5
-      if: always() && matrix.os == 'ubuntu-22.04'
-      run: python3 tests/ci-annotate.py /tmp/hde-smoke shots 4
+    # Ảnh chụp màn hình dưới dạng check run (chỉ khi commit có "[shots]" hoặc chạy tay)
+    - name: Publish screenshots
+      if: always() && matrix.os == 'ubuntu-22.04' && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke checkruns
 
     - name: Upload test output (logs + screenshots)
       if: always()

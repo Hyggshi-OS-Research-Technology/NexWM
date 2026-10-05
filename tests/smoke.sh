@@ -45,7 +45,7 @@ EOF
 
     export HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.config" XDG_CACHE_HOME="$OUT/home/.cache"
     export XDG_DATA_HOME="$OUT/home/.local/share" XDG_RUNTIME_DIR="$OUT/run"
-    export HDE_FAKE_NMCLI_LOG="$OUT/nmcli.log" PATH="$OUT/fakebin:$PATH" LANG=C.UTF-8
+    export HDE_FAKE_NMCLI_LOG="$OUT/nmcli.log" PATH="$OUT/fakebin:$PATH" LANG=C.UTF-8 NO_AT_BRIDGE=1
     unset WAYLAND_DISPLAY HDE_SESSION_PID HDE_WM DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP
 
     Xvfb "$DISP" -screen 0 1280x800x24 -nolisten tcp > "$OUT/xvfb.log" 2>&1 &
@@ -68,7 +68,7 @@ skip() { echo "SKIP: $*" | tee -a "$OUT/results.txt"; }
 check() { desc=$1; shift; if "$@" >/dev/null 2>&1; then pass "$desc"; else fail "$desc"; fi; }
 shot() { command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-$1.png" 2>/dev/null; }
 popups() { $XT popups 2>/dev/null || echo 0; }
-running() { pgrep -f "$B/$1" >/dev/null 2>&1; }
+running() { pgrep -x "$1" >/dev/null 2>&1; }       # theo tên tiến trình (không khớp nhầm shell đang kiểm tra)
 SETTINGS_INI="$XDG_CONFIG_HOME/hde/settings.ini"
 
 if command -v pulseaudio >/dev/null 2>&1; then
@@ -194,18 +194,19 @@ else
 fi
 
 # ---------- 8. tự chạy lại khi crash ----------
-pid=$(pgrep -f "$B/hde-panel" | head -n1)
+pid=$(pgrep -x hde-panel | head -n1)
 if [ -n "$pid" ]; then
     kill -SEGV "$pid"; sleep 4
-    new=$(pgrep -f "$B/hde-panel" | head -n1)
+    new=$(pgrep -x hde-panel | head -n1)
     if [ -n "$new" ] && [ "$new" != "$pid" ]; then pass "crashed panel is restarted by hde-session"; else fail "crashed panel is restarted by hde-session"; fi
 fi
 shot 14-after-restart
 
 # ---------- 9. đăng xuất ----------
 kill -TERM "$SESSION"; sleep 5
-check "logout stops the panel" sh -c "! pgrep -f '$B/hde-panel'"
-check "logout stops hde-hotkeys" sh -c "! pgrep -f '$B/hde-hotkeys'"
+check "logout stops the panel" sh -c "! pgrep -x hde-panel"
+check "logout stops hde-hotkeys" sh -c "! pgrep -x hde-hotkeys"
+check "logout stops hde-xsettings" sh -c "! pgrep -x hde-xsettings"
 check "logout stops the window manager" sh -c "! pgrep -x metacity && ! pgrep -x openbox"
 grep -E "hde-(panel|desktop|settings).*(CRITICAL|WARNING)" "$OUT/session.log" "$OUT/settings.log" > "$OUT/gtk-warnings.txt" 2>/dev/null
 grep -E "(Gtk|GLib|GLib-GObject|Gdk|Wnck)-(CRITICAL|WARNING)" "$OUT/session.log" "$OUT/settings.log" >> "$OUT/gtk-warnings.txt" 2>/dev/null
