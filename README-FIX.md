@@ -128,5 +128,12 @@ Chạy lại:
 Thử nhanh không cài: `Xephyr :2 -screen 1280x720 & DISPLAY=:2 ./build/hde-session`.
 Kiểm thử tự động (Xvfb): `sudo apt install xvfb xdotool dbus-x11 && make check`.
 
+`make check` chạy cả phiên HDE trong Xvfb và kiểm tra 51 điểm (CI chạy trên Ubuntu 22.04 và 24.04):
+phím Super mở/đóng menu (cả khi đang dùng ứng dụng khác và ngay sau một tổ hợp Super+phím), gõ để tìm ứng dụng,
+F1/F2/F3 đổi âm lượng thật qua PulseAudio (dừng ở 100%, tắt F1–F3 thì trả phím cho ứng dụng), thông báo,
+danh sách Wi-Fi + kết nối có mật khẩu (mật khẩu đi qua stdin, nhập sai thì hỏi lại, huỷ thì không để lại hồ sơ hỏng),
+danh sách Bluetooth + ghép đôi/kết nối qua BlueZ giả lập, Dark mode trực tiếp qua XSETTINGS, đổi WM không đăng xuất,
+tự chạy lại panel khi crash và đăng xuất sạch sẽ. Bật log chẩn đoán: `HDE_DEBUG=1`.
+
 Lưu ý: chạy lồng trong Xephyr trên host Wayland, X server lồng có thể không phát XInput2 raw events,
 khi đó phím Super không mở menu (bấm nút Menu hoặc `hde-panel --menu`); trên phiên thật thì bình thường.
