@@ -6,14 +6,16 @@
  *   hde-screenshot --window     the active window, including its title bar
  *   options:  --delay N         wait N seconds first
  *             --file PATH       save to PATH instead of ~/Pictures/Screenshots/Screenshot_<date>_<time>.png
+ *             --clipboard       only copy the image to the clipboard, do not save a file
  *             --no-clipboard    do not copy the image to the clipboard
  *             --no-notify       do not show a notification
  *
- * hde-hotkeys runs it for Print / Shift+Print / Alt+Print (Settings > Keyboard can pick another tool).
+ * hde-hotkeys runs it for Print / Shift+Print / Alt+Print (Settings > Keyboard can pick another tool) and, with
+ * --clipboard, for Ctrl+Print / Ctrl+Shift+Print / Ctrl+Alt+Print.
  * The PNG is saved, copied to the clipboard and announced with a notification ("Open" / "Show in Folder").
  * X11 clipboards live in the program that owns them, so the process stays in the background while it owns
  * the clipboard (until another program copies something, at most 10 minutes; a clipboard manager may keep
- * the image afterwards). The saved path is printed on stdout. Exit status: 0 saved, 1 cancelled, 2 error.
+ * the image afterwards). The saved path is printed on stdout. Exit status: 0 saved (or copied), 1 cancelled, 2 error.
  */
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
@@ -30,7 +32,7 @@ typedef enum { MODE_FULL, MODE_AREA, MODE_WINDOW } Mode;
 static Mode mode = MODE_FULL;
 static int opt_delay;
 static char *opt_file;
-static gboolean opt_no_clip, opt_no_notify;
+static gboolean opt_no_clip, opt_no_notify, opt_clip_only;
 
 static int exit_code = 2;
 static GdkPixbuf *result;               /* the final image (also served on the clipboard) */
@@ -66,12 +68,13 @@ static char *home_relative(const char *path)
     return g_strdup(path);
 }
 
-static void notify_user(const char *summary, const char *body, const char *image_path, gboolean with_actions);
+static void notify_user(const char *summary, const char *body, const char *image_path, GdkPixbuf *image,
+                        gboolean with_actions);
 
 static void fail(const char *what)
 {
     g_printerr("hde-screenshot: %s\n", what);
-    if (!opt_no_notify) notify_user("Screenshot failed", what, NULL, FALSE);
+    if (!opt_no_notify) notify_user("Screenshot failed", what, NULL, NULL, FALSE);
     exit_code = 2;
     quit_if_idle();
 }
@@ -276,8 +279,26 @@ static void on_notification_signal(GDBusConnection *c, const char *sender, const
     }
 }
 
-static void notify_user(const char *summary, const char *body, const char *image_path, gboolean with_actions)
+/* A small copy of the picture as the notification's image-data hint (for a picture that is not in a file). */
+static GVariant *image_data_hint(GdkPixbuf *src)
 {
+    int w = gdk_pixbuf_get_width(src), h = gdk_pixbuf_get_height(src);
+    double s = MIN(1.0, MIN(320.0 / w, 200.0 / h));
+    GdkPixbuf *t = gdk_pixbuf_scale_simple(src, MAX(1, (int)(w * s)), MAX(1, (int)(h * s)), GDK_INTERP_BILINEAR);
+    if (!t) return NULL;
+    GVariant *v = g_variant_new("(iiibii@ay)", gdk_pixbuf_get_width(t), gdk_pixbuf_get_height(t),
+                                gdk_pixbuf_get_rowstride(t), gdk_pixbuf_get_has_alpha(t),
+                                gdk_pixbuf_get_bits_per_sample(t), gdk_pixbuf_get_n_channels(t),
+                                g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, gdk_pixbuf_read_pixels(t),
+                                                          gdk_pixbuf_get_byte_length(t), 1));
+    g_object_unref(t);
+    return v;
+}
+
+static void notify_user(const char *summary, const char *body, const char *image_path, GdkPixbuf *image,
+                        gboolean with_actions)
+{
+    gboolean ok = image_path || image;
     if (!bus) bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
     if (!bus) return;
     if (with_actions)
@@ -292,11 +313,13 @@ static void notify_user(const char *summary, const char *body, const char *image
     }
     g_variant_builder_init(&hints, G_VARIANT_TYPE("a{sv}"));
     if (image_path) g_variant_builder_add(&hints, "{sv}", "image-path", g_variant_new_string(image_path));
-    g_variant_builder_add(&hints, "{sv}", "sound-name", g_variant_new_string(image_path ? "screen-capture" : "dialog-warning"));
+    GVariant *img = image ? image_data_hint(image) : NULL;
+    if (img) g_variant_builder_add(&hints, "{sv}", "image-data", img);
+    g_variant_builder_add(&hints, "{sv}", "sound-name", g_variant_new_string(ok ? "screen-capture" : "dialog-warning"));
     g_variant_builder_add(&hints, "{sv}", "desktop-entry", g_variant_new_string("hde-screenshot"));
     GVariant *r = g_dbus_connection_call_sync(bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
         "org.freedesktop.Notifications", "Notify",
-        g_variant_new("(susssasa{sv}i)", "Screenshot", (guint32)0, image_path ? "camera-photo" : "dialog-warning",
+        g_variant_new("(susssasa{sv}i)", "Screenshot", (guint32)0, ok ? "camera-photo" : "dialog-warning",
                       summary, body, &actions, &hints, -1),
         G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 3000, NULL, NULL);
     if (r) {
@@ -339,6 +362,17 @@ static void finish(GdkPixbuf *p)
 {
     if (!p) { fail("Could not read the screen contents."); return; }
     result = p;
+    if (opt_clip_only) {                              /* Ctrl+Print & co.: clipboard only, no file */
+        copy_to_clipboard(p);
+        if (!clip_active) { fail("Could not copy the picture to the clipboard."); return; }
+        exit_code = 0;
+        if (!opt_no_notify)
+            notify_user("Screenshot copied", "Copied to the clipboard (not saved to a file). Paste it with Ctrl+V.",
+                        NULL, p, FALSE);
+        g_timeout_add_seconds(600, on_give_up, NULL);
+        quit_if_idle();
+        return;
+    }
     char *path = opt_file ? g_strdup(opt_file) : default_path();
     GError *err = NULL;
     if (!path || !gdk_pixbuf_save(p, path, "png", &err, NULL)) {
@@ -358,7 +392,7 @@ static void finish(GdkPixbuf *p)
         char *dir = g_path_get_dirname(path);
         char *shown = home_relative(dir);
         char *body = g_markup_printf_escaped("Saved in %s%s", shown, clip_active ? " and copied to the clipboard." : ".");
-        notify_user("Screenshot taken", body, path, TRUE);
+        notify_user("Screenshot taken", body, path, NULL, TRUE);
         g_free(body);
         g_free(shown);
         g_free(dir);
@@ -613,12 +647,13 @@ static gboolean start_capture(gpointer data)
 static void usage(FILE *f)
 {
     fprintf(f,
-            "Usage: hde-screenshot [--area | --window] [--delay N] [--file PATH] [--no-clipboard] [--no-notify]\n"
-            "  (no option)    the whole screen\n"
-            "  -a, --area     drag a rectangle (Esc or right click cancels)\n"
-            "  -w, --window   the active window\n"
-            "  -d, --delay N  wait N seconds first\n"
-            "  -f, --file P   save to P (default: ~/Pictures/Screenshots/Screenshot_<date>_<time>.png)\n"
+            "Usage: hde-screenshot [--area | --window] [--delay N] [--file PATH | --clipboard] [--no-clipboard] [--no-notify]\n"
+            "  (no option)      the whole screen\n"
+            "  -a, --area       drag a rectangle (Esc or right click cancels)\n"
+            "  -w, --window     the active window\n"
+            "  -d, --delay N    wait N seconds first\n"
+            "  -f, --file P     save to P (default: ~/Pictures/Screenshots/Screenshot_<date>_<time>.png)\n"
+            "  -c, --clipboard  only copy to the clipboard, save no file\n"
             "  --no-clipboard, --no-notify\n");
 }
 
@@ -633,10 +668,15 @@ int main(int argc, char **argv)
         else if (!strncmp(a, "--delay=", 8)) opt_delay = CLAMP(atoi(a + 8), 0, 3600);
         else if ((!strcmp(a, "-f") || !strcmp(a, "--file")) && i + 1 < argc) opt_file = argv[++i];
         else if (!strncmp(a, "--file=", 7)) opt_file = (char *)a + 7;
+        else if (!strcmp(a, "-c") || !strcmp(a, "--clipboard")) opt_clip_only = TRUE;
         else if (!strcmp(a, "--no-clipboard")) opt_no_clip = TRUE;
         else if (!strcmp(a, "--no-notify")) opt_no_notify = TRUE;
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(stdout); return 0; }
         else { fprintf(stderr, "hde-screenshot: unknown option %s\n", a); usage(stderr); return 2; }
+    }
+    if (opt_clip_only && (opt_no_clip || opt_file)) {
+        fprintf(stderr, "hde-screenshot: --clipboard cannot be combined with --no-clipboard or --file\n");
+        return 2;
     }
     gdk_set_allowed_backends("x11");
     if (!gtk_init_check(&argc, &argv)) {

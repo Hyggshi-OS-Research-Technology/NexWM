@@ -5,6 +5,7 @@
  *  Media keys                    Mute, Volume-/+, MicMute, Brightness-/+, Play/Pause/Next/Prev
  *  PrtSc, Shift+PrtSc, Alt+PrtSc screenshot of the whole screen / a selected area / a window
  *                                (HDE's own hde-screenshot; settings.ini screenshot_tool= picks another tool)
+ *  Ctrl + the same keys          the same, copied to the clipboard only (no file)
  *  Super+L  lock screen          Super+E  file manager            Super+D  show desktop
  *  Super+R, Alt+F2  Run dialog   Super+S  app search              Ctrl+Alt+T  terminal
  *  Ctrl+Alt+Delete  Session / Power dialog
@@ -17,6 +18,11 @@
  * hde-session starts hde-hotkeys BEFORE the window manager (and waits for HDE_READY_FD), so these keys belong
  * to HDE even when the WM's own config binds them too (e.g. Openbox rc.xml: Print -> scrot, W-e -> kfmclient,
  * which fail with "Failed to execute child process" when those programs are not installed).
+ * Every Print combination is claimed, so no such WM binding is left over. If another program got a key first
+ * anyway (typically: a session started by an older hde-session, which launched the WM first), hde-hotkeys says so
+ * in a notification and takes the key over by itself as soon as that program lets go of it (checked every
+ * 2 seconds, and every 10 ms for 2 seconds after the window manager exits or is replaced, so that a newly
+ * started window manager cannot take the key again).
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -29,6 +35,7 @@
 #include <X11/extensions/XInput2.h>
 #endif
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +45,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include "hde-ipc.h"
 
@@ -181,12 +189,39 @@ static int find_bin(const char *name, char *out, size_t len)
 
 static int have_bin(const char *name) { return find_bin(name, NULL, 0); }
 
+/* GVariant text-format string literal: "..." with \ and " escaped. */
+static void gv_quote(char *out, size_t len, const char *in)
+{
+    size_t o = 0;
+    if (len < 3) { if (len) out[0] = '\0'; return; }
+    out[o++] = '"';
+    for (const char *p = in; *p && o + 3 < len; p++) {
+        if (*p == '"' || *p == '\\') out[o++] = '\\';
+        out[o++] = *p;
+    }
+    out[o++] = '"';
+    out[o] = '\0';
+}
+
 static void notify(const char *summary, const char *body)
 {
     if (have_bin("notify-send")) {
         pid_t p = fork_child();
         if (p == 0) {
             execlp("notify-send", "notify-send", "-a", "HDE", "-i", "dialog-information", summary, body, (char *)NULL);
+            _exit(127);
+        }
+    } else if (have_bin("gdbus")) {                  /* libnotify-bin missing: talk to the notification daemon directly */
+        char s[512], b[2048];
+        gv_quote(s, sizeof s, summary);
+        gv_quote(b, sizeof b, body);
+        pid_t p = fork_child();
+        if (p == 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) dup2(devnull, STDOUT_FILENO);
+            execlp("gdbus", "gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path",
+                   "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify", "HDE", "0",
+                   "dialog-information", s, b, "[]", "{}", "-1", (char *)NULL);
             _exit(127);
         }
     } else {
@@ -236,7 +271,7 @@ static void run_with_osd(const char *script, long osd_cmd, int read_percent)
 
 /* ---------------- actions ---------------- */
 enum {
-    A_SHOT_FULL, A_SHOT_AREA, A_SHOT_WIN,
+    A_SHOT_FULL, A_SHOT_AREA, A_SHOT_WIN, A_CLIP_FULL, A_CLIP_AREA, A_CLIP_WIN,
     A_VOL_MUTE, A_VOL_DOWN, A_VOL_UP, A_MIC_MUTE, A_BRIGHT_UP, A_BRIGHT_DOWN,
     A_PLAY, A_NEXT, A_PREV, A_STOP,
     A_LOCK, A_FILES, A_TERMINAL, A_DESKTOP, A_RUN, A_SEARCH, A_POWER
@@ -249,6 +284,10 @@ static const Binding bindings[] = {
     { XK_Print, 0, A_SHOT_FULL, G_ALWAYS, "Print" },
     { XK_Print, ShiftMask, A_SHOT_AREA, G_ALWAYS, "Shift+Print" },
     { XK_Print, Mod1Mask, A_SHOT_WIN, G_ALWAYS, "Alt+Print" },
+    /* clipboard only, like GNOME; also leaves no Print combination to a WM binding (C-Print -> scrot -s, ...) */
+    { XK_Print, ControlMask, A_CLIP_FULL, G_ALWAYS, "Ctrl+Print" },
+    { XK_Print, ControlMask | ShiftMask, A_CLIP_AREA, G_ALWAYS, "Ctrl+Shift+Print" },
+    { XK_Print, ControlMask | Mod1Mask, A_CLIP_WIN, G_ALWAYS, "Ctrl+Alt+Print" },
     { XK_F1, 0, A_VOL_MUTE, G_FKEYS, "F1" },
     { XK_F2, 0, A_VOL_DOWN, G_FKEYS, "F2" },
     { XK_F3, 0, A_VOL_UP, G_FKEYS, "F3" },
@@ -278,6 +317,7 @@ static const Binding bindings[] = {
 #define N_BINDINGS (sizeof bindings / sizeof bindings[0])
 static KeyCode codes[N_BINDINGS];
 static int grabbed[N_BINDINGS];
+static int failed[N_BINDINGS];          /* another client holds (some variants of) this key: retried until ours */
 
 /* External tools that Settings > Keyboard can choose instead of the built-in hde-screenshot. */
 static const struct { const char *bin, *full, *area, *window; } shot_tools[] = {
@@ -315,8 +355,20 @@ static int find_builtin_shot(char *out, size_t len)
  * screenshot_tool=builtin, the default) uses the built-in hde-screenshot; external tools are only a last resort. */
 static void screenshot(int act)
 {
+    int clip = act == A_CLIP_FULL || act == A_CLIP_AREA || act == A_CLIP_WIN;
+    if (clip) act = act == A_CLIP_AREA ? A_SHOT_AREA : act == A_CLIP_WIN ? A_SHOT_WIN : A_SHOT_FULL;
     const char *mode_arg = act == A_SHOT_AREA ? "--area" : act == A_SHOT_WIN ? "--window" : NULL;
     const unsigned n_tools = sizeof shot_tools / sizeof shot_tools[0];
+    char path[4096];
+    if (clip && find_builtin_shot(path, sizeof path)) {      /* Ctrl+Print & co.: always the built-in tool */
+        if (debug_on) fprintf(stderr, "hde-hotkeys: screenshot: %s --clipboard %s\n", path, mode_arg ? mode_arg : "");
+        pid_t p = fork_child();
+        if (p == 0) {
+            execl(path, "hde-screenshot", "--clipboard", mode_arg, (char *)NULL);
+            _exit(127);
+        }
+        return;
+    }
     if (strcmp(cfg.shot_tool, "builtin") != 0 && strcmp(cfg.shot_tool, "auto") != 0) {
         for (unsigned i = 0; i < n_tools; ++i) {
             if (strcmp(cfg.shot_tool, shot_tools[i].bin) != 0) continue;
@@ -327,7 +379,6 @@ static void screenshot(int act)
             fprintf(stderr, "hde-hotkeys: screenshot_tool=%s is not installed; using hde-screenshot\n", cfg.shot_tool);
         }
     }
-    char path[4096];
     if (find_builtin_shot(path, sizeof path)) {
         if (debug_on) fprintf(stderr, "hde-hotkeys: screenshot: %s %s\n", path, mode_arg ? mode_arg : "");
         pid_t p = fork_child();
@@ -389,7 +440,8 @@ static void panel_cmd(long cmd, Time t)
 static void do_action(int act, Time t)
 {
     switch (act) {
-    case A_SHOT_FULL: case A_SHOT_AREA: case A_SHOT_WIN: screenshot(act); break;
+    case A_SHOT_FULL: case A_SHOT_AREA: case A_SHOT_WIN:
+    case A_CLIP_FULL: case A_CLIP_AREA: case A_CLIP_WIN: screenshot(act); break;
     case A_VOL_MUTE:  run_with_osd(HDE_SH_VOLUME_MUTE, HDE_CMD_OSD_VOLUME, 0); break;
     case A_VOL_DOWN:  run_with_osd(HDE_SH_VOLUME_DOWN, HDE_CMD_OSD_VOLUME, 0); break;
     case A_VOL_UP:    run_with_osd(HDE_SH_VOLUME_UP, HDE_CMD_OSD_VOLUME, 0); break;
@@ -415,11 +467,12 @@ static void do_action(int act, Time t)
 /* If the WM already owns a key, XGrabKey fails with BadAccess; Xlib's default handler would kill the whole
  * process -> catch the error, warn and skip that key. */
 static int g_grab_failed = 0;
+static int g_quiet_errors = 0;          /* reading properties of / watching windows of other clients: may be gone */
 static int on_x_error(Display *d, XErrorEvent *e)
 {
     (void)d;
     if (e->error_code == BadAccess) g_grab_failed = 1;
-    else fprintf(stderr, "hde-hotkeys: X error code=%d request=%d\n", e->error_code, e->request_code);
+    else if (!g_quiet_errors) fprintf(stderr, "hde-hotkeys: X error code=%d request=%d\n", e->error_code, e->request_code);
     return 0;
 }
 
@@ -446,38 +499,143 @@ static void ungrab_binding(unsigned i)
         XUngrabKey(dpy, codes[i], bindings[i].mods | ignored_mods[k], root);
 }
 
+/* Grab every lock-key variant of binding i; 1 = all of them are ours, 0 = another client holds some. */
+static int grab_binding(unsigned i)
+{
+    g_grab_failed = 0;
+    for (unsigned k = 0; k < sizeof ignored_mods / sizeof ignored_mods[0]; k++)
+        XGrabKey(dpy, codes[i], bindings[i].mods | ignored_mods[k], root, False, GrabModeAsync, GrabModeAsync);
+    XSync(dpy, False);
+    return !g_grab_failed;
+}
+
+/* Name of the running window manager (EWMH _NET_SUPPORTING_WM_CHECK -> _NET_WM_NAME), 0 if unknown. */
+static int wm_name(char *out, size_t len)
+{
+    int found = 0;
+    Atom type;
+    int fmt;
+    unsigned long n, after;
+    unsigned char *data = NULL;
+    Window check = None;
+    g_quiet_errors = 1;
+    if (XGetWindowProperty(dpy, root, XInternAtom(dpy, "_NET_SUPPORTING_WM_CHECK", False), 0, 1, False, XA_WINDOW,
+                           &type, &fmt, &n, &after, &data) == Success && data) {
+        if (n == 1 && fmt == 32) check = *(Window *)data;
+        XFree(data);
+        data = NULL;
+    }
+    if (check != None &&
+        XGetWindowProperty(dpy, check, XInternAtom(dpy, "_NET_WM_NAME", False), 0, 64, False,
+                           XInternAtom(dpy, "UTF8_STRING", False), &type, &fmt, &n, &after, &data) == Success && data) {
+        if (n > 0 && fmt == 8) {
+            snprintf(out, len, "%.*s", (int)n, (char *)data);
+            found = out[0] != '\0';
+        }
+        XFree(data);
+    }
+    XSync(dpy, False);
+    g_quiet_errors = 0;
+    return found;
+}
+
+/* Print belongs to another program: say so once (until HDE gets the key back), with what to do about it. */
+static int shot_conflict_reported;
+static void report_conflicts(void)
+{
+    char names[1024] = "";
+    int shot = 0;
+    for (unsigned i = 0; i < N_BINDINGS; i++) {
+        if (!failed[i]) continue;
+        if (bindings[i].group == G_ALWAYS) shot = 1;
+        if (strlen(names) + strlen(bindings[i].name) + 3 < sizeof names) {
+            strcat(names, " ");
+            strcat(names, bindings[i].name);
+        }
+    }
+    if (!names[0]) { shot_conflict_reported = 0; return; }
+    char wm[128], body[512];
+    int have_wm = wm_name(wm, sizeof wm);
+    fprintf(stderr, "hde-hotkeys: already used by another program (%s%s):%s; HDE takes them over as soon as they are "
+            "free (log out and back in to fix this now)\n", have_wm ? "window manager: " : "window manager?",
+            have_wm ? wm : "", names);
+    if (!shot || shot_conflict_reported) return;
+    shot_conflict_reported = 1;
+    if (have_wm)
+        snprintf(body, sizeof body, "Probably the window manager (%s): pressing Print runs its command instead of "
+                 "HDE's screenshot. Log out and log back in, then HDE claims Print first.", wm);
+    else
+        snprintf(body, sizeof body, "Pressing Print runs that program's command instead of HDE's screenshot. "
+                 "Log out and log back in, then HDE claims Print first.");
+    notify("Print key taken by another program", body);
+}
+
 /* (Re)grab the enabled bindings. A key that stays ours is never released, not even for a moment: after a
  * keyboard layout change (MappingNotify) the window manager re-grabs its own bindings at the same time and
  * would otherwise get PrtSc & co. Only disabled bindings and keys whose keycode changed are released. */
 static void grab_all(void)
 {
-    int failed = 0;
-    char failed_names[1024] = "";
     for (unsigned i = 0; i < N_BINDINGS; i++) {
         KeyCode kc = XKeysymToKeycode(dpy, bindings[i].sym);
         int want = kc && group_enabled(bindings[i].group);
         if (grabbed[i] && (!want || kc != codes[i])) ungrab_binding(i);
         grabbed[i] = 0;
+        failed[i] = 0;
         codes[i] = kc;
         if (!want) continue;
-        g_grab_failed = 0;
-        for (unsigned k = 0; k < sizeof ignored_mods / sizeof ignored_mods[0]; k++)
-            XGrabKey(dpy, codes[i], bindings[i].mods | ignored_mods[k], root, False, GrabModeAsync, GrabModeAsync);
-        XSync(dpy, False);
-        if (g_grab_failed) {
-            failed++;
-            if (strlen(failed_names) + strlen(bindings[i].name) + 3 < sizeof failed_names) {
-                strcat(failed_names, " ");
-                strcat(failed_names, bindings[i].name);
-            }
-        }
+        failed[i] = !grab_binding(i);
         grabbed[i] = 1;                     /* some NumLock/CapsLock variants may still be ours */
     }
     XSync(dpy, False);
-    if (failed)
-        fprintf(stderr, "hde-hotkeys: already used by another program (window manager?):%s\n", failed_names);
+    report_conflicts();
     fprintf(stderr, "hde-hotkeys: super_menu=%d fkeys_sound=%d media_keys=%d system_shortcuts=%d screenshot_tool=%s\n",
             cfg.super_menu, cfg.fkeys, cfg.media, cfg.shortcuts, cfg.shot_tool);
+}
+
+static int any_failed(void)
+{
+    for (unsigned i = 0; i < N_BINDINGS; i++) if (failed[i]) return 1;
+    return 0;
+}
+
+/* Try again to grab the keys another program had: as soon as it lets go (exits, is replaced, ...) they are HDE's. */
+static void retry_failed(void)
+{
+    int left = 0;
+    for (unsigned i = 0; i < N_BINDINGS; i++) {
+        if (!failed[i] || !grabbed[i]) continue;
+        if (grab_binding(i)) {
+            failed[i] = 0;
+            fprintf(stderr, "hde-hotkeys: %s is free again: handled by HDE now\n", bindings[i].name);
+        } else {
+            left = 1;
+        }
+    }
+    if (!left) shot_conflict_reported = 0;  /* a new conflict later is reported again */
+}
+
+/* While keys are missing, watch the window manager's WM_S<n> selection window: when that WM exits or is replaced,
+ * retry at once and then very often for a moment — before a newly started WM can grab the keys again. */
+static Window wm_owner = None;
+
+static long long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+static void watch_wm(void)
+{
+    char name[32];
+    snprintf(name, sizeof name, "WM_S%d", DefaultScreen(dpy));
+    Window o = XGetSelectionOwner(dpy, XInternAtom(dpy, name, False));
+    if (o == wm_owner) return;
+    wm_owner = o;
+    if (o == None || o == root) return;      /* never replace our own KeyPress mask on the root window */
+    g_quiet_errors = 1;
+    XSelectInput(dpy, o, StructureNotifyMask);
+    XSync(dpy, False);
+    g_quiet_errors = 0;
 }
 
 static void handle_key(XKeyEvent *k)
@@ -635,12 +793,23 @@ int main(int argc, char **argv)
     }
 
     int fd = ConnectionNumber(dpy);
+    long long next_retry = now_ms() + 2000, burst_until = 0;
+    if (any_failed()) watch_wm();
     while (!stop_flag) {
         while (XPending(dpy)) {
             XEvent ev;
             XNextEvent(dpy, &ev);
             if (ev.type == KeyPress) {
                 handle_key(&ev.xkey);
+            } else if (ev.type == DestroyNotify) {
+                /* StructureNotify is only selected on WM selection windows: a window manager exited / was replaced
+                 * (its keys are released when its connection closes, which may come a moment later) */
+                if (ev.xdestroywindow.window == wm_owner) wm_owner = None;
+                if (any_failed()) {
+                    retry_failed();
+                    burst_until = now_ms() + 2000;
+                    watch_wm();
+                }
             } else if (ev.type == MappingNotify) {
                 XRefreshKeyboardMapping(&ev.xmapping);
                 if (ev.xmapping.request == MappingKeyboard || ev.xmapping.request == MappingModifier) {
@@ -663,12 +832,20 @@ int main(int argc, char **argv)
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
         struct timeval tv = { 1, 0 };
+        if (burst_until) { tv.tv_sec = 0; tv.tv_usec = 10000; }
         if (select(fd + 1, &fds, NULL, NULL, &tv) < 0 && errno != EINTR) break;
         if (reload_flag || config_changed()) {
             reload_flag = 0;
             load_config();
             grab_all();
         }
+        long long t = now_ms();
+        if (any_failed() && (t >= next_retry || burst_until)) {
+            next_retry = t + 2000;
+            retry_failed();
+            if (any_failed()) watch_wm();
+        }
+        if (burst_until && (t >= burst_until || !any_failed())) burst_until = 0;
     }
 
     XUngrabKey(dpy, AnyKey, AnyModifier, root);

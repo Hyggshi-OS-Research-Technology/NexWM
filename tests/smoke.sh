@@ -218,8 +218,21 @@ shot 05b-screenshot-notification
 if grep -q "hde-screenshot: notification [1-9]" "$OUT/session.log"; then pass "a notification announces the screenshot (Open / Show in Folder)"
 else fail "a notification announces the screenshot"; fi
 owner=$($XT selection-owner CLIPBOARD)
-if [ "$owner" != 0 ] && running hde-screenshot; then pass "the screenshot is on the clipboard (served by hde-screenshot)"
-else fail "the screenshot is on the clipboard (owner=$owner)"; fi
+targets=$($XT selection-targets CLIPBOARD 2>/dev/null)
+if [ "$owner" != 0 ] && running hde-screenshot && echo " $targets " | grep -q " image/png "; then
+    pass "the screenshot is on the clipboard as an image (served by hde-screenshot)"
+else fail "the screenshot is on the clipboard as an image (owner=$owner, targets: $targets)"; fi
+# Ctrl+Print: clipboard only (no file), like GNOME — and no Print combination is left over for a WM binding
+n0=$(nshots); cb0=$($XT selection-owner CLIPBOARD)
+xdotool key ctrl+Print; sleep 3
+n1=$(nshots); cb1=$($XT selection-owner CLIPBOARD); targets=$($XT selection-targets CLIPBOARD 2>/dev/null)
+if [ "$n1" = "$n0" ] && [ "$cb1" != 0 ] && [ "$cb1" != "$cb0" ] && echo " $targets " | grep -q " image/png "; then
+    pass "Ctrl+Print copies a screenshot to the clipboard only (image/png, no file saved)"
+else fail "Ctrl+Print copies a screenshot to the clipboard only (files $n0 -> $n1, owner $cb0 -> $cb1, targets: $targets)"; fi
+if grep -q "hde-notify: notification [0-9]* from Screenshot: Screenshot copied \[image\]" "$OUT/session.log"; then
+    pass "a notification with a preview says the screenshot was copied"
+else fail "a notification with a preview says the screenshot was copied"; fi
+shot 05b2-clipboard-notification
 n0=$(nshots); xdotool key shift+Print; sleep 1.5
 if xdotool search --onlyvisible --name "hde-screenshot area" >/dev/null 2>&1; then
     pass "Shift+Print shows the area selection overlay"
@@ -469,6 +482,31 @@ if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; th
         if [ -e "$OUT/wm-print-pressed" ]; then fail "Openbox: its own rc.xml Print binding fired (HDE must keep PrtSc)"
         elif [ "$n1" -gt "$n0" ]; then pass "Openbox with Print bound in rc.xml: Print still takes HDE's screenshot ($n0 -> $n1)"
         else fail "Openbox with Print bound in rc.xml: Print did nothing ($n0 -> $n1)"; fi
+        # The situation of a session started by an OLDER hde-session (WM first) or of hde-hotkeys restarted after the
+        # WM grabbed Print: HDE must say so, and take Print back by itself as soon as the WM gives way.
+        hk=$(pgrep -x hde-hotkeys | head -n1)
+        kill -KILL "$hk" 2>/dev/null; openbox --reconfigure >/dev/null 2>&1; sleep 4   # Openbox grabs Print; hde-session restarts hde-hotkeys
+        if grep -q "hde-hotkeys: already used by another program (window manager: Openbox):.* Print" "$OUT/session.log"; then
+            pass "hde-hotkeys notices that the window manager (Openbox) holds Print"
+        else
+            fail "hde-hotkeys notices that the window manager (Openbox) holds Print"
+            grep -E "hde-hotkeys|hotkeys" "$OUT/session.log" | tail -n 5 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        fi
+        if grep -q "hde-notify: notification [0-9]* from HDE: Print key taken by another program" "$OUT/session.log"; then
+            pass "a notification explains that Print is taken and what to do (log out and back in)"
+        else fail "a notification explains that Print is taken"; fi
+        shot 15b-print-taken-notification
+        rm -f "$OUT/wm-print-pressed"; xdotool key Print; sleep 1.5
+        if [ -e "$OUT/wm-print-pressed" ]; then echo "INFO: (setup) meanwhile Print runs Openbox's own rc.xml binding, as in the bug report" | tee -a "$OUT/results.txt"
+        else echo "INFO: (setup) Openbox's rc.xml Print binding did not run" | tee -a "$OUT/results.txt"; fi
+        rm -f "$OUT/wm-print-pressed"
+        "$B/hde-session" wm >/dev/null 2>&1; sleep 6                    # wm=openbox again: a new Openbox replaces the old one
+        if grep -q "hde-hotkeys: Print is free again: handled by HDE now" "$OUT/session.log"; then
+            pass "when the window manager is replaced, HDE takes Print back before the new one can grab it"
+        else fail "when the window manager is replaced, HDE takes Print back before the new one can grab it"; fi
+        n0=$(nshots); xdotool key Print; sleep 3; n1=$(nshots)
+        if [ ! -e "$OUT/wm-print-pressed" ] && [ "$n1" -gt "$n0" ]; then pass "after that, Print takes HDE's screenshot again ($n0 -> $n1)"
+        else fail "after that, Print takes HDE's screenshot again (files $n0 -> $n1, Openbox binding fired: $([ -e "$OUT/wm-print-pressed" ] && echo yes || echo no))"; fi
     fi
     sed -i 's/^wm=.*/wm=metacity/' "$SETTINGS_INI"
     "$B/hde-session" wm >/dev/null 2>&1; sleep 7

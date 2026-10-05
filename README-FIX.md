@@ -10,11 +10,8 @@ Build the migration tree:
 
     make
 
-Then make sure your real NexDE build contains:
-
-    build/hde-session
-    build/hde-desktop
-    build/hde-panel
+`make` builds `build/hde-session`, `build/hde-desktop`, `build/hde-panel` and the other programs from source
+(the repository contains no prebuilt programs; see fix 7).
 
 Run:
 
@@ -179,3 +176,34 @@ fills the clipboard; Shift+Print shows the overlay and `Esc` cancels; a dragged 
 visible (pixel colors); each icon menu (file, folder, Home) has the right items and the desktop menu still opens
 on empty space; Properties, Rename, Move to Trash, Copy + Paste of a folder and the Delete key work; no
 "Failed to execute child process" appears in the session log.
+
+## Print is HDE's in every situation, Ctrl+Print to the clipboard (fix 7)
+
+The fixes of fix 6 only take effect in a session that the new `hde-session` started: it starts `hde-hotkeys` before
+the window manager. In a session that was still started by an older `hde-session` (window manager first — for
+example after `make dev` or `sudo make install` without logging out), Openbox keeps `Print` and its `rc.xml`
+binding (`scrot`) still runs. Now:
+
+- `hde-hotkeys` notices when another program holds one of its keys and shows a notification *"Print key taken by
+  another program"* that names the window manager and says what to do (log out and back in). The session log lists
+  every key that is taken.
+- It takes such keys over by itself as soon as they are free: it retries every 2 seconds and, when the window
+  manager exits or is replaced (switching the window manager in Settings, a crash), every 10 ms for 2 seconds, so a
+  newly started window manager cannot grab them again.
+- **Ctrl+Print**, **Ctrl+Shift+Print** and **Ctrl+Alt+Print** copy a screenshot (screen / area / window) to the
+  clipboard only, without saving a file (`hde-screenshot --clipboard`; the notification shows a preview). With
+  these, every Print combination is HDE's, so WM bindings like `C-Print` → `scrot -s` cannot run either.
+- Without `notify-send` (libnotify-bin), `hde-hotkeys` sends its notifications with `gdbus`.
+- **Stale prebuilt programs removed from the repository.** `build/hde-desktop`, `hde-panel`, `hde-session` and
+  `hde-settings` were committed by accident (`build/` is in `.gitignore`) and dated from before all of these fixes.
+  `make` decides by file dates, so whenever those files were not older than the sources — a GitHub *Download ZIP*
+  or tarball (every file gets the same date), `git checkout -- build`/`git stash`/`git reset --hard` after a
+  build (the old files come back with a new date) — `make` printed nothing to do for them and `sudo make install`
+  installed the OLD desktop, panel and settings: no icon menu, no selection frame, none of the new pages. Now
+  `make` always builds every program. With an older copy, run `make clean && make && sudo make install` once.
+- CI also builds everything on Debian 13 (trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
+
+`make check` additionally checks: the clipboard really offers `image/png` after Print and Ctrl+Print; Ctrl+Print
+saves no file and shows a notification with a preview; with Openbox holding Print before `hde-hotkeys` starts,
+HDE reports it (log + notification), and after the window manager is replaced Print takes HDE's screenshot again
+(the new Openbox, whose `rc.xml` binds Print, does not get it).

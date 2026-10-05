@@ -12,7 +12,7 @@ manager and a system-hotkeys daemon.
 | **Panel** | Taskbar + workspaces (libwnck), system tray (XEmbed + StatusNotifierItem), Wi-Fi / Bluetooth / volume / battery status, notification bell with Do Not Disturb, calendar on the clock |
 | **Notifications** | Built-in `org.freedesktop.Notifications` 1.2 daemon (actions, images, urgency, sounds, history) — `notify-send` and every app work |
 | **Hotkeys** | Super = Start menu, **F1/F2/F3 = mute / volume down / volume up**, media + brightness keys with an on-screen display, screenshots, lock, terminal, files, run |
-| **Screenshots** | Built-in `hde-screenshot` (no scrot or other tool needed): whole screen, drag an area, or the active window; saved to `~/Pictures/Screenshots`, copied to the clipboard, announced with a notification (Open / Show in Folder) |
+| **Screenshots** | Built-in `hde-screenshot` (no scrot or other tool needed): whole screen, drag an area, or the active window; saved to `~/Pictures/Screenshots`, copied to the clipboard, announced with a notification (Open / Show in Folder). Hold `Ctrl` to only copy to the clipboard |
 | **Desktop** | Wallpaper + icons from `~/Desktop` with a clear selection frame (accent color) and hover highlight; **right-click an icon for its own menu** — Open, Open With, Open in Terminal, Cut, Copy, Rename, Move to Trash, Properties; rubber-band and Ctrl+click selection; Paste, Delete, F2 and the usual keyboard shortcuts |
 | **Network** | Real Wi-Fi list (NetworkManager): scan, signal, security, connect with password, disconnect, forget, hidden networks; wired/VPN devices |
 | **Bluetooth** | Device list straight from BlueZ: paired + nearby devices, scan, pair (PIN/passkey/confirmation agent), connect, disconnect, remove |
@@ -34,6 +34,10 @@ sudo make install          # PREFIX=/usr/local by default
 ```
 
 Log out and choose the **HDE** session on the login screen. Logs: `~/.cache/hde/session.log`.
+Updating an older copy (or one unpacked from a ZIP that still had prebuilt programs in `build/`): run
+`make clean && make && sudo make install`, so that every program is rebuilt from the current sources.
+**After updating HDE, log out and back in once** — `make dev` restarts the desktop, panel and hotkeys, but the order in
+which the session starts things (hotkeys before the window manager, see below) only applies to a new login.
 Without a display manager: `echo 'exec /usr/local/bin/hde-start' > ~/.xinitrc && startx`.
 
 Try it nested: `Xephyr :2 -screen 1280x720 & DISPLAY=:2 ./build/hde-session`.
@@ -54,10 +58,14 @@ Reload a running session after rebuilding: `make dev` (from `./build`) or `sudo 
 | `F1` / `F2` / `F3` | Mute / volume down / volume up (turn off in *Settings → Keyboard & Shortcuts*) |
 | Volume, mic-mute, brightness, play/pause keys | Work out of the box, with an OSD |
 | `Print`, `Shift+Print`, `Alt+Print` | Screenshot: screen / area (drag; `Esc` cancels) / active window |
+| `Ctrl+Print`, `Ctrl+Shift+Print`, `Ctrl+Alt+Print` | The same, copied to the clipboard only (no file) |
 
 `hde-session` starts `hde-hotkeys` **before** the window manager, so these keys stay HDE's even when the window
 manager's own configuration binds them too (for example an Openbox `rc.xml` with `Print` → `scrot`, which used to
-end in *Failed to execute child process "scrot"*). If a shortcut still does nothing, see the session log.
+end in *Failed to execute child process "scrot"*). Every `Print` combination is HDE's, so no such binding is left over.
+If another program got `Print` first anyway — typically a session that an older HDE started (window manager first) —
+a notification says so; HDE takes the key over as soon as that program lets go of it (for example when the window
+manager is switched in Settings), and logging out and back in fixes it for good. Details are in the session log.
 
 On the desktop: `Enter` open, `Alt+Enter` properties, `F2` rename, `Delete` move to Trash (`Shift+Delete` delete),
 `Ctrl+A` / `Ctrl+C` / `Ctrl+X` / `Ctrl+V` select all / copy / cut / paste, `Menu` or `Shift+F10` context menu.
@@ -71,7 +79,7 @@ On the desktop: `Enter` open, `Alt+Enter` properties, `F2` rename, `Delete` move
 | `hde-desktop` | Wallpaper + desktop icons (icon menu, Cut/Copy/Paste compatible with GNOME/Xfce file managers) |
 | `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script |
 | `hde-hotkeys` | System shortcuts (Xlib + XInput2) |
-| `hde-screenshot` | Screenshot tool: `hde-screenshot [--area \| --window] [--delay N] [--file PATH] [--no-clipboard] [--no-notify]` |
+| `hde-screenshot` | Screenshot tool: `hde-screenshot [--area \| --window] [--delay N] [--file PATH \| --clipboard] [--no-clipboard] [--no-notify]` |
 | `hde-xsettings` | XSETTINGS manager: live theme / Dark mode / icons / fonts for all GTK apps |
 
 ## Configuration
@@ -87,10 +95,12 @@ Desktop wallpaper and icon positions: `~/.config/hde/config.ini`.
 ## Tests
 
 `make check` starts a complete HDE session inside Xvfb and checks the Super key, F1–F3 volume
-(PulseAudio), notifications, PrtSc screenshots (also with an Openbox `rc.xml` that binds `Print`), the desktop
+(PulseAudio), notifications, PrtSc screenshots (also with an Openbox `rc.xml` that binds `Print`, and with Openbox
+holding `Print` before `hde-hotkeys` starts), `Ctrl+Print` to the clipboard, the desktop
 icon selection frame and icon menu (Rename, Trash, Copy/Paste, Properties), the Wi-Fi list (with a simulated
 `nmcli`), live Dark mode, live window manager switching and crash recovery. Needs `xvfb xdotool dbus-x11` (optionally `metacity openbox
-pulseaudio libnotify-bin imagemagick`). CI runs it on Ubuntu 22.04 and 24.04.
+pulseaudio libnotify-bin imagemagick`). CI runs it on Ubuntu 22.04 and 24.04 and also builds HDE on Debian 13
+(trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
 
 ## Architecture
 

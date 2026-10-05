@@ -750,24 +750,6 @@ static gboolean spawn_program(const char *program, GError **error)
     return g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, error);
 }
 
-static void launch_command_candidates(const char *const *commands)
-{
-    for (int k = 0; commands[k]; k++) {
-        char *p = g_find_program_in_path(commands[k]);
-        if (!p) continue;
-
-        GError *err = NULL;
-        if (spawn_program(p, &err)) {
-            g_free(p);
-            g_clear_error(&err);
-            return;
-        }
-
-        g_clear_error(&err);
-        g_free(p);
-    }
-}
-
 /*
  * Settings is part of NexDE itself, so do not depend only on PATH.
  * When hde-desktop is launched from a display manager/session, PATH can

@@ -64,7 +64,8 @@ static void on_delay(GtkComboBox *c, gpointer d)
 }
 
 /* Screenshot tool used by hde-hotkeys for Print / Shift+Print / Alt+Print (key screenshot_tool).
- * "builtin" = HDE's own hde-screenshot (always available); only installed external tools are offered. */
+ * "builtin" = HDE's own hde-screenshot (always available); only installed external tools are offered.
+ * Ctrl+Print / Ctrl+Shift+Print / Ctrl+Alt+Print (clipboard only) always use the built-in tool. */
 static const char *const shot_tool_ids[] = { "builtin", "gnome-screenshot", "xfce4-screenshooter", "mate-screenshot",
                                              "flameshot", "spectacle", "maim", "scrot" };
 static const char *const shot_tool_names[] = { "HDE Screenshot (built-in)", "GNOME Screenshot", "Xfce Screenshooter",
@@ -144,6 +145,7 @@ GtkWidget *page_keyboard_new(void)
         { "Ctrl + Alt + Delete", "Session / Power dialog" },
         { "F1  ·  F2  ·  F3", "Mute  ·  Volume down  ·  Volume up" },
         { "Print  ·  Shift+Print  ·  Alt+Print", "Screenshot: screen · area · window" },
+        { "Ctrl + the same keys", "Screenshot to the clipboard only (no file)" },
     };
     for (guint i = 0; i < G_N_ELEMENTS(sc); i++) gtk_container_add(GTK_CONTAINER(card), shortcut_row(sc[i][0], sc[i][1]));
     gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
@@ -154,7 +156,8 @@ GtkWidget *page_keyboard_new(void)
     gtk_box_pack_start(GTK_BOX(box), section("Screenshots"), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), row_box("Screenshot tool",
         "Print = whole screen · Shift+Print = drag an area · Alt+Print = active window. The built-in tool saves "
-        "to Pictures/Screenshots and copies the picture to the clipboard.", shot_tool_combo()), FALSE, FALSE, 0);
+        "to Pictures/Screenshots and copies the picture to the clipboard; hold Ctrl as well to only copy it.",
+        shot_tool_combo()), FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Typing"), FALSE, FALSE, 0);
     GtkWidget *layout = gtk_combo_box_text_new();

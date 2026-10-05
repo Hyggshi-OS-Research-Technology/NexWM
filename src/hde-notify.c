@@ -531,6 +531,9 @@ static guint32 do_notify(const char *app_name, guint32 replaces_id, const char *
     if (!replaces_id) unread++;
     trim_history();
     bell_update();
+    if (g_getenv("HDE_DEBUG"))
+        g_printerr("hde-notify: notification %u from %s: %s%s\n", n->id, n->app_name ? n->app_name : "",
+                   n->summary ? n->summary : "", n->image ? " [image]" : "");
     return n->id;
 }
 

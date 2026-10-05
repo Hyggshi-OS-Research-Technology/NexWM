@@ -6,11 +6,13 @@
   xtool.py root-window PROP    print the XID stored in the WINDOW property PROP of the root window (0 if absent)
   xtool.py pixel X Y           print the color of the screen pixel at X,Y as "R G B" (0-255)
   xtool.py selection-owner SEL print the XID of the owner of selection SEL (e.g. CLIPBOARD), 0 if none
+  xtool.py selection-targets SEL  print the targets (formats) the owner of selection SEL offers, e.g. image/png
 """
 import ctypes
 import ctypes.util
 import struct
 import sys
+import time
 
 x = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
 x.XOpenDisplay.restype = ctypes.c_void_p
@@ -44,6 +46,15 @@ class XWindowAttributes(ctypes.Structure):
 
 
 x.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(XWindowAttributes)]
+x.XCreateSimpleWindow.restype = ctypes.c_ulong
+x.XCreateSimpleWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+                                  ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulong]
+x.XConvertSelection.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
+                                ctypes.c_ulong]
+x.XCheckTypedWindowEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_void_p]
+x.XGetAtomName.restype = ctypes.c_void_p
+x.XGetAtomName.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+x.XFlush.argtypes = [ctypes.c_void_p]
 
 
 class XImage(ctypes.Structure):
@@ -151,6 +162,33 @@ def pixel(px, py):
     return channel(im.red_mask), channel(im.green_mask), channel(im.blue_mask)
 
 
+def atom_name(a):
+    p = x.XGetAtomName(d, a)
+    if not p:
+        return "?"
+    name = ctypes.string_at(p).decode(errors="replace")
+    x.XFree(p)
+    return name
+
+
+def selection_targets(sel_name, timeout=3.0):
+    """Ask the owner of the selection for TARGETS (like a pasting application does)."""
+    win = x.XCreateSimpleWindow(d, root, 0, 0, 1, 1, 0, 0, 0)
+    prop = x.XInternAtom(d, b"HDE_XTOOL_TARGETS", 0)
+    x.XConvertSelection(d, x.XInternAtom(d, sel_name.encode(), 0), x.XInternAtom(d, b"TARGETS", 0), prop, win, 0)
+    x.XFlush(d)
+    ev = (ctypes.c_long * 24)()          # XEvent; XSelectionEvent.property is the 8th long on LP64
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if x.XCheckTypedWindowEvent(d, win, 31, ev):     # SelectionNotify
+            if ev[7] == 0:
+                return None                              # the owner refused
+            raw, fmt = get_prop(win, "HDE_XTOOL_TARGETS")
+            return [atom_name(a) for a in raw] if raw and fmt == 32 else []
+        time.sleep(0.05)
+    return None
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "popups":
@@ -174,6 +212,12 @@ if __name__ == "__main__":
     elif cmd == "selection-owner":
         owner = x.XGetSelectionOwner(d, x.XInternAtom(d, sys.argv[2].encode(), 0))
         print(hex(owner) if owner else "0")
+    elif cmd == "selection-targets":
+        t = selection_targets(sys.argv[2])
+        if t is None:
+            print("NO-ANSWER")
+            sys.exit(1)
+        print(" ".join(t))
     else:
         print(__doc__)
         sys.exit(2)
