@@ -4,6 +4,8 @@
   xtool.py popups              number of visible override-redirect windows (menus, OSD, notification popups)
   xtool.py xsettings           print the XSETTINGS values currently published (name=value)
   xtool.py root-window PROP    print the XID stored in the WINDOW property PROP of the root window (0 if absent)
+  xtool.py pixel X Y           print the color of the screen pixel at X,Y as "R G B" (0-255)
+  xtool.py selection-owner SEL print the XID of the owner of selection SEL (e.g. CLIPBOARD), 0 if none
 """
 import ctypes
 import ctypes.util
@@ -42,6 +44,20 @@ class XWindowAttributes(ctypes.Structure):
 
 
 x.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(XWindowAttributes)]
+
+
+class XImage(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_int), ("height", ctypes.c_int), ("xoffset", ctypes.c_int), ("format", ctypes.c_int),
+                ("data", ctypes.c_void_p), ("byte_order", ctypes.c_int), ("bitmap_unit", ctypes.c_int),
+                ("bitmap_bit_order", ctypes.c_int), ("bitmap_pad", ctypes.c_int), ("depth", ctypes.c_int),
+                ("bytes_per_line", ctypes.c_int), ("bits_per_pixel", ctypes.c_int), ("red_mask", ctypes.c_ulong),
+                ("green_mask", ctypes.c_ulong), ("blue_mask", ctypes.c_ulong)]
+
+
+x.XGetImage.restype = ctypes.POINTER(XImage)
+x.XGetImage.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
+                        ctypes.c_ulong, ctypes.c_int]
+ZPIXMAP = 2
 
 ERRHANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
 _ignore = ERRHANDLER(lambda d, e: 0)
@@ -116,6 +132,25 @@ def xsettings():
     return out
 
 
+def pixel(px, py):
+    img = x.XGetImage(d, root, px, py, 1, 1, 0xFFFFFFFF, ZPIXMAP)
+    if not img:
+        return None
+    im = img.contents
+    nbytes = max(1, im.bits_per_pixel // 8)
+    raw = ctypes.string_at(im.data, nbytes)
+    value = int.from_bytes(raw, "little" if im.byte_order == 0 else "big")
+
+    def channel(mask):
+        if not mask:
+            return 0
+        shift = (mask & -mask).bit_length() - 1
+        top = mask >> shift
+        return ((value & mask) >> shift) * 255 // top
+
+    return channel(im.red_mask), channel(im.green_mask), channel(im.blue_mask)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "popups":
@@ -130,6 +165,15 @@ if __name__ == "__main__":
     elif cmd == "root-window":
         raw, fmt = get_prop(root, sys.argv[2])
         print(hex(raw[0]) if raw and fmt == 32 else "0")
+    elif cmd == "pixel":
+        c = pixel(int(sys.argv[2]), int(sys.argv[3]))
+        if c is None:
+            print("0 0 0")
+            sys.exit(1)
+        print("%d %d %d" % c)
+    elif cmd == "selection-owner":
+        owner = x.XGetSelectionOwner(d, x.XInternAtom(d, sys.argv[2].encode(), 0))
+        print(hex(owner) if owner else "0")
     else:
         print(__doc__)
         sys.exit(2)

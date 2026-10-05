@@ -1,6 +1,7 @@
 #!/bin/sh
 # tests/smoke.sh — HDE smoke test: runs a whole HDE session in Xvfb, then checks the main features
-# (Super key, F1/F2/F3, notifications, Wi-Fi list, live Dark mode, WM switch without logout, restart after a crash).
+# (Super key, F1/F2/F3, notifications, PrtSc screenshots, desktop icon frame + icon menu, Wi-Fi list,
+#  live Dark mode, WM switch without logout, restart after a crash).
 #
 #   make check            (or: BUILD=build sh tests/smoke.sh)
 # Needs: Xvfb xdotool dbus-run-session python3. Optional: metacity openbox pulseaudio notify-send import(ImageMagick)
@@ -25,6 +26,17 @@ if [ -z "${HDE_SMOKE_INNER:-}" ]; then
         > "$OUT/home/.local/share/applications/hyggshi-settings.desktop"
     printf '[Desktop Entry]\nType=Link\nName=HDE Website\nURL=https://github.com/Hyggshi-OS-Research-Technology/NexWM\nIcon=web-browser\n' \
         > "$OUT/home/Desktop/hde.desktop"
+    # desktop icons for the icon menu tests (sorted by name: Home, aaa-folder, bbb-notes.txt, hde.desktop)
+    mkdir -p "$OUT/home/Desktop/aaa-folder"
+    echo "inside" > "$OUT/home/Desktop/aaa-folder/inside.txt"
+    echo "notes" > "$OUT/home/Desktop/bbb-notes.txt"
+    # Openbox config like many LXDE/Openbox systems, with Print bound to an external program: HDE must keep the key
+    # (the user-visible bug was 'Failed to execute child process "scrot"' coming from such a binding).
+    if [ -f /etc/xdg/openbox/rc.xml ]; then
+        mkdir -p "$OUT/home/.config/openbox"
+        sed "s|<keyboard>|<keyboard><keybind key=\"Print\"><action name=\"Execute\"><command>touch $OUT/wm-print-pressed</command></action></keybind>|" \
+            /etc/xdg/openbox/rc.xml > "$OUT/home/.config/openbox/rc.xml"
+    fi
 
     # fake nmcli: fixed Wi-Fi list, logs every command (to check that the password is NOT on the command line)
     cat > "$OUT/fakebin/nmcli" <<'EOF'
@@ -178,6 +190,173 @@ if command -v notify-send >/dev/null 2>&1; then
     if [ "$n1" -gt "$n0" ]; then pass "notify-send shows a popup"; else fail "notify-send shows a popup ($n0 -> $n1)"; fi
 fi
 
+# ---------- 4b. screenshots: HDE's own hde-screenshot (no scrot needed), PrtSc belongs to HDE ----------
+SHOTS="$HOME/Pictures/Screenshots"
+nshots() { ls "$SHOTS"/*.png 2>/dev/null | wc -l; }
+pngsize() {
+    python3 -c 'import struct, sys
+d = open(sys.argv[1], "rb").read(24)
+print("%dx%d" % struct.unpack(">II", d[16:24]) if d[:8] == b"\x89PNG\r\n\x1a\n" else "not-png")' "$1" 2>/dev/null || echo missing
+}
+newest_shot() { ls -t "$SHOTS"/*.png 2>/dev/null | head -n1; }
+check "hde-screenshot is built" test -x "$B/hde-screenshot"
+hk=$(grep -n "starting system hotkeys" "$OUT/session.log" | head -n1 | cut -d: -f1)
+wl=$(grep -n "starting window manager" "$OUT/session.log" | head -n1 | cut -d: -f1)
+if [ -n "$hk" ] && [ -n "$wl" ] && [ "$hk" -lt "$wl" ]; then pass "hde-hotkeys starts before the window manager (so the WM cannot take PrtSc, Super+E, ...)"
+else fail "hde-hotkeys starts before the window manager (hotkeys at log line ${hk:-?}, WM at ${wl:-?})"; fi
+if grep -q "system hotkeys.*not ready" "$OUT/session.log"; then fail "hde-hotkeys tells hde-session when its keys are grabbed (HDE_READY_FD)"
+else pass "hde-hotkeys tells hde-session when its keys are grabbed (HDE_READY_FD)"; fi
+n0=$(nshots); xdotool key Print; sleep 3; n1=$(nshots)
+if [ "$n1" -gt "$n0" ]; then pass "Print saves a screenshot with the built-in tool ($n0 -> $n1 in ~/Pictures/Screenshots)"
+else
+    fail "Print saves a screenshot with the built-in tool ($n0 -> $n1)"
+    grep -E "hde-(hotkeys|screenshot)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+fi
+sz=$(pngsize "$(newest_shot)")
+if [ "$sz" = 1280x800 ]; then pass "Print: the screenshot is a full-screen PNG ($sz)"; else fail "Print: the screenshot is a full-screen PNG ($sz)"; fi
+shot 05b-screenshot-notification
+if grep -q "hde-screenshot: notification [1-9]" "$OUT/session.log"; then pass "a notification announces the screenshot (Open / Show in Folder)"
+else fail "a notification announces the screenshot"; fi
+owner=$($XT selection-owner CLIPBOARD)
+if [ "$owner" != 0 ] && running hde-screenshot; then pass "the screenshot is on the clipboard (served by hde-screenshot)"
+else fail "the screenshot is on the clipboard (owner=$owner)"; fi
+n0=$(nshots); xdotool key shift+Print; sleep 1.5
+if xdotool search --onlyvisible --name "hde-screenshot area" >/dev/null 2>&1; then
+    pass "Shift+Print shows the area selection overlay"
+    shot 05c-area-overlay
+    xdotool key Escape; sleep 1
+    n1=$(nshots)
+    if [ "$n1" = "$n0" ] && ! xdotool search --onlyvisible --name "hde-screenshot area" >/dev/null 2>&1; then
+        pass "Esc cancels the area selection (nothing saved)"
+    else fail "Esc cancels the area selection ($n0 -> $n1 files)"; fi
+else
+    fail "Shift+Print shows the area selection overlay"
+fi
+"$B/hde-screenshot" --area --file "$OUT/area.png" --no-notify --no-clipboard > "$OUT/area.log" 2>&1 &
+AREA=$!
+sleep 1.5
+xdotool mousemove 200 150 mousedown 1; sleep 0.2; xdotool mousemove 300 220; sleep 0.2; xdotool mousemove 400 300; sleep 0.3
+shot 05d-area-drag
+xdotool mouseup 1; sleep 1.5
+sz=$(pngsize "$OUT/area.png")
+if [ "$sz" = 200x150 ]; then pass "dragging an area saves exactly that area (200x150)"; else fail "dragging an area saves exactly that area (got $sz)"; fi
+kill "$AREA" 2>/dev/null
+if ! command -v scrot >/dev/null 2>&1; then
+    echo "screenshot_tool=scrot" >> "$SETTINGS_INI"; sleep 2.5
+    n0=$(nshots); xdotool key Print; sleep 3; n1=$(nshots)
+    if [ "$n1" -gt "$n0" ] && grep -q "screenshot_tool=scrot is not installed; using hde-screenshot" "$OUT/session.log"; then
+        pass "screenshot_tool=scrot without scrot installed falls back to the built-in tool (no error)"
+    else fail "screenshot_tool=scrot without scrot installed falls back to the built-in tool ($n0 -> $n1)"; fi
+    sed -i '/^screenshot_tool=/d' "$SETTINGS_INI"; sleep 2
+fi
+
+# ---------- 4c. desktop icons: visible selection frame + each icon's own context menu ----------
+# Fresh profile, icons sorted by name in the first column: Home y=16, aaa-folder y=124, bbb-notes.txt y=232,
+# hde.desktop y=340 (x=16, cells 92x100). (22, y+40) is inside a cell but beside the picture and the label.
+px() { $XT pixel "$1" "$2" 2>/dev/null || echo "0 0 0"; }
+cdist() { python3 -c 'import sys
+a = [int(v) for v in sys.argv[1].split()]; b = [int(v) for v in sys.argv[2].split()]
+print(sum(abs(p - q) for p, q in zip(a, b)))' "$1" "$2"; }
+icon_menu_log() { grep -F "hde-desktop: icon menu for" "$OUT/session.log" | tail -n1; }
+away() { xdotool mousemove 250 650; sleep 0.4; }     # empty desktop, away from icons and dialogs
+away
+bg=$(px 22 272); bg_folder=$(px 22 164); bg_link=$(px 22 380)
+xdotool mousemove 62 262 click 1; sleep 0.3; away
+sel=$(px 22 272)
+if [ "$(cdist "$bg" "$sel")" -ge 60 ]; then pass "clicking a desktop icon shows a clearly visible selection frame (pixel $bg -> $sel)"
+else fail "clicking a desktop icon shows a clearly visible selection frame (pixel $bg -> $sel)"; fi
+shot 05e-icon-selected
+xdotool click 1; sleep 0.5
+clr=$(px 22 272)
+if [ "$(cdist "$bg" "$clr")" -le 12 ]; then pass "clicking the empty desktop removes the selection frame"
+else fail "clicking the empty desktop removes the selection frame ($bg -> $clr)"; fi
+xdotool mousemove 62 262; sleep 0.5; hov=$(px 22 272); away
+if [ "$(cdist "$bg" "$hov")" -ge 15 ]; then pass "hovering a desktop icon highlights it"; else fail "hovering a desktop icon highlights it ($bg -> $hov)"; fi
+# rubber band from the empty desktop across aaa-folder and bbb-notes.txt (not Home, not hde.desktop)
+xdotool mousemove 130 120 mousedown 1; sleep 0.2; xdotool mousemove 70 200; sleep 0.2; xdotool mousemove 10 250; sleep 0.3
+shot 05e2-rubber-band
+xdotool mouseup 1; sleep 0.3; away
+if [ "$(cdist "$bg_folder" "$(px 22 164)")" -ge 60 ] && [ "$(cdist "$bg" "$(px 22 272)")" -ge 60 ] && [ "$(cdist "$bg_link" "$(px 22 380)")" -le 12 ]; then
+    pass "dragging a rubber band on the desktop selects the icons it touches"
+else fail "dragging a rubber band on the desktop selects the icons it touches"; fi
+xdotool click 1; sleep 0.4
+
+nd0=$(grep -c "hde-desktop: desktop menu" "$OUT/session.log")
+xdotool mousemove 62 262 click 3; sleep 1.2
+shot 05f-icon-menu
+m=$(icon_menu_log)
+case "$m" in
+    *"bbb-notes.txt: Open | Open With | Cut | Copy | Rename… | Move to Trash | Properties")
+        pass "right-click on a file icon opens the icon's own menu (Open, Open With, Cut, Copy, Rename, Trash, Properties)" ;;
+    *) fail "right-click on a file icon opens the icon's own menu (log: ${m:-nothing})" ;;
+esac
+nd1=$(grep -c "hde-desktop: desktop menu" "$OUT/session.log")
+if [ "$nd1" = "$nd0" ]; then pass "right-click on an icon does not open the desktop menu"; else fail "right-click on an icon opened the desktop menu"; fi
+xdotool key Escape; sleep 0.5
+xdotool mousemove 250 650 click 3; sleep 1.2
+nd2=$(grep -c "hde-desktop: desktop menu" "$OUT/session.log")
+if [ "$nd2" -gt "$nd1" ]; then pass "right-click on the empty desktop still opens the desktop menu"; else fail "right-click on the empty desktop still opens the desktop menu"; fi
+shot 05g-desktop-menu
+xdotool key Escape; sleep 0.5
+xdotool mousemove 62 154 click 3; sleep 1.2
+case "$(icon_menu_log)" in
+    *"aaa-folder: Open | Open With | Open in Terminal | Cut | Copy | Rename… | Move to Trash | Properties") pass "a folder's icon menu also has Open in Terminal" ;;
+    *) fail "a folder's icon menu also has Open in Terminal ($(icon_menu_log))" ;;
+esac
+xdotool key Escape; sleep 0.5
+xdotool mousemove 62 46 click 3; sleep 1.2
+case "$(icon_menu_log)" in
+    *"$HOME: Open | Open With | Open in Terminal | Properties") pass "the Home icon's menu has no Cut / Rename / Trash" ;;
+    *) fail "the Home icon's menu has no Cut / Rename / Trash ($(icon_menu_log))" ;;
+esac
+xdotool key Escape; sleep 0.5
+# Properties (mnemonic P) of the launcher
+xdotool mousemove 62 370 click 3; sleep 1; xdotool key p; sleep 1.5
+if xdotool search --onlyvisible --name "hde.desktop.*Properties" >/dev/null 2>&1; then
+    pass "Properties in the icon menu opens a Properties window"
+    shot 05h-properties
+    xdotool key Escape; sleep 0.8
+    if xdotool search --onlyvisible --name "hde.desktop.*Properties" >/dev/null 2>&1; then fail "Esc closes the Properties window"; fi
+else
+    fail "Properties in the icon menu opens a Properties window"
+fi
+# Rename (mnemonic R): bbb-notes.txt -> zzz-notes.txt (then sorted last: y=340)
+xdotool mousemove 62 262 click 3; sleep 1
+case "$(icon_menu_log)" in
+    *bbb-notes.txt:*)
+        xdotool key r; sleep 1.5
+        if xdotool search --onlyvisible --name "^Rename$" >/dev/null 2>&1; then
+            shot 05i-rename
+            xdotool key ctrl+a; xdotool type --delay 30 "zzz-notes.txt"; xdotool key Return; sleep 1.5
+            if [ -f "$HOME/Desktop/zzz-notes.txt" ] && [ ! -e "$HOME/Desktop/bbb-notes.txt" ]; then pass "Rename… in the icon menu renames the file"
+            else fail "Rename… in the icon menu renames the file ($(ls "$HOME/Desktop" | tr '\n' ' '))"; fi
+        else
+            fail "Rename… in the icon menu opens the Rename dialog"
+        fi ;;
+    *) fail "Rename…: the right-click did not open the menu of bbb-notes.txt"; xdotool key Escape ;;
+esac
+# Move to Trash (mnemonic M)
+xdotool mousemove 62 370 click 3; sleep 1
+case "$(icon_menu_log)" in
+    *zzz-notes.txt:*)
+        xdotool key m; sleep 1.5
+        if [ -f "$XDG_DATA_HOME/Trash/files/zzz-notes.txt" ] && [ ! -e "$HOME/Desktop/zzz-notes.txt" ]; then
+            pass "Move to Trash in the icon menu moves the file to the Trash"
+        else fail "Move to Trash in the icon menu moves the file to the Trash"; fi ;;
+    *) fail "Move to Trash: the right-click did not open the menu of zzz-notes.txt ($(icon_menu_log))"; xdotool key Escape ;;
+esac
+# Copy (mnemonic C) a folder, then Paste (mnemonic P) from the desktop menu: recursive copy with a free name
+xdotool mousemove 62 154 click 3; sleep 1; xdotool key c; sleep 0.5
+xdotool mousemove 250 650 click 3; sleep 1; xdotool key p; sleep 2
+if [ -f "$HOME/Desktop/aaa-folder (copy)/inside.txt" ]; then pass "Copy + Paste duplicates a folder with its contents as \"aaa-folder (copy)\""
+else fail "Copy + Paste duplicates a folder with its contents ($(ls "$HOME/Desktop" | tr '\n' ' '))"; fi
+shot 05j-after-paste
+# keyboard: the pasted folder is selected -> Delete moves it to the Trash
+xdotool key Delete; sleep 1.5
+if [ -d "$XDG_DATA_HOME/Trash/files/aaa-folder (copy)" ] && [ ! -e "$HOME/Desktop/aaa-folder (copy)" ]; then
+    pass "the pasted items are selected and the Delete key moves them to the Trash"
+else fail "the pasted items are selected and the Delete key moves them to the Trash"; fi
+
 # ---------- 5. Settings: Wi-Fi, Bluetooth ----------
 "$B/hde-settings" network > "$OUT/settings.log" 2>&1 &
 SETTINGS=$!
@@ -250,6 +429,11 @@ if [ -n "$BLUEZ_MOCK" ]; then
     if grep -q "AgentManager1\|RegisterAgent" "$OUT/bluez-mock.log" 2>/dev/null; then :; fi
 fi
 "$B/hde-settings" keyboard; sleep 2; shot 08-settings-keyboard
+n0=$(nshots); xdotool key alt+Print; sleep 3; n1=$(nshots)
+sz=$(pngsize "$(newest_shot)"); sw=${sz%x*}; sh=${sz#*x}
+if [ "$n1" -gt "$n0" ] && [ "$sw" -ge 980 ] 2>/dev/null && [ "$sw" -le 1120 ] && [ "$sh" -ge 660 ] && [ "$sh" -le 790 ]; then
+    pass "Alt+Print captures only the active window ($sz; Settings is 1020x700)"
+else fail "Alt+Print captures only the active window (got $sz, files $n0 -> $n1)"; fi
 "$B/hde-settings" appearance; sleep 2; shot 09-settings-appearance-light
 
 # ---------- 6. Dark mode ----------
@@ -278,6 +462,12 @@ if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; th
     check "live WM switch: Openbox is running" pgrep -x openbox
     check "live WM switch: Metacity has stopped" sh -c "! pgrep -x metacity"
     check "panel survives the WM switch" running hde-panel
+    if [ -f "$XDG_CONFIG_HOME/openbox/rc.xml" ]; then
+        n0=$(nshots); xdotool key Print; sleep 3; n1=$(nshots)
+        if [ -e "$OUT/wm-print-pressed" ]; then fail "Openbox: its own rc.xml Print binding fired (HDE must keep PrtSc)"
+        elif [ "$n1" -gt "$n0" ]; then pass "Openbox with Print bound in rc.xml: Print still takes HDE's screenshot ($n0 -> $n1)"
+        else fail "Openbox with Print bound in rc.xml: Print did nothing ($n0 -> $n1)"; fi
+    fi
     sed -i 's/^wm=.*/wm=metacity/' "$SETTINGS_INI"
     "$B/hde-session" wm >/dev/null 2>&1; sleep 7
     check "live WM switch back: Metacity is running" pgrep -x metacity
@@ -294,6 +484,11 @@ if [ -n "$pid" ]; then
     if [ -n "$new" ] && [ "$new" != "$pid" ]; then pass "crashed panel is restarted by hde-session"; else fail "crashed panel is restarted by hde-session"; fi
 fi
 shot 14-after-restart
+
+if grep -q "Failed to execute child process" "$OUT/session.log"; then
+    fail "no 'Failed to execute child process' errors during the session"
+    grep "Failed to execute child process" "$OUT/session.log" | head -n 3 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+else pass "no 'Failed to execute child process' errors during the session"; fi
 
 # ---------- 9. logout ----------
 kill -TERM "$SESSION"; sleep 5

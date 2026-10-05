@@ -63,6 +63,44 @@ static void on_delay(GtkComboBox *c, gpointer d)
     apply_later();
 }
 
+/* Screenshot tool used by hde-hotkeys for Print / Shift+Print / Alt+Print (key screenshot_tool).
+ * "builtin" = HDE's own hde-screenshot (always available); only installed external tools are offered. */
+static const char *const shot_tool_ids[] = { "builtin", "gnome-screenshot", "xfce4-screenshooter", "mate-screenshot",
+                                             "flameshot", "spectacle", "maim", "scrot" };
+static const char *const shot_tool_names[] = { "HDE Screenshot (built-in)", "GNOME Screenshot", "Xfce Screenshooter",
+                                               "MATE Screenshot", "Flameshot", "Spectacle", "maim", "scrot" };
+
+static void on_shot_tool(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    const char *id = gtk_combo_box_get_active_id(c);
+    if (!id) return;
+    cfg_set_string("screenshot_tool", id);
+    char *name = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(c));
+    settings_status("Screenshot tool: %s — active immediately", name ? name : id);
+    g_free(name);
+}
+
+static GtkWidget *shot_tool_combo(void)
+{
+    GtkWidget *c = gtk_combo_box_text_new();
+    char *cur = cfg_get_string("screenshot_tool", "builtin");
+    gboolean cur_listed = FALSE;
+    for (guint i = 0; i < G_N_ELEMENTS(shot_tool_ids); i++) {
+        char *p = i == 0 ? NULL : g_find_program_in_path(shot_tool_ids[i]);
+        if (i == 0 || p) {
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(c), shot_tool_ids[i], shot_tool_names[i]);
+            if (!strcmp(cur, shot_tool_ids[i])) cur_listed = TRUE;
+        }
+        g_free(p);
+    }
+    /* a tool chosen earlier and uninstalled since: hde-hotkeys already falls back to the built-in one */
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(c), cur_listed ? cur : "builtin");
+    g_free(cur);
+    g_signal_connect(c, "changed", G_CALLBACK(on_shot_tool), NULL);
+    return c;
+}
+
 static GtkWidget *shortcut_row(const char *keys, const char *action)
 {
     GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
@@ -109,8 +147,14 @@ GtkWidget *page_keyboard_new(void)
     };
     for (guint i = 0; i < G_N_ELEMENTS(sc); i++) gtk_container_add(GTK_CONTAINER(card), shortcut_row(sc[i][0], sc[i][1]));
     gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), info_label("If a shortcut does nothing, your window manager may already use it "
-                                                "(see ~/.cache/hde/session.log)."), FALSE, FALSE, 4);
+    gtk_box_pack_start(GTK_BOX(box), info_label("HDE claims these keys before the window manager starts, so they work "
+                                                "even if the window manager's own configuration binds them. If one does "
+                                                "nothing, see ~/.cache/hde/session.log."), FALSE, FALSE, 4);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Screenshots"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Screenshot tool",
+        "Print = whole screen · Shift+Print = drag an area · Alt+Print = active window. The built-in tool saves "
+        "to Pictures/Screenshots and copies the picture to the clipboard.", shot_tool_combo()), FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Typing"), FALSE, FALSE, 0);
     GtkWidget *layout = gtk_combo_box_text_new();

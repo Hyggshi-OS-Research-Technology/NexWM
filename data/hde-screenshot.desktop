@@ -1,0 +1,20 @@
+[Desktop Entry]
+Name=Screenshot
+GenericName=Screenshot Tool
+Comment=Take a picture of an area of the screen (Print: whole screen, Alt+Print: window)
+Exec=@PREFIX@/bin/hde-screenshot --area --delay 1
+Icon=applets-screenshooter
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+Keywords=screenshot;capture;print;snip;
+StartupNotify=false
+Actions=Screen;Window;
+
+[Desktop Action Screen]
+Name=Whole Screen (in 3 seconds)
+Exec=@PREFIX@/bin/hde-screenshot --delay 3
+
+[Desktop Action Window]
+Name=Active Window (in 3 seconds)
+Exec=@PREFIX@/bin/hde-screenshot --window --delay 3

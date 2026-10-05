@@ -86,8 +86,9 @@ Run again:
   - `PrtSc/SysRq`: full-screen screenshot.
   - `Shift+PrtSc`: area screenshot.
   - `Alt+PrtSc`: active-window screenshot.
-  - Uses `gnome-screenshot`, `xfce4-screenshooter`, `flameshot`, or `scrot` as available.
-- `hde-session` starts the window manager before GTK desktop components.
+  - Uses HDE's own `hde-screenshot` (no external tool needed); Settings → Keyboard & Shortcuts can pick an
+    installed `gnome-screenshot`, `xfce4-screenshooter`, `flameshot`, `scrot`, … instead (fix 6).
+- `hde-session` starts the window manager before GTK desktop components (and, since fix 6, after `hde-hotkeys`).
   - `HDE_WM=auto` uses the fallback list.
   - `HDE_WM=xfwm4`, `openbox`, `marco`, etc. selects a specific WM.
 - Panel status shows input method/Fcitx, Wi-Fi and Bluetooth state from the real machine.
@@ -137,3 +138,44 @@ automatic panel restart after a crash and a clean logout. Diagnostic logging: `H
 
 Note: when nested in Xephyr on a Wayland host, the nested X server may not deliver XInput2 raw events;
 the Super key then does not open the menu (click the Menu button or use `hde-panel --menu`); a real session works normally.
+
+## Desktop icon menu, selection frame and built-in screenshots (fix 6)
+
+### Fixed / added
+
+- **`Failed to execute child process "scrot"` on PrtSc.** HDE's own code never ran scrot unchecked; the dialog
+  came from the window manager: Openbox (and LXDE-style `rc.xml` files) bind `Print` → `scrot` and `W-e` →
+  `kfmclient`, and Openbox reports a missing program in exactly that dialog. The WM used to start before
+  `hde-hotkeys`, grabbed those keys first, and HDE's grab failed. Now:
+  - `hde-session` starts `hde-hotkeys` first and waits until it reports (through `HDE_READY_FD`) that its keys are
+    grabbed; only then does it start the window manager. An X key can only be grabbed by one program, so
+    PrtSc, Super+E, … stay HDE's whatever the WM config says.
+  - `hde-hotkeys` re-grabs without ever releasing a key it keeps (a keyboard layout change made the WM and HDE
+    re-grab at the same moment).
+  - New built-in tool `hde-screenshot` (GTK3): whole screen, area (drag on a frozen, dimmed copy of the screen;
+    `Esc`/right-click cancels), active window (with its title bar, without CSD shadows). Saves
+    `~/Pictures/Screenshots/Screenshot_<date>_<time>.png`, copies the picture to the clipboard and shows a
+    notification with *Open* / *Show in Folder*. Also in the app menu as *Screenshot*.
+  - `screenshot_tool=` (Settings → Keyboard & Shortcuts) can choose an installed external tool; a chosen tool
+    that is missing falls back to the built-in one instead of failing.
+- **Desktop icons get their own context menu.** Right-click on an icon used to fall through to the desktop
+  menu. Now it opens the icon's menu: Open, Open With (applications for that file type + *Other Application…*),
+  Open in Terminal (folders), Cut, Copy, Rename…, Move to Trash, Properties. On an icon that is part of a
+  multi-selection the menu acts on all selected icons; Home only offers Open, Open With, Open in Terminal and
+  Properties. Cut/Copy use the GNOME/Xfce file-manager clipboard format, Paste copies folders recursively,
+  moves after Cut and never overwrites (`name (copy).ext`). Rename keeps the icon's saved position; renaming a
+  launcher changes its displayed name. `Type=Link` launchers now show their name/icon and open their URL.
+- **Visible selection frame.** Icons are `GtkEventBox`es without their own window, which never paint CSS
+  backgrounds or borders, so the `.selected`/`:hover` styles were invisible. The frame is now drawn with cairo:
+  accent-colored fill, light edge and a dark outline (visible on light and dark wallpapers), plus a hover
+  highlight; cut items are shown faded.
+
+### Tests
+
+`make check` now also checks: hde-hotkeys starts before the WM; Print saves a full-screen PNG, notifies and
+fills the clipboard; Shift+Print shows the overlay and `Esc` cancels; a dragged 200×150 area is saved exactly;
+`screenshot_tool=scrot` without scrot falls back; Alt+Print captures only the active window; with Openbox and an
+`rc.xml` that binds `Print`, Print still takes HDE's screenshot; the selection frame and hover highlight are
+visible (pixel colors); each icon menu (file, folder, Home) has the right items and the desktop menu still opens
+on empty space; Properties, Rename, Move to Trash, Copy + Paste of a folder and the Delete key work; no
+"Failed to execute child process" appears in the session log.

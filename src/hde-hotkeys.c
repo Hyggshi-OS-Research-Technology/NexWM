@@ -4,6 +4,7 @@
  *  F1 / F2 / F3                  mute / volume down / volume up   (settings.ini: fkeys_sound=true)
  *  Media keys                    Mute, Volume-/+, MicMute, Brightness-/+, Play/Pause/Next/Prev
  *  PrtSc, Shift+PrtSc, Alt+PrtSc screenshot of the whole screen / a selected area / a window
+ *                                (HDE's own hde-screenshot; settings.ini screenshot_tool= picks another tool)
  *  Super+L  lock screen          Super+E  file manager            Super+D  show desktop
  *  Super+R, Alt+F2  Run dialog   Super+S  app search              Ctrl+Alt+T  terminal
  *  Ctrl+Alt+Delete  Session / Power dialog
@@ -11,7 +12,11 @@
  * The Super key is read through XInput2 raw events (no grab), so the Super+<key> bindings of the WM and
  * of applications keep working; the menu only opens when Super is pressed and released with no other key/button.
  * Configuration (~/.config/hde/settings.ini, reloaded automatically when the file changes or on SIGHUP):
- *   super_menu=true  fkeys_sound=true  media_keys=true  system_shortcuts=true
+ *   super_menu=true  fkeys_sound=true  media_keys=true  system_shortcuts=true  screenshot_tool=builtin
+ *
+ * hde-session starts hde-hotkeys BEFORE the window manager (and waits for HDE_READY_FD), so these keys belong
+ * to HDE even when the WM's own config binds them too (e.g. Openbox rc.xml: Print -> scrot, W-e -> kfmclient,
+ * which fail with "Failed to execute child process" when those programs are not installed).
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -43,8 +48,8 @@ static Display *dpy;
 static Window root;
 
 /* ---------------- configuration ---------------- */
-typedef struct { int super_menu, fkeys, media, shortcuts; } Config;
-static Config cfg = { 1, 1, 1, 1 };
+typedef struct { int super_menu, fkeys, media, shortcuts; char shot_tool[64]; } Config;
+static Config cfg = { 1, 1, 1, 1, "builtin" };
 static char cfg_path[4096];
 static unsigned long long cfg_sig = ~0ULL;
 
@@ -71,8 +76,34 @@ static int cfg_bool(const char *key, int def)
     return v;
 }
 
+/* String value of key= (the last one wins, like cfg_bool); def if the key is missing or empty. */
+static void cfg_str(const char *key, const char *def, char *out, size_t len)
+{
+    snprintf(out, len, "%s", def);
+    FILE *f = fopen(cfg_path, "r");
+    if (!f) return;
+    char line[1024];
+    size_t n = strlen(key);
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, key, n) != 0) continue;
+        char *q = p + n;
+        while (*q == ' ' || *q == '\t') q++;
+        if (*q != '=') continue;
+        q++;
+        while (*q == ' ' || *q == '\t') q++;
+        size_t l = strcspn(q, "\r\n");
+        while (l > 0 && (q[l - 1] == ' ' || q[l - 1] == '\t')) l--;
+        if (l == 0) snprintf(out, len, "%s", def);
+        else snprintf(out, len, "%.*s", (int)l, q);
+    }
+    fclose(f);
+}
+
 static void load_config(void)
 {
+    cfg_str("screenshot_tool", "builtin", cfg.shot_tool, sizeof cfg.shot_tool);
     cfg.super_menu = cfg_bool("super_menu", 1);
     cfg.fkeys = cfg_bool("fkeys_sound", 1);
     cfg.media = cfg_bool("media_keys", 1);
@@ -128,7 +159,8 @@ static void spawn_sh(const char *cmd)
     }
 }
 
-static int have_bin(const char *name)
+/* Full path of program name in $PATH (written to out), or 0 if it is not installed. */
+static int find_bin(const char *name, char *out, size_t len)
 {
     const char *path = getenv("PATH");
     if (!path) path = "/usr/local/bin:/usr/bin:/bin";
@@ -138,11 +170,16 @@ static int have_bin(const char *name)
     for (char *d = strtok(copy, ":"); d && !found; d = strtok(NULL, ":")) {
         char buf[4096];
         snprintf(buf, sizeof buf, "%s/%s", *d ? d : ".", name);
-        if (access(buf, X_OK) == 0) found = 1;
+        if (access(buf, X_OK) == 0) {
+            found = 1;
+            if (out) snprintf(out, len, "%s", buf);
+        }
     }
     free(copy);
     return found;
 }
+
+static int have_bin(const char *name) { return find_bin(name, NULL, 0); }
 
 static void notify(const char *summary, const char *body)
 {
@@ -242,28 +279,70 @@ static const Binding bindings[] = {
 static KeyCode codes[N_BINDINGS];
 static int grabbed[N_BINDINGS];
 
+/* External tools that Settings > Keyboard can choose instead of the built-in hde-screenshot. */
 static const struct { const char *bin, *full, *area, *window; } shot_tools[] = {
     { "gnome-screenshot", "gnome-screenshot", "gnome-screenshot -a", "gnome-screenshot -w" },
     { "xfce4-screenshooter", "xfce4-screenshooter -f", "xfce4-screenshooter -r", "xfce4-screenshooter -w" },
     { "mate-screenshot", "mate-screenshot", "mate-screenshot -a", "mate-screenshot -w" },
     { "flameshot", "flameshot full -p \"$HOME/Pictures\"", "flameshot gui", "flameshot gui" },
     { "spectacle", "spectacle -f -b", "spectacle -r", "spectacle -a -b" },
-    { "scrot", "mkdir -p \"$HOME/Pictures\" && scrot \"$HOME/Pictures/screenshot-%Y%m%d-%H%M%S.png\"",
-      "mkdir -p \"$HOME/Pictures\" && scrot -s \"$HOME/Pictures/screenshot-%Y%m%d-%H%M%S.png\"",
-      "mkdir -p \"$HOME/Pictures\" && scrot -u \"$HOME/Pictures/screenshot-%Y%m%d-%H%M%S.png\"" },
-    { "import", "mkdir -p \"$HOME/Pictures\" && import -window root \"$HOME/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png\"",
-      "mkdir -p \"$HOME/Pictures\" && import \"$HOME/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png\"",
-      "mkdir -p \"$HOME/Pictures\" && import \"$HOME/Pictures/screenshot-$(date +%Y%m%d-%H%M%S).png\"" },
+    { "maim", "mkdir -p \"$HOME/Pictures/Screenshots\" && maim \"$HOME/Pictures/Screenshots/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png\"",
+      "mkdir -p \"$HOME/Pictures/Screenshots\" && maim -s \"$HOME/Pictures/Screenshots/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png\"",
+      "mkdir -p \"$HOME/Pictures/Screenshots\" && maim -i \"$(xdotool getactivewindow)\" \"$HOME/Pictures/Screenshots/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png\"" },
+    { "scrot", "mkdir -p \"$HOME/Pictures/Screenshots\" && scrot \"$HOME/Pictures/Screenshots/Screenshot_%Y-%m-%d_%H-%M-%S.png\"",
+      "mkdir -p \"$HOME/Pictures/Screenshots\" && scrot -s \"$HOME/Pictures/Screenshots/Screenshot_%Y-%m-%d_%H-%M-%S.png\"",
+      "mkdir -p \"$HOME/Pictures/Screenshots\" && scrot -u \"$HOME/Pictures/Screenshots/Screenshot_%Y-%m-%d_%H-%M-%S.png\"" },
 };
 
+/* hde-screenshot next to this binary (a fresh ./build copy wins, like hde-session does), else in $PATH. */
+static int find_builtin_shot(char *out, size_t len)
+{
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    if (n > 0) {
+        self[n] = '\0';
+        char *slash = strrchr(self, '/');
+        if (slash) {
+            *slash = '\0';
+            snprintf(out, len, "%s/hde-screenshot", self);
+            if (access(out, X_OK) == 0) return 1;
+        }
+    }
+    return find_bin("hde-screenshot", out, len);
+}
+
+/* Never ends in a "Failed to execute child process" error: a chosen tool that is not installed (or
+ * screenshot_tool=builtin, the default) uses the built-in hde-screenshot; external tools are only a last resort. */
 static void screenshot(int act)
 {
-    for (unsigned i = 0; i < sizeof shot_tools / sizeof shot_tools[0]; ++i) {
+    const char *mode_arg = act == A_SHOT_AREA ? "--area" : act == A_SHOT_WIN ? "--window" : NULL;
+    const unsigned n_tools = sizeof shot_tools / sizeof shot_tools[0];
+    if (strcmp(cfg.shot_tool, "builtin") != 0 && strcmp(cfg.shot_tool, "auto") != 0) {
+        for (unsigned i = 0; i < n_tools; ++i) {
+            if (strcmp(cfg.shot_tool, shot_tools[i].bin) != 0) continue;
+            if (have_bin(shot_tools[i].bin)) {
+                spawn_sh(act == A_SHOT_AREA ? shot_tools[i].area : act == A_SHOT_WIN ? shot_tools[i].window : shot_tools[i].full);
+                return;
+            }
+            fprintf(stderr, "hde-hotkeys: screenshot_tool=%s is not installed; using hde-screenshot\n", cfg.shot_tool);
+        }
+    }
+    char path[4096];
+    if (find_builtin_shot(path, sizeof path)) {
+        if (debug_on) fprintf(stderr, "hde-hotkeys: screenshot: %s %s\n", path, mode_arg ? mode_arg : "");
+        pid_t p = fork_child();
+        if (p == 0) {
+            execl(path, "hde-screenshot", mode_arg, (char *)NULL);
+            _exit(127);
+        }
+        return;
+    }
+    for (unsigned i = 0; i < n_tools; ++i) {
         if (!have_bin(shot_tools[i].bin)) continue;
         spawn_sh(act == A_SHOT_AREA ? shot_tools[i].area : act == A_SHOT_WIN ? shot_tools[i].window : shot_tools[i].full);
         return;
     }
-    notify("Screenshot", "No screenshot tool found. Install one: sudo apt install gnome-screenshot (or scrot)");
+    notify("Screenshot", "hde-screenshot is missing. Reinstall HDE (make && sudo make install).");
 }
 
 static void media(const char *what)
@@ -361,16 +440,26 @@ static int group_enabled(int g)
 static const unsigned ignored_mods[] = { 0, LockMask, Mod2Mask, Mod5Mask, LockMask | Mod2Mask, LockMask | Mod5Mask,
                                          Mod2Mask | Mod5Mask, LockMask | Mod2Mask | Mod5Mask };
 
+static void ungrab_binding(unsigned i)
+{
+    for (unsigned k = 0; k < sizeof ignored_mods / sizeof ignored_mods[0]; k++)
+        XUngrabKey(dpy, codes[i], bindings[i].mods | ignored_mods[k], root);
+}
+
+/* (Re)grab the enabled bindings. A key that stays ours is never released, not even for a moment: after a
+ * keyboard layout change (MappingNotify) the window manager re-grabs its own bindings at the same time and
+ * would otherwise get PrtSc & co. Only disabled bindings and keys whose keycode changed are released. */
 static void grab_all(void)
 {
-    XUngrabKey(dpy, AnyKey, AnyModifier, root);
-    XSync(dpy, False);
     int failed = 0;
     char failed_names[1024] = "";
     for (unsigned i = 0; i < N_BINDINGS; i++) {
-        codes[i] = XKeysymToKeycode(dpy, bindings[i].sym);
+        KeyCode kc = XKeysymToKeycode(dpy, bindings[i].sym);
+        int want = kc && group_enabled(bindings[i].group);
+        if (grabbed[i] && (!want || kc != codes[i])) ungrab_binding(i);
         grabbed[i] = 0;
-        if (!codes[i] || !group_enabled(bindings[i].group)) continue;
+        codes[i] = kc;
+        if (!want) continue;
         g_grab_failed = 0;
         for (unsigned k = 0; k < sizeof ignored_mods / sizeof ignored_mods[0]; k++)
             XGrabKey(dpy, codes[i], bindings[i].mods | ignored_mods[k], root, False, GrabModeAsync, GrabModeAsync);
@@ -382,12 +471,13 @@ static void grab_all(void)
                 strcat(failed_names, bindings[i].name);
             }
         }
-        grabbed[i] = 1;
+        grabbed[i] = 1;                     /* some NumLock/CapsLock variants may still be ours */
     }
+    XSync(dpy, False);
     if (failed)
         fprintf(stderr, "hde-hotkeys: already used by another program (window manager?):%s\n", failed_names);
-    fprintf(stderr, "hde-hotkeys: super_menu=%d fkeys_sound=%d media_keys=%d system_shortcuts=%d\n",
-            cfg.super_menu, cfg.fkeys, cfg.media, cfg.shortcuts);
+    fprintf(stderr, "hde-hotkeys: super_menu=%d fkeys_sound=%d media_keys=%d system_shortcuts=%d screenshot_tool=%s\n",
+            cfg.super_menu, cfg.fkeys, cfg.media, cfg.shortcuts, cfg.shot_tool);
 }
 
 static void handle_key(XKeyEvent *k)
@@ -488,7 +578,7 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf("hde-hotkeys: HDE system shortcuts daemon (see the comment at the top of hde-hotkeys.c)\n"
-                   "Config: ~/.config/hde/settings.ini  super_menu fkeys_sound media_keys system_shortcuts\n"
+                   "Config: ~/.config/hde/settings.ini  super_menu fkeys_sound media_keys system_shortcuts screenshot_tool\n"
                    "Send SIGHUP to reload.\n");
             return 0;
         }
@@ -532,6 +622,17 @@ int main(int argc, char **argv)
 #endif
     XSelectInput(dpy, root, KeyPressMask);
     XSync(dpy, False);
+    /* Tell hde-session that our keys are grabbed: only now does it start the window manager. */
+    const char *ready = getenv("HDE_READY_FD");
+    if (ready && *ready) {
+        int rfd = atoi(ready);
+        if (rfd > 2) {
+            ssize_t w = write(rfd, "1", 1);
+            (void)w;
+            close(rfd);
+        }
+        unsetenv("HDE_READY_FD");
+    }
 
     int fd = ConnectionNumber(dpy);
     while (!stop_flag) {

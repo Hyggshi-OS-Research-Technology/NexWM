@@ -1,7 +1,10 @@
 /* hde-session — the HDE session manager.
  *
- * Startup order: window manager -> hde-xsettings -> apply settings (hde-settings --apply)
- * -> hde-hotkeys -> hde-desktop -> hde-panel -> (2 seconds later) polkit agent + XDG autostart.
+ * Startup order: hde-hotkeys -> window manager -> hde-xsettings -> apply settings (hde-settings --apply)
+ * -> hde-desktop -> hde-panel -> (2 seconds later) polkit agent + XDG autostart.
+ *  - hde-hotkeys comes first (it reports through HDE_READY_FD once its keys are grabbed): an X key can only be
+ *    grabbed by one program, so PrtSc, Super+E, ... stay HDE's even if the WM config binds them as well
+ *    (Openbox's rc.xml: Print -> scrot, W-e -> kfmclient -> "Failed to execute child process" dialogs).
  *
  *  - WM: from `wm=` in ~/.config/hde/settings.ini (or HDE_WM); "auto" prefers GTK-based WMs
  *    (Metacity, Marco, Mutter, Muffin) over Xfwm4/Openbox/... (table in src/hde-wm.h).
@@ -19,6 +22,8 @@
 #include "hde-wm.h"
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -199,6 +204,27 @@ static void comp_start(Component *c)
     fflush(stdout);
     c->pid = spawn_argv(c->path, NULL);
     c->started = time(NULL);
+}
+
+/* Start a component and wait (at most timeout_ms) until it says it is ready: it gets the write end of a pipe
+ * in HDE_READY_FD and writes one byte (exiting closes the pipe too, so a failing child never blocks us). */
+static void comp_start_wait_ready(Component *c, int timeout_ms)
+{
+    int pfd[2];
+    if (!c->enabled || c->pid > 0 || pipe(pfd) != 0) { comp_start(c); return; }
+    fcntl(pfd[0], F_SETFD, FD_CLOEXEC);
+    char num[16];
+    snprintf(num, sizeof num, "%d", pfd[1]);
+    setenv("HDE_READY_FD", num, 1);
+    comp_start(c);
+    unsetenv("HDE_READY_FD");
+    close(pfd[1]);
+    if (c->pid > 0) {
+        struct pollfd p = { pfd[0], POLLIN, 0 };
+        if (poll(&p, 1, timeout_ms) <= 0)
+            fprintf(stderr, "hde-session: %s not ready after %d ms; continuing\n", c->label, timeout_ms);
+    }
+    close(pfd[0]);
 }
 
 static void comp_exited(Component *c, int status)
@@ -672,13 +698,17 @@ int main(int argc, char **argv)
         run_wait(dua, 3000);
     }
 
-    /* 1. Window manager before any GTK application */
+    /* 1. System shortcuts BEFORE the window manager, so that HDE owns its keys (see the top of this file) */
+    comps[C_HOTKEYS].enabled = start_panel;
+    comp_start_wait_ready(&comps[C_HOTKEYS], 2000);
+
+    /* 2. Window manager before any GTK application */
     if (g_use_wm) {
         wm_build_candidates(requested_wm());
         if (wm_start_next() == 0) usleep(400 * 1000);
     }
 
-    /* 2. XSETTINGS (theme / Dark mode for every GTK app) + re-apply keyboard, mouse and display settings */
+    /* 3. XSETTINGS (theme / Dark mode for every GTK app) + re-apply keyboard, mouse and display settings */
     comps[C_XSETTINGS].enabled = 1;
     comp_start(&comps[C_XSETTINGS]);
     {
@@ -690,11 +720,9 @@ int main(int argc, char **argv)
         }
     }
 
-    /* 3. System shortcuts, desktop, panel */
-    comps[C_HOTKEYS].enabled = start_panel;
+    /* 4. Desktop, panel */
     comps[C_DESKTOP].enabled = start_desktop;
     comps[C_PANEL].enabled = start_panel;
-    comp_start(&comps[C_HOTKEYS]);
     start_components();
 
     printf("HDE session running on backend: %s\n", hde_core_backend() ? hde_core_backend()->name : "none");
