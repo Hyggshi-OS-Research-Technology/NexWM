@@ -767,6 +767,20 @@ static gboolean rebuild(gpointer data)
         if (!di) continue;
         GDBusProxy *p = G_DBUS_PROXY(di);
         char *ad = prop_str(p, "Adapter");
+        if (g_getenv("HDE_DEBUG")) {                     /* chẩn đoán: thuộc tính BlueZ thực sự nhận được */
+            gchar **names = g_dbus_proxy_get_cached_property_names(p);
+            GString *dbg = g_string_new(NULL);
+            for (int k = 0; names && names[k]; k++) {
+                GVariant *v = g_dbus_proxy_get_cached_property(p, names[k]);
+                char *txt = v ? g_variant_print(v, TRUE) : g_strdup("NULL");
+                if (strlen(txt) < 60) g_string_append_printf(dbg, " %s=%s", names[k], txt);
+                g_free(txt);
+                if (v) g_variant_unref(v);
+            }
+            g_printerr("hde-settings: bt device %s adapter=%s:%s\n", g_dbus_proxy_get_object_path(p), ad ? ad : "?", dbg->str);
+            g_string_free(dbg, TRUE);
+            g_strfreev(names);
+        }
         if (g_strcmp0(ad, adapter_path) == 0) {
             DevInfo *d = g_new0(DevInfo, 1);
             d->path = g_strdup(g_dbus_proxy_get_object_path(p));

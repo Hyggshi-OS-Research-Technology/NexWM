@@ -442,7 +442,15 @@ static void xi2_event(XGenericEventCookie *c)
     switch (c->evtype) {
     case XI_RawKeyPress:
         if (is_super) {
-            if (!super_down) { super_down = 1; super_other = 0; super_time = re->time; }
+            /* Mỗi lần nhấn Super là một "lần chạm" mới, KHÔNG phụ thuộc trạng thái cũ: khi một tổ hợp
+             * Super+<phím> của chính hde-hotkeys đang được grab, X server lọc bỏ raw event gửi cho client
+             * giữ grab (FilterRawEvents), nên lần nhả Super lúc đó có thể bị mất (vd. nhả Super trước S).
+             * Bỏ qua sự kiện auto-repeat để giữ Super lâu không bị tính là chạm lại. */
+            if (!(re->flags & XIKeyRepeat)) {
+                super_down = 1;
+                super_other = 0;
+                super_time = re->time;
+            }
         } else if (super_down) {
             super_other = 1;
         }

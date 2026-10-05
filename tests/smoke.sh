@@ -94,6 +94,9 @@ if python3 -c "import dbusmock" >/dev/null 2>&1; then
         bz ConnectDevice "'hci0'" "'11:22:33:44:55:66'"
         bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" "'MX Keys'"
         bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:02'" "'Pixel 8'"
+        gdbus call --system --dest org.bluez --object-path / \
+            --method org.freedesktop.DBus.ObjectManager.GetManagedObjects > "$OUT/bluez-objects.txt" 2>&1
+        echo "INFO: dbusmock $(python3 -c 'import dbusmock; print(getattr(dbusmock, "__version__", "?"))' 2>&1)" >> "$OUT/results.txt"
     fi
 fi
 
@@ -130,6 +133,10 @@ n0=$(popups); xdotool key super+s; sleep 1.5
 check "Super+S opens app search" xdotool search --onlyvisible --name "Search applications"
 n1=$(popups)
 if [ "$n1" -le "$n0" ]; then pass "Super+<key> combination does not pop up the Start menu"; else fail "Super+<key> popped up the Start menu"; fi
+xdotool key Escape; sleep 0.8
+# hồi quy: xdotool nhả Super trước S -> lần nhả đó không tới hde-hotkeys (đang grab Super+S); Super vẫn phải chạy
+n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
+if [ "$n1" -gt "$n0" ]; then pass "Super still works right after a Super+<key> shortcut"; else fail "Super still works right after a Super+<key> shortcut ($n0 -> $n1)"; fi
 xdotool key Escape; sleep 0.5
 
 # ---------- 3. F1 / F2 / F3 âm lượng ----------
@@ -222,6 +229,9 @@ fi
 if [ -n "$BLUEZ_MOCK" ]; then
     bz PairDevice "'hci0'" "'AA:BB:CC:DD:EE:01'"; sleep 1.5
     shot 07b-bluetooth-live-update
+    grep -v "^$" "$OUT/bluez-mock.log" | tail -n 6 | cut -c1-300 | sed 's/^/INFO: bluez-mock: /' >> "$OUT/results.txt"
+    tr ',' '\n' < "$OUT/bluez-objects.txt" | grep -E "dev_11|Paired|Icon|Connected" | head -n 8 | cut -c1-200 | sed 's/^/INFO: bluez-objects: /' >> "$OUT/results.txt"
+    grep "hde-settings: bt device" "$OUT/settings.log" | tail -n 3 | cut -c1-700 | sed 's/^/INFO: /' >> "$OUT/results.txt"
     if grep -q "AgentManager1\|RegisterAgent" "$OUT/bluez-mock.log" 2>/dev/null; then :; fi
 fi
 "$B/hde-settings" keyboard; sleep 2; shot 08-settings-keyboard
