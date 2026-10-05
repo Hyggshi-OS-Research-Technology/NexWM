@@ -5,6 +5,8 @@ bin/
 *.a
 *.so
 nexwm
+build/
+bin
 
 # Debug/IDE
 .vscode/

@@ -514,6 +514,11 @@ static void register_item(const char *sender, const char *svc)
     else if ((slash = strchr(svc, '/'))) { bus_name = g_strndup(svc, slash - svc); path = g_strdup(slash); }
     else { bus_name = g_strdup(svc); path = g_strdup("/StatusNotifierItem"); }
 
+    /* Item từ watcher của host có thể có tên không hợp lệ -> GDBus in hàng loạt GLib-GIO-CRITICAL. */
+    if (!bus_name || !g_dbus_is_name(bus_name)) {
+        g_free(bus_name); g_free(path);
+        return;
+    }
     char *key = g_strdup_printf("%s%s", bus_name, path);
     if (!g_hash_table_contains(items, key)) {
         item_add(bus_name, path, key);

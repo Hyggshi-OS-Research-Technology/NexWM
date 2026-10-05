@@ -1,0 +1,3 @@
+# HDE backend selection
+# auto | x11 | wayland
+backend=auto

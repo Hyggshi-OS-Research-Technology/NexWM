@@ -30,6 +30,8 @@ static const SettingItem items[] = {
     {"input", "input-mouse-symbolic", "Input", "Mouse, touchpad and pointer"},
     {"sound", "audio-volume-high-symbolic", "Sound", "Output, input and volume"},
     {"network", "network-wireless-symbolic", "Network", "Wi-Fi, Ethernet and VPN"},
+    {"bluetooth", "bluetooth-active-symbolic", "Bluetooth", "Bluetooth devices and adapter"},
+    {"windows", "preferences-system-windows", "Window Management", "WM used by GTK and X11 applications"},
     {"notifications", "preferences-system-notifications-symbolic", "Notifications", "Alerts and Do Not Disturb"},
     {"power", "battery-good-symbolic", "Power", "Sleep, screen timeout and battery"},
     {"keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat and shortcuts"},
@@ -128,20 +130,14 @@ static GtkWidget *section(const char *title)
     return l;
 }
 
+/* Tiêu đề + mô tả trang đã được vẽ bởi header chung của cửa sổ (page_title/page_subtitle,
+ * cập nhật trong select_page). Trước đây page_base vẽ thêm lần nữa nên mỗi trang bị lặp tiêu đề. */
 static GtkWidget *page_base(const char *title, const char *subtitle)
 {
+    (void)title; (void)subtitle;
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_margin_start(box, 28); gtk_widget_set_margin_end(box, 28);
-    gtk_widget_set_margin_top(box, 22); gtk_widget_set_margin_bottom(box, 26);
-    GtkWidget *t = gtk_label_new(title); gtk_widget_set_halign(t, GTK_ALIGN_START);
-    gtk_style_context_add_class(gtk_widget_get_style_context(t), "page-heading");
-    GtkWidget *s = gtk_label_new(subtitle); gtk_widget_set_halign(s, GTK_ALIGN_START);
-    gtk_label_set_line_wrap(GTK_LABEL(s), TRUE); gtk_style_context_add_class(gtk_widget_get_style_context(s), "page-description");
-    gtk_box_pack_start(GTK_BOX(box), t, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), s, FALSE, FALSE, 2);
-    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_widget_set_margin_top(sep, 16); gtk_widget_set_margin_bottom(sep, 5);
-    gtk_box_pack_start(GTK_BOX(box), sep, FALSE, FALSE, 0);
+    gtk_widget_set_margin_top(box, 4); gtk_widget_set_margin_bottom(box, 26);
     return box;
 }
 
@@ -202,7 +198,30 @@ static gboolean cb_bool(GtkSwitch*s,gboolean v,gpointer x){(void)s;save_bool((co
 static void cb_int_range(GtkRange*r,gpointer x){save_int((const char*)x,(int)gtk_range_get_value(r));}
 static void cb_int_combo(GtkComboBox*c,gpointer x){save_int((const char*)x,gtk_combo_box_get_active(c));}
 static void cb_sound_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"pavucontrol","pavucontrol-qt","gnome-control-center",NULL};launch_candidates(cmds);}
+static gboolean run_shell_async(const char *cmd)
+{
+    gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)cmd, NULL };
+    GError *e = NULL;
+    gboolean ok = g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &e);
+    if (e) g_clear_error(&e);
+    return ok;
+}
+
 static void cb_network_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"nm-connection-editor","gnome-control-center","nm-applet",NULL};launch_candidates(cmds);}
+/* Chạy lệnh shell, trả về stdout (g_free) hoặc NULL. */
+static char *capture_shell(const char *cmd)
+{
+    gchar *out = NULL; gint st = 0;
+    gchar *argv[] = {(gchar*)"/bin/sh", (gchar*)"-c", (gchar*)cmd, NULL};
+    if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, &out, NULL, &st, NULL)) { g_free(out); return NULL; }
+    return out;
+}
+
+static gboolean cb_wifi(GtkSwitch*s,gboolean v,gpointer x){(void)s;(void)x;run_shell_async(v?"nmcli radio wifi on":"nmcli radio wifi off");save_bool("wifi_enabled",v);return FALSE;}
+
+static void cb_bluetooth_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"blueman-manager","gnome-control-center bluetooth","bluetoothctl",NULL};launch_candidates(cmds);}
+static gboolean cb_bluetooth(GtkSwitch*s,gboolean v,gpointer x){(void)s;(void)x;const char *cmd=v?"bluetoothctl power on":"bluetoothctl power off";run_shell_async(cmd);save_bool("bluetooth_enabled",v);return FALSE;}
+static void cb_wm_select(GtkComboBox*c,gpointer x){(void)x;const char*wm[]={"auto","xfwm4","openbox","marco","metacity","icewm","fluxbox","nexwm"};int i=gtk_combo_box_get_active(c);if(i>=0&&i<8)save_string("wm",wm[i]);}
 static void cb_user_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"gnome-control-center","cinnamon-settings-users","system-config-users",NULL};launch_candidates(cmds);}
 static void sidebar_clicked(GtkToggleButton *button, gpointer data);
 static void cb_sidebar(GtkToggleButton*t,gpointer x){if(gtk_toggle_button_get_active(t))sidebar_clicked(t,x);}
@@ -269,14 +288,116 @@ static GtkWidget *make_sound_page(void)
     GtkWidget *test=gtk_button_new_with_label("Open system sound settings");g_signal_connect(test,"clicked",G_CALLBACK(cb_sound_settings),NULL);gtk_box_pack_start(GTK_BOX(box),test,FALSE,FALSE,10);return p;
 }
 
+static const char *net_type_name(const char *t)
+{
+    if (!g_strcmp0(t, "wifi")) return "Wi-Fi";
+    if (!g_strcmp0(t, "ethernet")) return "Ethernet";
+    if (!g_strcmp0(t, "bridge")) return "Bridge";
+    if (!g_strcmp0(t, "wireguard") || !g_strcmp0(t, "vpn")) return "VPN";
+    return t;
+}
+
+static const char *net_state_name(const char *st)
+{
+    if (g_str_has_prefix(st, "connected (externally)")) return "Connected (externally)";
+    if (g_str_has_prefix(st, "connected")) return "Connected";
+    if (g_str_has_prefix(st, "connecting")) return "Connecting…";
+    if (!g_strcmp0(st, "disconnected")) return "Disconnected";
+    if (!g_strcmp0(st, "unavailable")) return "Unavailable";
+    if (!g_strcmp0(st, "unmanaged")) return "Not managed by NetworkManager";
+    return st;
+}
+
 static GtkWidget *make_network_page(void)
 {
-    GtkWidget*p=page_base("Network","Manage Wi-Fi, Ethernet and VPN connections.");GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(box),section("Connection"),FALSE,FALSE,0);
-    char *wifi=g_find_program_in_path("nmcli"); char *state=NULL; if(wifi){gchar*out=NULL;g_spawn_command_line_sync("nmcli -t -f GENERAL.STATE device show 2>/dev/null",&out,NULL,NULL,NULL); if(out){state=g_strstrip(out);}}
-    GtkWidget*info=gtk_label_new(wifi?(state&&*state?state:"NetworkManager detected"):"NetworkManager (nmcli) not found");gtk_widget_set_halign(info,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,8);g_free(wifi);g_free(state);
-    GtkWidget*wifi_sw=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(wifi_sw),get_bool("wifi_enabled",TRUE));g_signal_connect(wifi_sw,"state-set",G_CALLBACK(cb_bool),"wifi_enabled");gtk_box_pack_start(GTK_BOX(box),row_box("Wi-Fi","Enable wireless networking preference.",wifi_sw),FALSE,FALSE,0);
-    GtkWidget*vpn=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(vpn),get_bool("vpn_enabled",FALSE));g_signal_connect(vpn,"state-set",G_CALLBACK(cb_bool),"vpn_enabled");gtk_box_pack_start(GTK_BOX(box),row_box("VPN","Enable VPN preference.",vpn),FALSE,FALSE,0);
-    GtkWidget*btn=gtk_button_new_with_label("Open NetworkManager settings");g_signal_connect(btn,"clicked",G_CALLBACK(cb_network_settings),NULL);gtk_box_pack_start(GTK_BOX(box),btn,FALSE,FALSE,10);return p;
+    GtkWidget*p=page_base("Network","Manage Wi-Fi, Ethernet and VPN connections.");
+    GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);
+    gtk_box_pack_start(GTK_BOX(box),section("Connections"),FALSE,FALSE,0);
+
+    char *nm=g_find_program_in_path("nmcli");
+    if(!nm){
+        GtkWidget*info=gtk_label_new("NetworkManager (nmcli) not found");gtk_widget_set_halign(info,GTK_ALIGN_START);
+        gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,8);
+    } else {
+        g_free(nm);
+        /* -e no: không escape ':' -> CONNECTION (cột cuối) có thể chứa ':' mà không vỡ */
+        char *out=capture_shell("nmcli -t -e no -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null");
+        int shown=0;
+        if(out){
+            gchar **lines=g_strsplit(out,"\n",-1);
+            for(int i=0;lines[i];i++){
+                if(!*lines[i]) continue;
+                gchar **f=g_strsplit(lines[i],":",4);
+                if(g_strv_length(f)>=3 && g_strcmp0(f[1],"loopback") && g_strcmp0(f[1],"wifi-p2p")){
+                    const char *conn=(f[3]&&*f[3]&&g_strcmp0(f[3],"--"))?f[3]:NULL;
+                    char *desc=g_strdup_printf("%s · %s · %s",f[0],net_type_name(f[1]),net_state_name(f[2]));
+                    gtk_box_pack_start(GTK_BOX(box),row_box(conn?conn:f[0],desc,NULL),FALSE,FALSE,0);
+                    g_free(desc); shown++;
+                }
+                g_strfreev(f);
+            }
+            g_strfreev(lines);
+            g_free(out);
+        }
+        if(!shown){
+            GtkWidget*info=gtk_label_new("No network devices found");gtk_widget_set_halign(info,GTK_ALIGN_START);
+            gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,8);
+        }
+
+        /* Công tắc Wi-Fi: đọc trạng thái thật và điều khiển thật (nmcli radio wifi). */
+        char *radio=capture_shell("nmcli radio wifi 2>/dev/null");
+        gboolean wifi_on=radio?g_str_has_prefix(g_strstrip(radio),"enabled"):get_bool("wifi_enabled",TRUE);
+        g_free(radio);
+        gtk_box_pack_start(GTK_BOX(box),section("Wireless"),FALSE,FALSE,0);
+        GtkWidget*wifi_sw=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(wifi_sw),wifi_on);
+        g_signal_connect(wifi_sw,"state-set",G_CALLBACK(cb_wifi),NULL);
+        gtk_box_pack_start(GTK_BOX(box),row_box("Wi-Fi","Turn the wireless radio on or off.",wifi_sw),FALSE,FALSE,0);
+    }
+    GtkWidget*btn=gtk_button_new_with_label("Open NetworkManager settings");g_signal_connect(btn,"clicked",G_CALLBACK(cb_network_settings),NULL);gtk_box_pack_start(GTK_BOX(box),btn,FALSE,FALSE,10);
+    return p;
+}
+
+static GtkWidget *make_bluetooth_page(void)
+{
+    GtkWidget*p=page_base("Bluetooth","Manage the Bluetooth adapter and nearby devices.");
+    GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);
+    gtk_box_pack_start(GTK_BOX(box),section("Adapter"),FALSE,FALSE,0);
+    char *out=NULL; gboolean detected=FALSE;
+    if(g_find_program_in_path("bluetoothctl")){
+        { gchar *argv[]={(gchar*)"/bin/sh",(gchar*)"-c",(gchar*)"bluetoothctl show 2>/dev/null | grep -q 'Controller' && echo detected || true",NULL}; g_spawn_sync(NULL,argv,NULL,G_SPAWN_SEARCH_PATH,NULL,NULL,&out,NULL,NULL,NULL); }
+        detected=out&&*out;
+    }
+    GtkWidget*info=gtk_label_new(detected?"Bluetooth adapter detected":"Bluetooth tools/adapter not detected");
+    gtk_widget_set_halign(info,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,8);g_free(out);
+    GtkWidget*sw=gtk_switch_new();
+    gboolean bt_on=get_bool("bluetooth_enabled",TRUE);
+    if(detected){
+        char *pw=capture_shell("bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo yes");
+        bt_on=pw&&*pw; g_free(pw);
+    }
+    gtk_switch_set_active(GTK_SWITCH(sw),bt_on);
+    g_signal_connect(sw,"state-set",G_CALLBACK(cb_bluetooth),NULL);
+    gtk_box_pack_start(GTK_BOX(box),row_box("Bluetooth","Power the Bluetooth adapter when supported by bluetoothctl.",sw),FALSE,FALSE,0);
+    GtkWidget*btn=gtk_button_new_with_label("Open Bluetooth settings");
+    g_signal_connect(btn,"clicked",G_CALLBACK(cb_bluetooth_settings),NULL);
+    gtk_box_pack_start(GTK_BOX(box),btn,FALSE,FALSE,10);
+    return p;
+}
+
+static GtkWidget *make_windows_page(void)
+{
+    GtkWidget*p=page_base("Window Management","Choose the X11 window manager used before GTK applications start.");
+    GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);
+    gtk_box_pack_start(GTK_BOX(box),section("Window manager"),FALSE,FALSE,0);
+    const char*wm[]={"Automatic fallback","xfwm4","openbox","marco","metacity","icewm","fluxbox","nexwm"};
+    GtkWidget*c=gtk_combo_box_text_new();for(int i=0;i<8;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(c),wm[i]);
+    const char*cur=get_str("wm","auto");int active=0;const char*ids[]={"auto","xfwm4","openbox","marco","metacity","icewm","fluxbox","nexwm"};
+    for(int i=0;i<8;i++)if(!g_strcmp0(cur,ids[i]))active=i;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(c),active);g_signal_connect(c,"changed",G_CALLBACK(cb_wm_select),NULL);
+    gtk_box_pack_start(GTK_BOX(box),row_box("WM","HDE starts this WM before hde-desktop, hde-panel and GTK applications.",c),FALSE,FALSE,0);
+    GtkWidget*info=gtk_label_new("GTK apps are normal X11 clients in an HDE X11 session. A running WM supplies focus, borders, stacking and move/resize behavior.");
+    gtk_label_set_line_wrap(GTK_LABEL(info),TRUE);gtk_widget_set_halign(info,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,10);
+    return p;
 }
 
 static GtkWidget *make_notifications_page(void)
@@ -311,6 +432,8 @@ static GtkWidget *make_page(const char *id)
     if (!strcmp(id,"input")) return make_input_page();
     if (!strcmp(id,"sound")) return make_sound_page();
     if (!strcmp(id,"network")) return make_network_page();
+    if (!strcmp(id,"bluetooth")) return make_bluetooth_page();
+    if (!strcmp(id,"windows")) return make_windows_page();
     if (!strcmp(id,"notifications")) return make_notifications_page();
     if (!strcmp(id,"power")) return make_power_page();
     if (!strcmp(id,"keyboard")) return make_keyboard_page();
@@ -320,6 +443,7 @@ static GtkWidget *make_page(const char *id)
 
 static void select_page(const char *id, GtkWidget *button)
 {
+    if (!content_stack || !sidebar) return;   /* gọi sớm khi đang dựng sidebar */
     gtk_stack_set_visible_child_name(GTK_STACK(content_stack), id);
     GList *children = gtk_container_get_children(GTK_CONTAINER(sidebar));
     for (GList *l = children; l; l = l->next) {
@@ -366,6 +490,7 @@ static GtkWidget *make_sidebar(void)
         gtk_box_pack_start(GTK_BOX(r),im,FALSE,FALSE,0);
         gtk_box_pack_start(GTK_BOX(r),l,TRUE,TRUE,0);
         gtk_container_add(GTK_CONTAINER(b),r);
+        g_object_set_data(G_OBJECT(b),"hde-id",(gpointer)items[i].id);
         g_signal_connect(b,"toggled",G_CALLBACK(cb_sidebar),g_strdup(items[i].id));
         gtk_box_pack_start(GTK_BOX(box),b,FALSE,FALSE,0);
         if(i==0) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(b),TRUE);
@@ -375,7 +500,7 @@ static GtkWidget *make_sidebar(void)
 
 static void css(void)
 {
-    const char *data="* { font-family: Sans; } window { background: #f6f7f9; } .sidebar { background: #eceef2; } .sidebar button { color: #24262b; padding: 9px 10px; border-radius: 10px; } .sidebar button:checked { background: #3584e4; color: white; } .page-heading { font-size: 24px; font-weight: 700; } .page-description { color: #686b73; font-size: 13px; } .section-title { color: #3584e4; font-weight: 700; font-size: 12px; text-transform: uppercase; } .row-title { font-weight: 600; } .row-description { color: #777a82; font-size: 11px; } .about-title { font-size: 20px; font-weight: 700; } .status { color: #5f636b; font-size: 11px; } button { border-radius: 8px; }";
+    const char *data="* { font-family: Sans; } window { background: #f6f7f9; } .sidebar { background: #eceef2; } .sidebar button { color: #24262b; padding: 9px 10px; border-radius: 10px; } .sidebar button:checked { background: #3584e4; color: white; } .page-heading { font-size: 24px; font-weight: 700; } .page-description { color: #686b73; font-size: 13px; } .section-title { color: #3584e4; font-weight: 700; font-size: 12px; } .row-title { font-weight: 600; } .row-description { color: #777a82; font-size: 11px; } .about-title { font-size: 20px; font-weight: 700; } .status { color: #5f636b; font-size: 11px; } button { border-radius: 8px; }";
     GtkCssProvider *p=gtk_css_provider_new();gtk_css_provider_load_from_data(p,data,-1,NULL);gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),GTK_STYLE_PROVIDER(p),GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);g_object_unref(p);
 }
 
@@ -383,10 +508,17 @@ int main(int argc,char **argv)
 {
     gtk_init(&argc,&argv); config=g_key_file_new();config_path=g_build_filename(g_get_user_config_dir(),"hde","settings.ini",NULL);g_key_file_load_from_file(config,config_path,G_KEY_FILE_NONE,NULL);css();
     window=gtk_window_new(GTK_WINDOW_TOPLEVEL);gtk_window_set_title(GTK_WINDOW(window),APP_NAME);gtk_window_set_default_size(GTK_WINDOW(window),1000,680);gtk_window_set_position(GTK_WINDOW(window),GTK_WIN_POS_CENTER);gtk_window_set_icon_name(GTK_WINDOW(window),"preferences-system");g_signal_connect(window,"destroy",G_CALLBACK(gtk_main_quit),NULL);
-    GtkWidget*root=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,0);gtk_container_add(GTK_CONTAINER(window),root);sidebar=make_sidebar();gtk_box_pack_start(GTK_BOX(root),sidebar,FALSE,FALSE,0);
+    GtkWidget*root=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,0);gtk_container_add(GTK_CONTAINER(window),root);GtkWidget *sidebar_scroll=gtk_scrolled_window_new(NULL,NULL); gtk_widget_set_size_request(sidebar_scroll,260,-1); gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sidebar_scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC); sidebar=make_sidebar(); gtk_container_add(GTK_CONTAINER(sidebar_scroll),sidebar); gtk_box_pack_start(GTK_BOX(root),sidebar_scroll,FALSE,TRUE,0);
     GtkWidget*main=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(root),main,TRUE,TRUE,0);GtkWidget*header=gtk_box_new(GTK_ORIENTATION_VERTICAL,2);gtk_container_set_border_width(GTK_CONTAINER(header),24);page_title=gtk_label_new("Display");gtk_widget_set_halign(page_title,GTK_ALIGN_START);gtk_style_context_add_class(gtk_widget_get_style_context(page_title),"page-heading");page_subtitle=gtk_label_new("Resolution, scale and monitors");gtk_widget_set_halign(page_subtitle,GTK_ALIGN_START);gtk_style_context_add_class(gtk_widget_get_style_context(page_subtitle),"page-description");gtk_box_pack_start(GTK_BOX(header),page_title,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(header),page_subtitle,FALSE,FALSE,2);gtk_box_pack_start(GTK_BOX(main),header,FALSE,FALSE,0);
     content_stack=gtk_stack_new();gtk_stack_set_transition_type(GTK_STACK(content_stack),GTK_STACK_TRANSITION_TYPE_CROSSFADE);gtk_stack_set_transition_duration(GTK_STACK(content_stack),160);GtkWidget*scroll=gtk_scrolled_window_new(NULL,NULL);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);gtk_container_add(GTK_CONTAINER(scroll),content_stack);gtk_box_pack_start(GTK_BOX(main),scroll,TRUE,TRUE,0);
     for(guint i=0;i<G_N_ELEMENTS(items);i++){GtkWidget*p=make_page(items[i].id);gtk_stack_add_named(GTK_STACK(content_stack),p,items[i].id);}gtk_stack_set_visible_child_name(GTK_STACK(content_stack),"display");
     status_label=gtk_label_new("Ready");gtk_widget_set_halign(status_label,GTK_ALIGN_START);gtk_widget_set_margin_start(status_label,28);gtk_widget_set_margin_bottom(status_label,8);gtk_style_context_add_class(gtk_widget_get_style_context(status_label),"status");gtk_box_pack_start(GTK_BOX(main),status_label,FALSE,FALSE,0);
-    gtk_widget_show_all(window);gtk_main();g_key_file_free(config);g_free(config_path);return 0;
+    gtk_widget_show_all(window);
+    if(argc>1){   /* hde-settings <id>: mở thẳng một trang (network, bluetooth, windows, ...) */
+        GList*ch=gtk_container_get_children(GTK_CONTAINER(sidebar));
+        for(GList*l=ch;l;l=l->next){const char*id=g_object_get_data(G_OBJECT(l->data),"hde-id");
+            if(id&&!strcmp(id,argv[1])){gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(l->data),TRUE);break;}}
+        g_list_free(ch);
+    }
+    gtk_main();g_key_file_free(config);g_free(config_path);return 0;
 }

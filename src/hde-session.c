@@ -151,7 +151,10 @@ int main(void)
     g_unix_signal_add(SIGINT,  on_signal, NULL);
     g_unix_signal_add(SIGHUP,  on_signal, NULL);
 
-    for (guint i = 0; i < N_COMPS; i++) start_comp(&comps[i]);
+    /* WM -> desktop ngay; panel trễ một chút để luôn map SAU desktop (tránh desktop phủ lên panel). */
+    start_comp(&comps[0]);
+    start_comp(&comps[1]);
+    g_timeout_add(600, restart_cb, &comps[2]);
     g_timeout_add_seconds(2, run_autostart, NULL);
 
     g_main_loop_run(loop);

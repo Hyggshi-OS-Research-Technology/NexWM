@@ -113,12 +113,35 @@ static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
 /* ---------- icons ---------- */
 static void activate_target(const char *path)
 {
+    GError *err = NULL;
     if (g_str_has_suffix(path, ".desktop")) {
         GDesktopAppInfo *a = g_desktop_app_info_new_from_filename(path);
-        if (a) { g_app_info_launch(G_APP_INFO(a), NULL, NULL, NULL); g_object_unref(a); return; }
+        if (a) {
+            if (!g_app_info_launch(G_APP_INFO(a), NULL, NULL, &err)) {
+                g_printerr("hde-desktop: cannot launch %s: %s\n", path, err->message);
+                g_clear_error(&err);
+            }
+            g_object_unref(a);
+            return;
+        }
     }
     char *uri = g_filename_to_uri(path, NULL, NULL);
-    if (uri) { g_app_info_launch_default_for_uri(uri, NULL, NULL); g_free(uri); }
+    if (!uri) return;
+    if (!g_app_info_launch_default_for_uri(uri, NULL, &err)) {
+        /* Không có handler mặc định (ISO tối giản): thử xdg-open / file manager. */
+        g_printerr("hde-desktop: no default handler for %s: %s\n", uri, err->message);
+        g_clear_error(&err);
+        const char *openers[] = { "xdg-open", "thunar", "pcmanfm", "nautilus", "dolphin", NULL };
+        for (int i = 0; openers[i]; i++) {
+            char *prog = g_find_program_in_path(openers[i]);
+            if (!prog) continue;
+            char *argv[] = { prog, (char *)path, NULL };
+            gboolean ok = g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL);
+            g_free(prog);
+            if (ok) break;
+        }
+    }
+    g_free(uri);
 }
 
 static void select_icon(GtkWidget *ev)
@@ -153,17 +176,48 @@ static void save_icon_position(GtkWidget *ev)
     g_key_file_free(kf);
 }
 
+/* Tự nhận diện double-click thay vì chỉ dựa vào GDK_2BUTTON_PRESS: GDK bỏ qua
+ * double-click nếu chuột lệch >5px hoặc dưới Xephyr/touchpad nên icon "không bấm được". */
+static GtkWidget *last_press_icon = NULL;
+static guint32    last_press_time = 0;
+static gdouble    last_press_x = 0, last_press_y = 0;
+static guint32    last_activate_time = 0;
+
+static void launch_icon(GtkWidget *ev, guint32 t)
+{
+    const char *path = g_object_get_data(G_OBJECT(ev), "target");
+    last_activate_time = t;
+    last_press_icon = NULL;
+    drag_icon = NULL;
+    dragging_icon = FALSE;
+    if (path) activate_target(path);
+}
+
 static gboolean on_icon_press(GtkWidget *ev, GdkEventButton *e, gpointer data)
 {
     (void)data;
     if (e->button != 1) return FALSE;
+    if (e->type == GDK_3BUTTON_PRESS) return TRUE;
     select_icon(ev);
+
     if (e->type == GDK_2BUTTON_PRESS) {
-        const char *path = g_object_get_data(G_OBJECT(ev), "target");
-        if (path) activate_target(path);
-        dragging_icon = FALSE;
+        /* Đã mở bởi nhánh tự nhận diện ở lần nhấn thứ 2 thì bỏ qua. */
+        if (e->time != last_activate_time && e->time - last_activate_time > 50)
+            launch_icon(ev, e->time);
         return TRUE;
     }
+
+    guint dbl_time = 400;
+    g_object_get(gtk_settings_get_default(), "gtk-double-click-time", &dbl_time, NULL);
+    if (last_press_icon == ev && (e->time - last_press_time) <= dbl_time &&
+        fabs(e->x_root - last_press_x) <= 16 && fabs(e->y_root - last_press_y) <= 16) {
+        launch_icon(ev, e->time);
+        return TRUE;
+    }
+    last_press_icon = ev;
+    last_press_time = e->time;
+    last_press_x = e->x_root;
+    last_press_y = e->y_root;
     drag_icon = ev;
     dragging_icon = FALSE;
     drag_start_x = e->x_root;
@@ -453,20 +507,103 @@ static void launch_uri(const char *uri)
     g_app_info_launch_default_for_uri(uri, NULL, NULL);
 }
 
+static gboolean spawn_program(const char *program, GError **error)
+{
+    if (!program || !*program) return FALSE;
+
+    char *argv[] = { (char *)program, NULL };
+    return g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, error);
+}
+
 static void launch_command_candidates(const char *const *commands)
 {
     for (int k = 0; commands[k]; k++) {
         char *p = g_find_program_in_path(commands[k]);
         if (!p) continue;
+
         GError *err = NULL;
-        if (g_spawn_command_line_async(p, &err)) {
+        if (spawn_program(p, &err)) {
             g_free(p);
             g_clear_error(&err);
             return;
         }
+
         g_clear_error(&err);
         g_free(p);
     }
+}
+
+/*
+ * Settings is part of NexDE itself, so do not depend only on PATH.
+ * When hde-desktop is launched from a display manager/session, PATH can
+ * differ from the user's interactive shell. That made `Settings` appear
+ * to work only sometimes when hde-settings was still in ./build.
+ */
+static void launch_hyggshi_settings(GtkMenuItem *item, gpointer data)
+{
+    (void)item;
+    (void)data;
+
+    GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+    const char *path_env = g_getenv("PATH");
+    (void)path_env;
+
+    /* 1. Normal installed binary. */
+    char *found = g_find_program_in_path("hde-settings");
+    if (found) g_ptr_array_add(paths, found);
+
+    /* 2. Sibling of the running hde-desktop binary.
+     *    e.g. /home/me/nexDE/build/hde-desktop -> hde-settings */
+    char *self = g_file_read_link("/proc/self/exe", NULL);
+    if (self) {
+        char *dir = g_path_get_dirname(self);
+        char *candidate = g_build_filename(dir, "hde-settings", NULL);
+        g_ptr_array_add(paths, candidate);
+        g_free(dir);
+        g_free(self);
+    }
+
+    /* 3. Common installation locations, useful when PATH is incomplete. */
+    g_ptr_array_add(paths, g_strdup("/usr/local/bin/hde-settings"));
+    g_ptr_array_add(paths, g_strdup("/usr/bin/hde-settings"));
+
+    gboolean started = FALSE;
+    const char *started_path = NULL;
+
+    for (guint i = 0; i < paths->len; i++) {
+        const char *candidate = g_ptr_array_index(paths, i);
+        if (!g_file_test(candidate, G_FILE_TEST_IS_EXECUTABLE)) continue;
+
+        GError *err = NULL;
+        if (spawn_program(candidate, &err)) {
+            started = TRUE;
+            started_path = candidate;
+            g_clear_error(&err);
+            break;
+        }
+        g_clear_error(&err);
+    }
+
+    if (!started) {
+        GtkWidget *parent = win ? win : NULL;
+        GtkWidget *dialog = gtk_message_dialog_new(
+            parent ? GTK_WINDOW(parent) : NULL,
+            GTK_DIALOG_MODAL,
+            GTK_MESSAGE_ERROR,
+            GTK_BUTTONS_CLOSE,
+            "Cannot open Hyggshi Settings");
+        gtk_message_dialog_format_secondary_text(
+            GTK_MESSAGE_DIALOG(dialog),
+            "hde-settings was not found or could not be started.\n\n"
+            "Build it with `make` or install NexDE with `sudo make install`.\n"
+            "Expected: ./build/hde-settings or /usr/local/bin/hde-settings");
+        gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+    } else {
+        (void)started_path;
+    }
+
+    g_ptr_array_free(paths, TRUE);
 }
 
 static void m_terminal(GtkMenuItem *i, gpointer d)
@@ -721,9 +858,7 @@ static void m_settings(GtkMenuItem *i, gpointer d)
 
 static void m_hyggshi_settings(GtkMenuItem *i, gpointer d)
 {
-    (void)i; (void)d;
-    const char *commands[] = { "hde-settings", NULL };
-    launch_command_candidates(commands);
+    launch_hyggshi_settings(i, d);
 }
 
 static void m_display_settings(GtkMenuItem *i, gpointer d)
@@ -963,9 +1098,11 @@ static void on_dir_changed(GFileMonitor *m, GFile *f, GFile *o, GFileMonitorEven
 static void load_css(void)
 {
     const char *css =
+        ".desk-icon { border: 1px solid transparent; border-radius: 8px; padding: 2px; }"
         ".desk-icon label { color: white; text-shadow: 1px 1px 2px black, 0 0 4px black; }"
-        ".desk-icon.selected { background: rgba(61,111,217,0.55); border-radius: 6px; }"
-        ".desk-icon:hover { background: rgba(255,255,255,0.12); border-radius: 6px; }";
+        ".desk-icon.selected { background: rgba(61,111,217,0.52); border: 2px solid rgba(125,175,255,0.95); border-radius: 8px; box-shadow: 0 0 0 1px rgba(20,50,100,0.65), 0 2px 8px rgba(0,0,0,0.28); }"
+        ".desk-icon.selected label { color: #ffffff; font-weight: 600; }"
+        ".desk-icon:hover { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; }";
     GtkCssProvider *p = gtk_css_provider_new();
     gtk_css_provider_load_from_data(p, css, -1, NULL);
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
@@ -993,6 +1130,7 @@ int main(int argc, char **argv)
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
     gtk_window_stick(GTK_WINDOW(win));
+    gtk_window_set_keep_below(GTK_WINDOW(win), TRUE);   /* không bao giờ đè lên panel/cửa sổ khác */
     gtk_widget_set_size_request(win, sw, sh);
     gtk_window_set_default_size(GTK_WINDOW(win), sw, sh);
     gtk_window_move(GTK_WINDOW(win), 0, 0);
@@ -1022,6 +1160,7 @@ int main(int argc, char **argv)
     }
 
     gtk_widget_show_all(win);
+    gdk_window_lower(gtk_widget_get_window(win));         /* kể cả khi không có WM hoặc WM bỏ qua DESKTOP hint */
     gtk_main();
     return 0;
 }

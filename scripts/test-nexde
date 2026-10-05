@@ -31,7 +31,7 @@ DISPLAY_NUM="${2:-:1}"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
-BINDIR="$ROOT_DIR/bin"
+BINDIR="$ROOT_DIR/build"
 
 XEphyr_PID=""
 CHILD_PIDS=""
