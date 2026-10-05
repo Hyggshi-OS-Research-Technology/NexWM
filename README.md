@@ -19,7 +19,7 @@ manager and a system-hotkeys daemon.
 | **Dark mode** | Applies immediately to the panel, menus, Settings and **every running GTK app** (`hde-xsettings`), GTK4/libadwaita via the `color-scheme` setting; picks the dark variant of your theme automatically |
 | **Window managers** | GTK window managers **Metacity, Marco, Mutter, Muffin** (preferred — title bars follow the GTK theme and Dark mode), plus Xfwm4, Openbox, IceWM, Fluxbox, NexWM. Switch live from Settings, no logout |
 | **Session** | Restarts crashed components, XDG autostart (`~/.config/autostart`), polkit authentication agent, D-Bus activation environment |
-| **Touchpad & mouse** | Natural scrolling on the touchpad by default (the content follows your fingers, as on a phone), tap to click, separate mouse wheel direction, pointer speed/acceleration. Applied at login, immediately when changed, and to devices plugged in later or back after suspend (libinput and synaptics drivers, no `xinput` needed) |
+| **Touchpad & mouse** | Scroll direction picked on the touchpad itself: *Like a phone* (the content follows your fingers, the default) or *Like a mouse wheel* (swipe up to go back toward the top), shown as pictures in *Settings → Input* and in a *Touchpad scrolling* window with a test page that opens once at the first login with a touchpad. Tap to click, separate mouse wheel direction, pointer speed/acceleration. Applied at login, immediately when changed, to devices plugged in later or back after suspend, and again whenever another program (a window manager with its own touchpad settings, a script) changes them (libinput and synaptics drivers, no `xinput` needed). `hde-xsettings --status` shows every device and whether it matches Settings |
 | **Settings that apply** | Sound (volume, mute, microphone, output device), keyboard layout + repeat, touchpad/mouse, screen timeout, text scale, wallpaper, icons, fonts, accent color |
 
 ## Install
@@ -81,7 +81,7 @@ On the desktop: `Enter` open, `Alt+Enter` properties, `F2` rename, `Delete` move
 | `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script |
 | `hde-hotkeys` | System shortcuts (Xlib + XInput2) |
 | `hde-screenshot` | Screenshot tool: `hde-screenshot [--area \| --window] [--delay N] [--file PATH \| --clipboard] [--no-clipboard] [--no-notify]` |
-| `hde-xsettings` | XSETTINGS manager: live theme / Dark mode / icons / fonts for all GTK apps; also applies the touchpad / mouse settings (login, changes, hotplug) |
+| `hde-xsettings` | XSETTINGS manager: live theme / Dark mode / icons / fonts for all GTK apps; also HDE's input service: applies the touchpad / mouse settings (login, changes, hotplug, and back when another program changes them; keeps doing that when another XSETTINGS manager runs). `--status`: devices vs Settings |
 
 ## Configuration
 
@@ -91,7 +91,9 @@ Everything lives in `~/.config/hde/settings.ini` (group `[settings]`), written b
 `super_menu`, `fkeys_sound`, `media_keys`, `system_shortcuts`, `screenshot_tool` (`builtin` or an installed
 `gnome-screenshot`, `xfce4-screenshooter`, `mate-screenshot`, `flameshot`, `spectacle`, `maim`, `scrot`), `dnd`, `notification_popups`,
 `notification_sounds`, `scale`, `keyboard_layout`, `repeat_rate`, `repeat_delay`, `screen_timeout`,
-`natural_scroll` (touchpad, default `true`), `tap_to_click` (default `true`), `mouse_natural_scroll` (default `false`),
+`natural_scroll` (touchpad: `true` = like a phone, the default; `false` = like a mouse wheel),
+`touchpad_direction_chosen` (set once a direction was picked: the *Touchpad scrolling* window no longer opens at
+login), `tap_to_click` (default `true`), `mouse_natural_scroll` (default `false`),
 `pointer_speed` (0–1), `pointer_acceleration`, …
 Desktop wallpaper and icon positions: `~/.config/hde/config.ini`.
 
@@ -107,8 +109,13 @@ pulseaudio libnotify-bin imagemagick xinput`). CI runs it on Ubuntu 22.04 and 24
 
 `tests/input-test.sh` (CI only: needs root) checks the touchpad settings against the real X input drivers: Xorg with
 the libinput and synaptics drivers and virtual touchpads / a mouse created through `/dev/uinput`. It checks natural
-scrolling and tap to click on a fresh account, live changes, hotplug and remove/re-add (suspend/resume), and that a
-two-finger swipe up really moves the content up.
+scrolling and tap to click on a fresh account, live changes, hotplug and remove/re-add (suspend/resume), changes made
+by another program, another XSETTINGS manager, `hde-xsettings --status`, that a two-finger swipe up really moves the
+content up, and — in the *Touchpad scrolling* window — that a real swipe up over the test page goes toward the end
+with *Like a phone* and back toward the top with *Like a mouse wheel*.
+
+Which build is running: *Settings → About → Build*, `hde-settings --version`, `hde-xsettings --version` and the first
+line of `~/.cache/hde/session.log` show the commit HDE was built from.
 
 ## Architecture
 

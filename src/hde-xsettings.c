@@ -11,14 +11,18 @@
  *   ~/.config/gtk-3.0/settings.ini [Settings] gtk-theme-name, gtk-icon-theme-name, gtk-font-name,
  *                                          gtk-cursor-theme-name, gtk-cursor-theme-size  (fallback values)
  *
- * It is also HDE's input settings daemon (src/hde-input.c): touchpad natural scrolling + tap to click, mouse wheel
- * direction, pointer speed — applied at login, whenever settings.ini changes, and to every pointer device that is
- * plugged in or re-enabled later (USB/Bluetooth mice, a touchpad that comes back after suspend/resume).
- * Once more 4 seconds after login and 2 seconds after a hotplug, in case another program (e.g. Mutter, an autostart
- * script) set its own values at the same moment; SIGHUP re-applies everything at once.
+ * It is also HDE's input settings daemon (src/hde-input.c): touchpad scroll direction + tap to click, mouse wheel
+ * direction, pointer speed — applied at login, whenever settings.ini changes, to every pointer device that is plugged
+ * in or re-enabled later (USB/Bluetooth mice, a touchpad that comes back after suspend/resume), and again whenever
+ * another program changes one of these values (a window manager with its own touchpad settings such as Mutter or
+ * Muffin, an autostart script, xinput): HDE puts it back to what Settings says. SIGHUP re-applies everything at once.
+ * The input part keeps running when another XSETTINGS manager owns the theme settings (HDE started inside another
+ * desktop, or a program that took XSETTINGS over): only the theme part is left to that manager then.
  *
- * Usage: hde-xsettings [--replace]   (started by hde-session; exits if another manager is already running,
- *        unless --replace is given)
+ * Usage: hde-xsettings [--replace]   (started by hde-session; exits if another hde-xsettings is already running,
+ *                                     unless --replace is given)
+ *        hde-xsettings --status      touchpads and mice, their state and whether it matches Settings > Input
+ *        hde-xsettings --version
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -33,6 +37,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include "hde-input.h"
+#include "hde-build.h"
 
 enum { XS_INT = 0, XS_STRING = 1 };
 
@@ -225,7 +230,7 @@ static guint64 file_sig(const char *a, const char *b)
     return sig;
 }
 
-/* One line per touchpad / mouse at startup: shows in ~/.xsession-errors what HDE found and their state. */
+/* One line per touchpad / mouse at startup: shows in the session log what HDE found and their state. */
 static void log_input_devices(void)
 {
     HdeInputDevice devs[24];
@@ -241,33 +246,135 @@ static void log_input_devices(void)
     if (n == 0) fprintf(stderr, "hde-xsettings: input: no touchpad or mouse with the libinput or synaptics X driver\n");
 }
 
+/* Is this window the manager window of an hde-xsettings (WM_NAME "hde-xsettings")? */
+static int name_trap;
+static int name_trap_handler(Display *d, XErrorEvent *e) { (void)d; name_trap = e->error_code; return 0; }
+static gboolean window_is_hde_xsettings(Window w)
+{
+    char *name = NULL;
+    name_trap = 0;
+    int (*old)(Display *, XErrorEvent *) = XSetErrorHandler(name_trap_handler);
+    Status ok = XFetchName(dpy, w, &name);
+    XSync(dpy, False);
+    XSetErrorHandler(old);
+    gboolean is = ok && !name_trap && name && !strcmp(name, "hde-xsettings");
+    if (name) XFree(name);
+    return is;
+}
+
+static const char *on_off(int v) { return v < 0 ? "?" : v ? "on" : "off"; }
+
+/* hde-xsettings --status: what HDE sees and whether the devices match Settings > Input. 0 = all match. */
+static int print_status(void)
+{
+    HdeInputPrefs p;
+    hde_input_prefs_load(&p);
+    printf("HDE build %s\n", HDE_VERSION);
+    printf("Settings > Input: touchpad scrolling %s, tap to click %s, mouse wheel %s\n",
+           p.touchpad_natural ? "like a phone (natural scrolling on)" : "like a mouse wheel (natural scrolling off)",
+           p.tap_to_click ? "on" : "off",
+           !p.has_mouse_natural ? "left alone" : p.mouse_natural ? "reversed (natural)" : "classic");
+    Window xs = XGetSelectionOwner(dpy, sel_atom);
+    gboolean service = hde_input_service_running(dpy);
+    printf("HDE input service (hde-xsettings): %s\n",
+           service ? "running" : "NOT running: the settings are applied only at login and while Settings > Input is "
+                                 "open; log out and log in again");
+    printf("XSETTINGS (theme) manager: %s\n", xs == None ? "none" : window_is_hde_xsettings(xs) ? "hde-xsettings"
+                                                                                                : "another program");
+    if (!hde_input_supported()) {
+        printf("This hde-xsettings was built without libxi-dev: touchpad and mouse settings cannot be applied.\n"
+               "Install it (sudo apt install libxi-dev), then: make && sudo make install\n");
+        return 1;
+    }
+    if (!hde_input_init(dpy)) {
+        printf("The X server has no XInput 2: touchpad and mouse settings cannot be applied.\n");
+        return 1;
+    }
+    HdeInputDevice devs[32];
+    int n = hde_input_list_all(dpy, devs, (int)G_N_ELEMENTS(devs)), bad = 0, managed = 0;
+    printf("Pointer devices:\n");
+    for (int i = 0; i < n; i++) {
+        const HdeInputDevice *d = &devs[i];
+        if (!d->configurable) {
+            printf("  [%d] %s: not configurable by HDE (%s driver, no libinput or synaptics settings)\n", d->id, d->name,
+                   d->driver);
+            continue;
+        }
+        managed++;
+        int wn, wt;
+        hde_input_wanted(d, &p, &wn, &wt);
+        gboolean differs = (wn >= 0 && d->natural >= 0 && wn != d->natural) ||
+                           (wt >= 0 && d->tapping >= 0 && wt != d->tapping);
+        if (differs) bad++;
+        printf("  [%d] %s: %s, %s driver: natural scrolling %s", d->id, d->name,
+               d->kind == HDE_INPUT_TOUCHPAD ? "touchpad" : "mouse", d->driver, on_off(d->natural));
+        if (d->kind == HDE_INPUT_TOUCHPAD) printf(", tap to click %s", on_off(d->tapping));
+        if (differs)
+            printf("  <- DIFFERS from Settings (natural scrolling %s, tap to click %s)", on_off(wn), on_off(wt));
+        else if (wn < 0)
+            printf("  (wheel direction left alone)");
+        else
+            printf("  OK");
+        printf("\n");
+    }
+    if (managed == 0)
+        printf("  No touchpad or mouse uses the libinput or synaptics X driver (package xserver-xorg-input-libinput).\n");
+    if (bad) printf("Result: %d device(s) differ from Settings.%s\n", bad,
+                    service ? "" : " Start the service: hde-xsettings & (or log out and in)");
+    else printf("Result: every device matches Settings.\n");
+    return bad ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
-    gboolean replace = FALSE;
+    gboolean replace = FALSE, status = FALSE;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--replace")) replace = TRUE;
-        else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-            printf("Usage: hde-xsettings [--replace]\n");
+        else if (!strcmp(argv[i], "--status")) status = TRUE;
+        else if (!strcmp(argv[i], "--version")) {
+            printf("hde-xsettings (HDE) %s\n", HDE_VERSION);
+            return 0;
+        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            printf("Usage: hde-xsettings [--replace]   XSETTINGS + touchpad/mouse settings service (started by hde-session)\n"
+                   "       hde-xsettings --status      touchpads and mice, and whether they match Settings > Input\n"
+                   "       hde-xsettings --version\n");
             return 0;
         }
     }
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
         fprintf(stderr, "hde-xsettings: cannot open X display\n");
-        return 1;
+        return status ? 2 : 1;
     }
     int screen = DefaultScreen(dpy);
     root = RootWindow(dpy, screen);
-    char selname[32];
+    char selname[32], inputsel[32];
     g_snprintf(selname, sizeof selname, "_XSETTINGS_S%d", screen);
+    g_snprintf(inputsel, sizeof inputsel, HDE_INPUT_SELECTION, screen);
     sel_atom = XInternAtom(dpy, selname, False);
     settings_atom = XInternAtom(dpy, "_XSETTINGS_SETTINGS", False);
     manager_atom = XInternAtom(dpy, "MANAGER", False);
+    Atom input_atom = XInternAtom(dpy, inputsel, False);
 
-    if (!replace && XGetSelectionOwner(dpy, sel_atom) != None) {
-        fprintf(stderr, "hde-xsettings: another XSETTINGS manager is running (use --replace to take over)\n");
+    if (status) {
+        int rc = print_status();
         XCloseDisplay(dpy);
-        return 0;
+        return rc;
+    }
+    fprintf(stderr, "hde-xsettings: HDE build %s\n", HDE_VERSION);
+
+    /* XSETTINGS: ours, unless another manager runs. Another hde-xsettings already does everything: leave it be. */
+    gboolean xs_owner = TRUE;
+    Window other = XGetSelectionOwner(dpy, sel_atom);
+    if (other != None && !replace) {
+        if (window_is_hde_xsettings(other)) {
+            fprintf(stderr, "hde-xsettings: already running (use --replace to restart it)\n");
+            XCloseDisplay(dpy);
+            return 0;
+        }
+        fprintf(stderr, "hde-xsettings: another XSETTINGS manager is running: it keeps the theme settings; HDE still "
+                        "applies the touchpad and mouse settings (--replace takes the theme settings over too)\n");
+        xs_owner = FALSE;
     }
 
     XSetWindowAttributes attrs;
@@ -275,43 +382,58 @@ int main(int argc, char **argv)
     attrs.event_mask = PropertyChangeMask | StructureNotifyMask;
     mgr_win = XCreateWindow(dpy, root, -100, -100, 1, 1, 0, CopyFromParent, InputOnly, CopyFromParent,
                             CWOverrideRedirect | CWEventMask, &attrs);
+    XStoreName(dpy, mgr_win, "hde-xsettings");
     Time t = server_time();
-    XSetSelectionOwner(dpy, sel_atom, mgr_win, t);
-    if (XGetSelectionOwner(dpy, sel_atom) != mgr_win) {
-        fprintf(stderr, "hde-xsettings: failed to acquire %s\n", selname);
-        return 1;
+    if (xs_owner) {
+        XSetSelectionOwner(dpy, sel_atom, mgr_win, t);
+        if (XGetSelectionOwner(dpy, sel_atom) != mgr_win) {
+            fprintf(stderr, "hde-xsettings: failed to acquire %s; only the touchpad and mouse settings are applied\n",
+                    selname);
+            xs_owner = FALSE;
+        }
     }
-    publish(read_settings());
-
-    XClientMessageEvent xev;
-    memset(&xev, 0, sizeof xev);
-    xev.type = ClientMessage;
-    xev.window = root;
-    xev.message_type = manager_atom;
-    xev.format = 32;
-    xev.data.l[0] = (long)t;
-    xev.data.l[1] = (long)sel_atom;
-    xev.data.l[2] = (long)mgr_win;
-    XSendEvent(dpy, root, False, StructureNotifyMask, (XEvent *)&xev);
-    XFlush(dpy);
+    if (xs_owner) {
+        publish(read_settings());
+        XClientMessageEvent xev;
+        memset(&xev, 0, sizeof xev);
+        xev.type = ClientMessage;
+        xev.window = root;
+        xev.message_type = manager_atom;
+        xev.format = 32;
+        xev.data.l[0] = (long)t;
+        xev.data.l[1] = (long)sel_atom;
+        xev.data.l[2] = (long)mgr_win;
+        XSendEvent(dpy, root, False, StructureNotifyMask, (XEvent *)&xev);
+        XFlush(dpy);
+    }
 
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
     signal(SIGHUP, on_hup);
 
-    /* touchpad / mouse settings */
+    /* touchpad / mouse settings: one hde-xsettings does them (the newest one takes the selection over) */
     static const char *const ITAG = "hde-xsettings: input";
+    static const char *const CTAG = "hde-xsettings: input (changed by another program, set back)";
     HdeInputPrefs iprefs;
     hde_input_prefs_load(&iprefs);
-    gboolean xi = hde_input_watch(dpy);
+    XSetSelectionOwner(dpy, input_atom, mgr_win, t);
+    gboolean input_owner = XGetSelectionOwner(dpy, input_atom) == mgr_win;
+    gboolean xi = input_owner && hde_input_watch(dpy);
     time_t recheck_at = 0;
+    gint64 changed_at = 0;          /* monotonic time at which to look at devices changed by other programs */
     if (xi) {
         hde_input_apply(dpy, -1, &iprefs, ITAG);
         log_input_devices();
         recheck_at = time(NULL) + 4;
-    } else {
+    } else if (input_owner) {
         fprintf(stderr, "hde-xsettings: %s: touchpad and mouse settings are not applied\n",
                 hde_input_supported() ? "no XInput 2 on this X server" : "built without libxi-dev");
+    }
+    if (!xs_owner && !xi) {
+        fprintf(stderr, "hde-xsettings: nothing to do; exiting\n");
+        XDestroyWindow(dpy, mgr_win);
+        XCloseDisplay(dpy);
+        return 0;
     }
 
     guint64 m1 = file_sig("hde", "settings.ini"), m2 = file_sig("gtk-3.0", "settings.ini");
@@ -320,13 +442,25 @@ int main(int argc, char **argv)
         while (XPending(dpy)) {
             XEvent ev;
             XNextEvent(dpy, &ev);
-            int added = xi ? hde_input_handle_event(dpy, &ev, &iprefs, ITAG) : -1;
-            if (added >= 0) {
-                if (added > 0) recheck_at = time(NULL) + 2;
+            int r = xi ? hde_input_handle_event(dpy, &ev, &iprefs, ITAG) : -1;
+            if (r >= 0) {
+                if (r & HDE_INPUT_EV_ADDED) recheck_at = time(NULL) + 2;
+                if ((r & HDE_INPUT_EV_CHANGED) && !changed_at) changed_at = g_get_monotonic_time() + 300 * 1000;
                 continue;
             }
-            if (ev.type == SelectionClear && ev.xselectionclear.selection == sel_atom) {
-                fprintf(stderr, "hde-xsettings: another XSETTINGS manager took over; exiting\n");
+            if (ev.type != SelectionClear) continue;
+            if (ev.xselectionclear.selection == sel_atom && xs_owner) {
+                fprintf(stderr, "hde-xsettings: another XSETTINGS manager took the theme settings over%s\n",
+                        xi ? "; HDE keeps applying the touchpad and mouse settings" : "");
+                xs_owner = FALSE;
+            } else if (ev.xselectionclear.selection == input_atom && xi) {
+                fprintf(stderr, "hde-xsettings: another hde-xsettings applies the touchpad and mouse settings now\n");
+                xi = FALSE;
+                changed_at = 0;
+                recheck_at = 0;
+            }
+            if (!xs_owner && !xi) {
+                fprintf(stderr, "hde-xsettings: nothing left to do; exiting\n");
                 stop_flag = 1;
             }
         }
@@ -335,19 +469,32 @@ int main(int argc, char **argv)
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
         struct timeval tv = { 1, 0 };
+        if (changed_at) {
+            gint64 wait = changed_at - g_get_monotonic_time();
+            if (wait < 0) wait = 0;
+            if (wait < G_USEC_PER_SEC) {
+                tv.tv_sec = 0;
+                tv.tv_usec = (suseconds_t)wait;
+            }
+        }
         if (select(fd + 1, &fds, NULL, NULL, &tv) < 0 && errno != EINTR) break;
+        /* settings.ini first: a program that changed a device right after writing it (Settings) is not undone */
         guint64 n1 = file_sig("hde", "settings.ini"), n2 = file_sig("gtk-3.0", "settings.ini");
         gboolean forced = reload_flag != 0;
         if (reload_flag || n1 != m1 || n2 != m2) {
             reload_flag = 0;
             m1 = n1;
             m2 = n2;
-            publish(read_settings());
+            if (xs_owner) publish(read_settings());
             HdeInputPrefs np;
             hde_input_prefs_load(&np);
             gboolean changed = !hde_input_prefs_equal(&np, &iprefs);
             iprefs = np;
             if (xi && (changed || forced)) hde_input_apply(dpy, -1, &iprefs, ITAG);
+        }
+        if (xi && changed_at && g_get_monotonic_time() >= changed_at) {
+            changed_at = 0;
+            hde_input_apply_changed(dpy, &iprefs, CTAG);
         }
         if (xi && recheck_at && time(NULL) >= recheck_at) {
             recheck_at = 0;

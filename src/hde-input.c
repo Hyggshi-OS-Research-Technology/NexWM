@@ -6,6 +6,9 @@
  *   synaptics driver  "Synaptics Scrolling Distance" (negative = natural scrolling),
  *                     "Synaptics Tap Action" (RT RB LT LB F1 F2 F3: 1/2/3-finger taps -> buttons 1/3/2)
  * A touchpad is recognised the way GTK does it: a "libinput Tapping Enabled" or "Synaptics Off" property.
+ * hde-xsettings also watches these properties (XI_PropertyEvent): when another program — a window manager with its
+ * own touchpad settings (Mutter, Muffin), an autostart script, xinput — changes one of them, HDE puts it back to what
+ * Settings says, so the direction the user picked stays the direction the touchpad scrolls.
  */
 #include "hde-input.h"
 #include <X11/Xatom.h>
@@ -69,14 +72,16 @@ gboolean hde_input_prefs_equal(const HdeInputPrefs *a, const HdeInputPrefs *b)
 gboolean hde_input_supported(void) { return TRUE; }
 
 enum { A_TAP, A_NATURAL, A_SPEED, A_PROFILE, A_PROFILES_AVAILABLE, A_SCROLL_METHODS,
-       A_SYN_OFF, A_SYN_SCROLL_DIST, A_SYN_TAP_ACTION, A_FLOAT, N_ATOMS };
+       A_SYN_OFF, A_SYN_SCROLL_DIST, A_SYN_TAP_ACTION, A_EVDEV_AXIS_INV, A_EVDEV_SCROLL_DIST, A_FLOAT, N_ATOMS };
 static const char *const atom_names[N_ATOMS] = {
     "libinput Tapping Enabled", "libinput Natural Scrolling Enabled", "libinput Accel Speed",
     "libinput Accel Profile Enabled", "libinput Accel Profiles Available", "libinput Scroll Methods Available",
-    "Synaptics Off", "Synaptics Scrolling Distance", "Synaptics Tap Action", "FLOAT",
+    "Synaptics Off", "Synaptics Scrolling Distance", "Synaptics Tap Action",
+    "Evdev Axis Inversion", "Evdev Scrolling Distance", "FLOAT",
 };
 
 static int watch_opcode = -1;
+static Atom watch_atoms[N_ATOMS];        /* interned by hde_input_watch() */
 
 /* ---- X errors: a device can disappear (unplugged, suspend) or be disabled between two requests ---- */
 static int trap_error;
@@ -318,10 +323,11 @@ static int apply_dev(Display *dpy, const Atom *atoms, const Dev *d, const HdeInp
     return changed;
 }
 
-/* Calls fn for every enabled slave pointer HDE can configure (or only for deviceid). */
-typedef void (*DevFn)(Display *dpy, const Atom *atoms, const Dev *d, void *data);
+/* Calls fn for every enabled slave pointer HDE can configure (or only for deviceid). all: also for the pointers HDE
+ * cannot configure (kind HDE_INPUT_OTHER, driver "evdev" or "unknown", d->has[] still filled in). */
+typedef void (*DevFn)(Display *dpy, const Atom *atoms, const Dev *d, gboolean configurable, void *data);
 
-static void for_each_device(Display *dpy, int deviceid, DevFn fn, void *data)
+static void for_each_device(Display *dpy, int deviceid, gboolean all, DevFn fn, void *data)
 {
     Atom atoms[N_ATOMS];
     if (!XInternAtoms(dpy, (char **)atom_names, N_ATOMS, False, atoms)) return;
@@ -334,24 +340,29 @@ static void for_each_device(Display *dpy, int deviceid, DevFn fn, void *data)
         Dev d;
         trap_push();
         gboolean ok = dev_probe(dpy, atoms, info[i].deviceid, info[i].name, &d);
-        if (trap_pop(dpy)) ok = FALSE;
-        if (ok) fn(dpy, atoms, &d, data);
+        if (trap_pop(dpy)) continue;
+        if (ok) fn(dpy, atoms, &d, TRUE, data);
+        else if (all) {
+            d.kind = HDE_INPUT_OTHER;
+            d.driver = d.has[A_EVDEV_AXIS_INV] || d.has[A_EVDEV_SCROLL_DIST] ? "evdev" : "unknown";
+            fn(dpy, atoms, &d, FALSE, data);
+        }
     }
     if (info) XIFreeDeviceInfo(info);
 }
 
 typedef struct { const HdeInputPrefs *p; const char *tag; int changed; } ApplyCtx;
 
-static void apply_cb(Display *dpy, const Atom *atoms, const Dev *d, void *data)
+static void apply_cb(Display *dpy, const Atom *atoms, const Dev *d, gboolean configurable, void *data)
 {
     ApplyCtx *c = data;
-    c->changed += apply_dev(dpy, atoms, d, c->p, c->tag);
+    if (configurable) c->changed += apply_dev(dpy, atoms, d, c->p, c->tag);
 }
 
 int hde_input_apply(Display *dpy, int deviceid, const HdeInputPrefs *p, const char *tag)
 {
     ApplyCtx c = { p, tag, 0 };
-    if (dpy && p) for_each_device(dpy, deviceid, apply_cb, &c);
+    if (dpy && p) for_each_device(dpy, deviceid, FALSE, apply_cb, &c);
     return c.changed;
 }
 
@@ -368,7 +379,7 @@ static int read_flag(Display *dpy, int id, Atom atom)
     return v;
 }
 
-static void list_cb(Display *dpy, const Atom *atoms, const Dev *d, void *data)
+static void list_cb(Display *dpy, const Atom *atoms, const Dev *d, gboolean configurable, void *data)
 {
     ListCtx *c = data;
     if (c->n >= c->max) return;
@@ -378,7 +389,12 @@ static void list_cb(Display *dpy, const Atom *atoms, const Dev *d, void *data)
     g_strlcpy(o->name, d->name, sizeof o->name);
     o->kind = d->kind;
     o->driver = d->driver;
+    o->configurable = configurable;
     o->natural = o->tapping = -1;
+    if (!configurable) {
+        c->n++;
+        return;
+    }
     trap_push();
     if (!strcmp(d->driver, "libinput")) {
         o->natural = read_flag(dpy, d->id, atoms[A_NATURAL]);
@@ -400,7 +416,14 @@ static void list_cb(Display *dpy, const Atom *atoms, const Dev *d, void *data)
 int hde_input_list(Display *dpy, HdeInputDevice *out, int max)
 {
     ListCtx c = { out, max, 0 };
-    if (dpy && out && max > 0) for_each_device(dpy, -1, list_cb, &c);
+    if (dpy && out && max > 0) for_each_device(dpy, -1, FALSE, list_cb, &c);
+    return c.n;
+}
+
+int hde_input_list_all(Display *dpy, HdeInputDevice *out, int max)
+{
+    ListCtx c = { out, max, 0 };
+    if (dpy && out && max > 0) for_each_device(dpy, -1, TRUE, list_cb, &c);
     return c.n;
 }
 
@@ -408,9 +431,11 @@ gboolean hde_input_watch(Display *dpy)
 {
     int op, ev, err;
     if (!hde_input_init(dpy) || !XQueryExtension(dpy, "XInputExtension", &op, &ev, &err)) return FALSE;
+    if (!XInternAtoms(dpy, (char **)atom_names, N_ATOMS, False, watch_atoms)) return FALSE;
     unsigned char bits[XIMaskLen(XI_LASTEVENT)];
     memset(bits, 0, sizeof bits);
     XISetMask(bits, XI_HierarchyChanged);
+    XISetMask(bits, XI_PropertyEvent);
     XIEventMask m;
     m.deviceid = XIAllDevices;
     m.mask_len = sizeof bits;
@@ -422,22 +447,88 @@ gboolean hde_input_watch(Display *dpy)
     return TRUE;
 }
 
+/* ---- changes made by other programs ---- */
+static int changed_ids[32], n_changed;
+
+typedef struct { int id; gint64 since, quiet_until; int count; } Guard;
+static Guard guards[16];
+
+static gboolean watched_property(Atom a)
+{
+    static const int which[] = { A_TAP, A_NATURAL, A_SPEED, A_PROFILE, A_SYN_SCROLL_DIST, A_SYN_TAP_ACTION };
+    for (unsigned i = 0; i < G_N_ELEMENTS(which); i++)
+        if (a != None && a == watch_atoms[which[i]]) return TRUE;
+    return FALSE;
+}
+
+static void mark_changed(int id)
+{
+    for (int i = 0; i < n_changed; i++)
+        if (changed_ids[i] == id) return;
+    if (n_changed < (int)G_N_ELEMENTS(changed_ids)) changed_ids[n_changed++] = id;
+}
+
+static Guard *guard_for(int id)
+{
+    Guard *oldest = &guards[0];
+    for (unsigned i = 0; i < G_N_ELEMENTS(guards); i++) {
+        if (guards[i].id == id) return &guards[i];
+        if (guards[i].since < oldest->since) oldest = &guards[i];
+    }
+    memset(oldest, 0, sizeof *oldest);
+    oldest->id = id;
+    return oldest;
+}
+
 int hde_input_handle_event(Display *dpy, XEvent *ev, const HdeInputPrefs *p, const char *tag)
 {
     if (watch_opcode < 0 || ev->type != GenericEvent || ev->xcookie.extension != watch_opcode) return -1;
     if (!XGetEventData(dpy, &ev->xcookie)) return 0;
-    int ids[64], n = 0;
+    int ids[64], n = 0, result = 0;
     if (ev->xcookie.evtype == XI_HierarchyChanged) {
         const XIHierarchyEvent *he = ev->xcookie.data;
         for (int i = 0; i < he->num_info && n < (int)G_N_ELEMENTS(ids); i++)
             if (he->info[i].flags & (XISlaveAdded | XIDeviceEnabled | XISlaveAttached)) ids[n++] = he->info[i].deviceid;
+    } else if (ev->xcookie.evtype == XI_PropertyEvent) {
+        const XIPropertyEvent *pe = ev->xcookie.data;
+        if (pe->what != XIPropertyDeleted && watched_property(pe->property)) {
+            mark_changed(pe->deviceid);
+            result |= HDE_INPUT_EV_CHANGED;
+        }
     }
     XFreeEventData(dpy, &ev->xcookie);
     for (int i = 0; i < n; i++) {
         if (debug_on() && tag) fprintf(stderr, "%s: device %d added or enabled\n", tag, ids[i]);
         hde_input_apply(dpy, ids[i], p, tag);
     }
-    return n;
+    if (n) result |= HDE_INPUT_EV_ADDED;
+    return result;
+}
+
+int hde_input_apply_changed(Display *dpy, const HdeInputPrefs *p, const char *tag)
+{
+    int ids[G_N_ELEMENTS(changed_ids)], n = n_changed, fixed = 0;
+    memcpy(ids, changed_ids, sizeof ids);
+    n_changed = 0;
+    gint64 now = g_get_monotonic_time();
+    for (int i = 0; dpy && p && i < n; i++) {
+        Guard *g = guard_for(ids[i]);
+        if (g->quiet_until > now) continue;
+        if (!hde_input_apply(dpy, ids[i], p, tag)) continue;      /* nothing differed: HDE's own change */
+        fixed++;
+        if (now - g->since > 30 * G_USEC_PER_SEC) {
+            g->since = now;
+            g->count = 0;
+        }
+        if (++g->count >= 5) {
+            g->quiet_until = now + 60 * G_USEC_PER_SEC;
+            g->count = 0;
+            if (tag)
+                fprintf(stderr, "%s: device %d: another program keeps changing it back; HDE leaves it alone for a "
+                                "minute (two touchpad settings tools are running?)\n", tag, ids[i]);
+        }
+    }
+    return fixed;
 }
 
 #else /* built without libxi-dev */
@@ -451,11 +542,38 @@ int hde_input_apply(Display *dpy, int deviceid, const HdeInputPrefs *p, const ch
     return 0;
 }
 int hde_input_list(Display *dpy, HdeInputDevice *out, int max) { (void)dpy; (void)out; (void)max; return 0; }
+int hde_input_list_all(Display *dpy, HdeInputDevice *out, int max) { (void)dpy; (void)out; (void)max; return 0; }
 gboolean hde_input_watch(Display *dpy) { (void)dpy; return FALSE; }
 int hde_input_handle_event(Display *dpy, XEvent *ev, const HdeInputPrefs *p, const char *tag)
 {
     (void)dpy; (void)ev; (void)p; (void)tag;
     return -1;
 }
+int hde_input_apply_changed(Display *dpy, const HdeInputPrefs *p, const char *tag)
+{
+    (void)dpy; (void)p; (void)tag;
+    return 0;
+}
 
 #endif
+
+/* ---- with or without XInput 2 ---- */
+void hde_input_wanted(const HdeInputDevice *d, const HdeInputPrefs *p, int *natural, int *tapping)
+{
+    *natural = *tapping = -1;
+    if (!d || !p || !d->configurable) return;
+    if (d->kind == HDE_INPUT_TOUCHPAD) {
+        *natural = p->touchpad_natural ? 1 : 0;
+        *tapping = p->tap_to_click ? 1 : 0;
+    } else if (d->kind == HDE_INPUT_MOUSE && p->has_mouse_natural) {
+        *natural = p->mouse_natural ? 1 : 0;
+    }
+}
+
+gboolean hde_input_service_running(Display *dpy)
+{
+    if (!dpy) return FALSE;
+    char name[32];
+    g_snprintf(name, sizeof name, HDE_INPUT_SELECTION, DefaultScreen(dpy));
+    return XGetSelectionOwner(dpy, XInternAtom(dpy, name, False)) != None;
+}

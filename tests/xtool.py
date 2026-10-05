@@ -10,6 +10,8 @@
   xtool.py scroll-watch SECONDS   map a full-screen window, count the scroll "clicks" it receives (core buttons
                                4-7, also what smooth-scrolling touchpads send to old clients); prints "ready" once
                                mapped, then "up=N down=N left=N right=N"
+  xtool.py own-selection SEL SECONDS  own selection SEL for SECONDS, e.g. _XSETTINGS_S0 = "another XSETTINGS manager
+                               is running" (prints "ready" once it owns it)
 """
 import ctypes
 import ctypes.util
@@ -81,6 +83,7 @@ x.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 x.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
 x.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
 x.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+x.XSetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 
 
 class XButtonEvent(ctypes.Structure):
@@ -239,6 +242,25 @@ def scroll_watch(seconds):
     return "up=%d down=%d left=%d right=%d" % (counts[4], counts[5], counts[6], counts[7])
 
 
+def own_selection(sel_name, seconds):
+    w = x.XCreateSimpleWindow(d, root, -10, -10, 1, 1, 0, 0, 0)
+    atom = x.XInternAtom(d, sel_name.encode(), 0)
+    x.XSetSelectionOwner(d, atom, w, 0)          # CurrentTime
+    x.XSync(d, 0)
+    if x.XGetSelectionOwner(d, atom) != w:
+        return False
+    print("ready", flush=True)
+    ev = XEvent()
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        while x.XPending(d):
+            x.XNextEvent(d, ctypes.byref(ev))   # SelectionRequest & co.: nothing to answer for the tests
+        time.sleep(0.05)
+    x.XDestroyWindow(d, w)
+    x.XSync(d, 0)
+    return True
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "popups":
@@ -264,6 +286,10 @@ if __name__ == "__main__":
         print(hex(owner) if owner else "0")
     elif cmd == "scroll-watch":
         print(scroll_watch(float(sys.argv[2])))
+    elif cmd == "own-selection":
+        if not own_selection(sys.argv[2], float(sys.argv[3])):
+            print("NOT-OWNED")
+            sys.exit(1)
     elif cmd == "selection-targets":
         t = selection_targets(sys.argv[2])
         if t is None:

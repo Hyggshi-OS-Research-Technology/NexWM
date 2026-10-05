@@ -60,5 +60,23 @@ void apply_power_settings(void);
 /* Touchpad / mouse (natural scrolling, tap to click, speed) on every pointer device, see src/hde-input.h.
  * hde-xsettings does the same at login, on every settings.ini change and when a device is plugged in. */
 void apply_input_settings(void);
+/* Settings > Input: show the devices again (after a change made elsewhere, e.g. in the Touchpad scrolling window). */
+void input_page_refresh(void);
+
+/* ---- touchpad scroll direction (hde-settings-touchpad.c) ---- */
+/* The "Like a phone" / "Like a mouse wheel" cards; every pair shown stays in sync. debug_prefix: names for
+ * debug_geometry_watch() ("<prefix>-phone", "<prefix>-wheel"), may be NULL. */
+GtkWidget *touchpad_direction_cards(const char *debug_prefix);
+void       touchpad_direction_sync(void);             /* re-read natural_scroll into every pair of cards */
+/* The "Touchpad scrolling" window with a test page. parent NULL: on its own (hde-settings --touchpad-setup), the
+ * GTK main loop ends when it closes. */
+void       touchpad_setup_show(GtkWindow *parent);
+/* hde-settings --touchpad-setup=auto (hde-session, at login): TRUE if a touchpad is present and no direction was
+ * chosen yet (logs the reason either way). */
+gboolean   touchpad_setup_needed(void);
+
+/* HDE_DEBUG=1: log where a widget is on the screen ("hde-settings: widget NAME at X,Y WxH") whenever it is shown or
+ * its window moves, so that tests can click it whatever the fonts and theme. Does nothing otherwise. */
+void debug_geometry_watch(GtkWidget *w, const char *name);
 
 #endif

@@ -130,6 +130,11 @@ if command -v metacity >/dev/null 2>&1; then
 fi
 check "panel publishes _HDE_PANEL_WINDOW" sh -c "[ \"\$($XT root-window _HDE_PANEL_WINDOW)\" != 0 ]"
 check "hde-xsettings owns _XSETTINGS_S0" $XT xsettings
+check "hde-xsettings runs HDE's input service (_HDE_INPUT_S0)" sh -c "[ \"\$($XT selection-owner _HDE_INPUT_S0)\" != 0 ]"
+check "the session log starts with the HDE build (commit) that runs" grep -q "^hde-session: HDE build " "$OUT/session.log"
+check "no touchpad at login: the Touchpad scrolling window is not opened" \
+    grep -q "hde-settings: touchpad setup: not shown, no touchpad found" "$OUT/session.log"
+BASE_POPUPS=$(popups)       # override-redirect windows right after login (no menu, OSD or notification open)
 
 # ---------- 2. Super key -> Start menu ----------
 n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
@@ -452,47 +457,119 @@ else fail "Alt+Print captures only the active window (got $sz, files $n0 -> $n1)
 
 # ---------- 5c. touchpad settings ----------
 # Xvfb has no touchpad: give the XTEST pointer the properties of a libinput touchpad (driver defaults: classic
-# scrolling, no tapping). The real libinput/synaptics drivers are tested by tests/input-test.sh (Xorg + uinput).
+# scrolling, no tapping). The real libinput/synaptics drivers and real swipes are tested by tests/input-test.sh.
 FAKE_TP="pointer:Virtual core XTEST pointer"
+NAT="libinput Natural Scrolling Enabled"
+TAPP="libinput Tapping Enabled"
 tp_prop() { xinput list-props "$FAKE_TP" 2>/dev/null | sed -n "s/^[[:space:]]*$1 ([0-9]*):[[:space:]]*//p" | head -n 1; }
 tp_wait() { i=0; while [ $i -lt 50 ]; do [ "$(tp_prop "$1")" = "$2" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
-if command -v xinput >/dev/null 2>&1 &&
-   xinput set-prop --type=int --format=8 "$FAKE_TP" "libinput Tapping Enabled" 0 2>/dev/null &&
-   xinput set-prop --type=int --format=8 "$FAKE_TP" "libinput Natural Scrolling Enabled" 0 2>/dev/null; then
+# widget NAME LOG -> "X Y" = centre of a widget, from the HDE_DEBUG log of hde-settings (its last position)
+widget() {
+    sed -n "s/^hde-settings: widget $1 at \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p" "$2" | tail -n 1 |
+        awk '{ printf "%d %d\n", $1 + $3 / 2, $2 + $4 / 2 }'
+}
+# shellcheck disable=SC2046  # "X Y" -> two arguments
+click_widget() { set -- $(widget "$1" "$2"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
+tp_window() { xdotool search --onlyvisible --name "^Touchpad scrolling$" >/dev/null 2>&1; }
+# notification popups (bottom right) could be over a button: wait until they are gone (at most 10 s)
+wait_popups() { i=0; while [ "$(popups)" -gt "$BASE_POPUPS" ] && [ $i -lt 40 ]; do sleep 0.25; i=$((i + 1)); done; }
+XS_PID=$(pgrep -x hde-xsettings | head -n 1)
+if command -v xinput >/dev/null 2>&1 && [ -n "$XS_PID" ] &&
+   xinput set-prop --type=int --format=8 "$FAKE_TP" "$TAPP" 0 2>/dev/null &&
+   xinput set-prop --type=int --format=8 "$FAKE_TP" "$NAT" 0 2>/dev/null; then
+    # a. another program (a WM with its own touchpad settings, a script, xinput) changes the touchpad: HDE sets it back
+    check "a touchpad appears with classic scrolling: hde-xsettings applies Settings at once (like a phone)" tp_wait "$NAT" 1
+    check "... and tap to click" tp_wait "$TAPP" 1
+    xinput set-prop "$FAKE_TP" "$NAT" 0
+    check "another program turns natural scrolling off: hde-xsettings sets it back" tp_wait "$NAT" 1
+    check "... and logs it in the session log" grep -q \
+        "hde-xsettings: input (changed by another program, set back): Virtual core XTEST pointer (touchpad, libinput): natural scrolling on" \
+        "$OUT/session.log"
+
+    # b. Settings > Input on its own (hde-xsettings paused: only Settings can change the device now)
+    kill -STOP "$XS_PID"
+    xinput set-prop "$FAKE_TP" "$TAPP" 0; xinput set-prop "$FAKE_TP" "$NAT" 0
     "$B/hde-settings" input; sleep 2.5
-    check "opening Settings > Input applies natural scrolling to a touchpad (default on)" tp_wait "libinput Natural Scrolling Enabled" 1
-    check "opening Settings > Input applies tap to click (default on)" tp_wait "libinput Tapping Enabled" 1
-    if grep -q "hde-settings: input device: Virtual core XTEST pointer: Touchpad · libinput driver · natural scrolling on · tap to click on" "$OUT/settings.log"; then
+    check "opening Settings > Input applies the scroll direction to a touchpad (default: like a phone)" tp_wait "$NAT" 1
+    check "opening Settings > Input applies tap to click (default on)" tp_wait "$TAPP" 1
+    if grep -q "hde-settings: input device: Virtual core XTEST pointer: Touchpad · libinput driver · scrolls like a phone · tap to click on" "$OUT/settings.log"; then
         pass "Settings > Input lists the touchpad with its real state"
     else fail "Settings > Input lists the touchpad with its real state"; fi
     shot 08c-settings-input
-    # flip the real "Natural scrolling" switch (the first switch of the page: find its blue "on" color)
-    sw_y=""
-    for y in $(seq 200 3 300); do
-        set -- $($XT pixel 1074 "$y" 2>/dev/null)
-        if [ "${3:-0}" -gt 180 ] && [ "${1:-255}" -lt 110 ] && [ "${2:-0}" -gt 100 ] && [ "${2:-0}" -lt 175 ]; then sw_y=$y; break; fi
-    done
-    if [ -n "$sw_y" ]; then
-        xdotool mousemove 1090 "$sw_y" click 1; sleep 1.2
-        if tp_wait "libinput Natural Scrolling Enabled" 0 && grep -q "^natural_scroll=false" "$SETTINGS_INI"; then
-            pass "flipping the Natural scrolling switch switches the touchpad to the classic direction at once (switch at y=$sw_y)"
-        else fail "flipping the Natural scrolling switch switches the touchpad to the classic direction at once (switch at y=$sw_y)"; fi
-        shot 08d-settings-input-natural-off
-        xdotool mousemove 1090 "$sw_y" click 1; sleep 1.2
-        check "flipping it back turns natural scrolling on again" tp_wait "libinput Natural Scrolling Enabled" 1
+    if click_widget input-wheel "$OUT/settings.log"; then
+        sleep 1.2
+        if tp_wait "$NAT" 0 && grep -q "^natural_scroll=false" "$SETTINGS_INI"; then
+            pass "choosing the 'Like a mouse wheel' card switches the touchpad to the classic direction at once"
+        else fail "choosing the 'Like a mouse wheel' card switches the touchpad to the classic direction at once"; fi
+        shot 08d-settings-input-mouse-wheel
+        click_widget input-phone "$OUT/settings.log"; sleep 1.2
+        check "choosing 'Like a phone' turns natural scrolling on again" tp_wait "$NAT" 1
     else
-        fail "the Natural scrolling switch is visible at the top of Settings > Input (see shot 08c)"
+        fail "the scroll direction cards are on Settings > Input (see shot 08c)"
     fi
-    sed -i '/^natural_scroll=/d' "$SETTINGS_INI"; echo "natural_scroll=false" >> "$SETTINGS_INI"
-    check "natural_scroll=false in settings.ini: hde-xsettings switches the touchpad to the classic direction" \
-        tp_wait "libinput Natural Scrolling Enabled" 0
+
+    # c. "Try both…": the Touchpad scrolling window with its test page
+    wait_popups
+    if click_widget input-try "$OUT/settings.log" && sleep 2 && tp_window; then
+        pass "'Try both…' opens the Touchpad scrolling window"
+        sleep 0.6
+        # shellcheck disable=SC2046
+        set -- $(widget setup-test-page "$OUT/settings.log")
+        if [ -n "${2:-}" ]; then
+            xdotool mousemove "$1" "$2"; sleep 0.3; xdotool click --repeat 3 --delay 120 5; sleep 1
+            check "the test page tells which way the page moved (wheel down: toward the end)" \
+                grep -q "hde-settings: touchpad setup: test page: line [0-9]* -> [0-9]* (toward the end)" "$OUT/settings.log"
+        else fail "the test page is in the Touchpad scrolling window"; fi
+        shot 08e-touchpad-setup
+        click_widget setup-wheel "$OUT/settings.log"; sleep 1.2
+        check "the window's 'Like a mouse wheel' applies at once" tp_wait "$NAT" 0
+        check "... and is saved (natural_scroll=false)" grep -q "^natural_scroll=false" "$SETTINGS_INI"
+        shot 08f-touchpad-setup-mouse-wheel
+        click_widget setup-done "$OUT/settings.log"; sleep 1
+        if tp_window; then fail "Done closes the Touchpad scrolling window"; else pass "Done closes the Touchpad scrolling window"; fi
+        check "the choice is remembered: the window is not opened at the next login" \
+            grep -q "^touchpad_direction_chosen=true" "$SETTINGS_INI"
+        shot 08g-settings-input-after-window
+    else
+        fail "'Try both…' opens the Touchpad scrolling window (see shot 08c)"
+        xdotool key Escape 2>/dev/null
+    fi
+
+    # d. hde-settings --apply (login) while hde-xsettings is still paused
     sed -i 's/^natural_scroll=.*/natural_scroll=true/' "$SETTINGS_INI"
-    check "natural_scroll=true: back to natural scrolling" tp_wait "libinput Natural Scrolling Enabled" 1
-    xinput set-prop "$FAKE_TP" "libinput Natural Scrolling Enabled" 0
+    xinput set-prop "$FAKE_TP" "$NAT" 0
     "$B/hde-settings" --apply > "$OUT/settings-apply.log" 2>&1
-    check "hde-settings --apply (login) applies natural scrolling" tp_wait "libinput Natural Scrolling Enabled" 1
-    xinput delete-prop "$FAKE_TP" "libinput Natural Scrolling Enabled" 2>/dev/null
-    xinput delete-prop "$FAKE_TP" "libinput Tapping Enabled" 2>/dev/null
+    check "hde-settings --apply (login) applies the scroll direction" tp_wait "$NAT" 1
+    kill -CONT "$XS_PID"
+
+    # e. settings.ini changes: hde-xsettings applies them
+    sed -i 's/^natural_scroll=.*/natural_scroll=false/' "$SETTINGS_INI"
+    check "natural_scroll=false in settings.ini: hde-xsettings switches the touchpad to the classic direction" \
+        tp_wait "$NAT" 0
+    sed -i 's/^natural_scroll=.*/natural_scroll=true/' "$SETTINGS_INI"
+    check "natural_scroll=true: back to natural scrolling" tp_wait "$NAT" 1
+
+    # f. the first login with a touchpad opens the window by itself, once (hde-session runs this 2 s after login)
+    timeout 20 "$B/hde-settings" --touchpad-setup=auto > "$OUT/touchpad-setup-auto.log" 2>&1
+    check "once a direction was chosen, the Touchpad scrolling window does not open at login" \
+        grep -q "touchpad setup: not shown, the direction was chosen already" "$OUT/touchpad-setup-auto.log"
+    sed -i '/^touchpad_direction_chosen=/d' "$SETTINGS_INI"
+    "$B/hde-settings" --touchpad-setup=auto > "$OUT/touchpad-setup-auto.log" 2>&1 &
+    TS=$!
+    sleep 3
+    if tp_window; then
+        pass "first login with a touchpad: the Touchpad scrolling window opens by itself"
+        shot 08h-touchpad-setup-first-login
+        wait_popups
+        click_widget setup-done "$OUT/touchpad-setup-auto.log"; sleep 1.2
+        if kill -0 "$TS" 2>/dev/null; then fail "Done closes the window opened at login"; kill "$TS" 2>/dev/null
+        else pass "Done closes the window opened at login"; fi
+    else
+        fail "first login with a touchpad: the Touchpad scrolling window opens by itself"
+        kill "$TS" 2>/dev/null
+    fi
+    xinput delete-prop "$FAKE_TP" "$NAT" 2>/dev/null
+    xinput delete-prop "$FAKE_TP" "$TAPP" 2>/dev/null
 else
     skip "touchpad settings (needs xinput)"
 fi

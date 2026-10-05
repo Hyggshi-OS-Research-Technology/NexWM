@@ -1,7 +1,8 @@
 /* hde-session — the HDE session manager.
  *
  * Startup order: hde-hotkeys -> window manager -> hde-xsettings -> apply settings (hde-settings --apply)
- * -> hde-desktop -> hde-panel -> (2 seconds later) polkit agent + XDG autostart.
+ * -> hde-desktop -> hde-panel -> (2 seconds later) polkit agent + XDG autostart + the "Touchpad scrolling" window
+ * (hde-settings --touchpad-setup=auto: shown only at the first login with a touchpad, until a direction is chosen).
  *  - hde-hotkeys comes first (it reports through HDE_READY_FD once its keys are grabbed): an X key can only be
  *    grabbed by one program, so PrtSc, Super+E, ... stay HDE's even if the WM config binds them as well
  *    (Openbox's rc.xml: Print -> scrot, W-e -> kfmclient -> "Failed to execute child process" dialogs).
@@ -20,6 +21,7 @@
 #include "hde/core.h"
 #include "hde/settings.h"
 #include "hde-wm.h"
+#include "hde-build.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -437,6 +439,17 @@ static void start_polkit_agent(void)
                     "cannot ask for your password. Install one: sudo apt install policykit-1-gnome\n");
 }
 
+/* Which way the touchpad scrolls is a habit (phone vs mouse wheel): let the user pick it once, on the touchpad itself.
+ * hde-settings decides whether it is needed (a touchpad is present, no direction chosen yet) and logs why not. */
+static void start_touchpad_setup(void)
+{
+    char *s = resolve_component("hde-settings", g_bindir);
+    if (!s) return;
+    const char *args[] = { "--touchpad-setup=auto", NULL };
+    spawn_argv(s, args);
+    free(s);
+}
+
 /* ===================== XDG autostart ===================== */
 static int list_has(const char *list, const char *item)
 {
@@ -682,6 +695,8 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
 
     self_dir(g_bindir, sizeof(g_bindir), argv[0]);
+    printf("hde-session: HDE build %s (%s)\n", HDE_VERSION, g_bindir);
+    fflush(stdout);
     g_use_wm = getenv("HDE_NO_WM") == NULL;
     int start_desktop = 1, start_panel = 1;
     for (int i = 1; i < argc; ++i) {
@@ -742,6 +757,7 @@ int main(int argc, char **argv)
             autostart_done = 1;
             start_polkit_agent();
             run_autostart();
+            if (start_panel) start_touchpad_setup();
         }
         struct timespec ts = { 0, 250 * 1000000L };
         nanosleep(&ts, NULL);

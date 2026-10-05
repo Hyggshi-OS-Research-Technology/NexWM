@@ -4,12 +4,16 @@
  *   hde-settings <page>       open a page directly: display appearance input sound network bluetooth
  *                             windows notifications power keyboard users about
  *   hde-settings --apply      re-apply the settings needed at every login, then exit (called by hde-session)
+ *   hde-settings --touchpad-setup[=auto]   the "Touchpad scrolling" window (auto: only at the first login with a
+ *                             touchpad, until a direction is chosen; run by hde-session)
+ *   hde-settings --version
  *
- * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound}.c
+ * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound,touchpad}.c
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
 #include "hde-input.h"
+#include "hde-build.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <sys/utsname.h>
@@ -273,6 +277,68 @@ GtkWidget *icon_button(const char *icon_name, const char *tooltip)
     return b;
 }
 
+/* ---- HDE_DEBUG: screen positions of widgets, for the GUI tests ---- */
+static GSList *geom_widgets;
+static guint geom_timer;
+
+static gboolean geom_log_all(gpointer d)
+{
+    (void)d;
+    geom_timer = 0;
+    for (GSList *l = geom_widgets; l; l = l->next) {
+        GtkWidget *w = l->data;
+        GtkWidget *top = gtk_widget_get_toplevel(w);
+        GdkWindow *gw = gtk_widget_get_window(top);
+        int ox = 0, oy = 0, x = 0, y = 0;
+        if (!gtk_widget_get_mapped(w) || !gw || !gtk_widget_translate_coordinates(w, top, 0, 0, &x, &y)) continue;
+        gdk_window_get_origin(gw, &ox, &oy);
+        GtkAllocation a;
+        gtk_widget_get_allocation(w, &a);
+        fprintf(stderr, "hde-settings: widget %s at %d,%d %dx%d\n", (const char *)g_object_get_data(G_OBJECT(w), "hde-geom"),
+                ox + x, oy + y, a.width, a.height);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void geom_schedule(void)
+{
+    if (geom_timer) g_source_remove(geom_timer);
+    geom_timer = g_timeout_add(400, geom_log_all, NULL);
+}
+
+static gboolean on_geom_configure(GtkWidget *w, GdkEvent *e, gpointer d)
+{
+    (void)w; (void)e; (void)d;
+    geom_schedule();
+    return FALSE;
+}
+
+static void on_geom_map(GtkWidget *w, gpointer d)
+{
+    (void)d;
+    GtkWidget *top = gtk_widget_get_toplevel(w);
+    if (gtk_widget_is_toplevel(top) && !g_object_get_data(G_OBJECT(top), "hde-geom-top")) {
+        g_object_set_data(G_OBJECT(top), "hde-geom-top", GINT_TO_POINTER(1));
+        g_signal_connect(top, "configure-event", G_CALLBACK(on_geom_configure), NULL);
+    }
+    geom_schedule();
+}
+
+static void on_geom_destroy(GtkWidget *w, gpointer d)
+{
+    (void)d;
+    geom_widgets = g_slist_remove(geom_widgets, w);
+}
+
+void debug_geometry_watch(GtkWidget *w, const char *name)
+{
+    if (!getenv("HDE_DEBUG") || !w || !name) return;
+    g_object_set_data_full(G_OBJECT(w), "hde-geom", g_strdup(name), g_free);
+    geom_widgets = g_slist_prepend(geom_widgets, w);
+    g_signal_connect(w, "map", G_CALLBACK(on_geom_map), NULL);
+    g_signal_connect(w, "destroy", G_CALLBACK(on_geom_destroy), NULL);
+}
+
 void message_dialog(GtkMessageType type, const char *title, const char *detail)
 {
     GtkWidget *m = gtk_message_dialog_new(GTK_WINDOW(window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -518,6 +584,8 @@ static GtkWidget *make_display_page(void)
 
 static guint input_apply_id;
 static GtkWidget *input_devices_card;
+static GtkWidget *input_service_note;
+static GSList *input_switches;          /* GtkSwitch* of the Input page, data "hde-key" / "hde-default" */
 
 /* The touchpads and mice HDE configures, with their state right now (refreshed after every change and hotplug). */
 static void input_devices_refresh(void)
@@ -526,16 +594,22 @@ static void input_devices_refresh(void)
     card_clear(input_devices_card);
     HdeInputDevice devs[16];
     int n = 0;
+    gboolean have_x = FALSE, service = TRUE;
     Display *dpy = hde_input_open();
     if (dpy) {
+        have_x = TRUE;
         n = hde_input_list(dpy, devs, (int)G_N_ELEMENTS(devs));
+        service = hde_input_service_running(dpy);
         XCloseDisplay(dpy);
     }
     for (int i = 0; i < n; i++) {
         const HdeInputDevice *d = &devs[i];
         GString *desc = g_string_new(d->kind == HDE_INPUT_TOUCHPAD ? "Touchpad" : "Mouse");
         g_string_append_printf(desc, " · %s driver", d->driver);
-        if (d->natural >= 0) g_string_append_printf(desc, " · natural scrolling %s", d->natural ? "on" : "off");
+        if (d->natural >= 0 && d->kind == HDE_INPUT_TOUCHPAD)
+            g_string_append_printf(desc, " · scrolls %s", d->natural ? "like a phone" : "like a mouse wheel");
+        else if (d->natural >= 0)
+            g_string_append_printf(desc, " · natural scrolling %s", d->natural ? "on" : "off");
         if (d->tapping >= 0) g_string_append_printf(desc, " · tap to click %s", d->tapping ? "on" : "off");
         if (getenv("HDE_DEBUG")) fprintf(stderr, "hde-settings: input device: %s: %s\n", d->name, desc->str);
         gtk_container_add(GTK_CONTAINER(input_devices_card), row_box(d->name, desc->str, NULL));
@@ -548,6 +622,7 @@ static void input_devices_refresh(void)
                                    : "No touchpad or mouse found that uses the libinput or synaptics X driver "
                                      "(package xserver-xorg-input-libinput)."));
     gtk_widget_show_all(input_devices_card);
+    if (input_service_note) gtk_widget_set_visible(input_service_note, have_x && !service && n > 0);
 }
 
 static gboolean input_apply_idle(gpointer d)
@@ -565,28 +640,16 @@ static void input_apply_later(void)
     input_apply_id = g_timeout_add(150, input_apply_idle, NULL);
 }
 
+void input_page_refresh(void)
+{
+    if (input_devices_card) input_apply_later();
+}
+
 /* a device was plugged in / unplugged while the page is open (hde-xsettings configures it; show it a bit later) */
 static void on_seat_device_changed(GdkSeat *seat, GdkDevice *device, gpointer data)
 {
     (void)seat; (void)device; (void)data;
     input_apply_later();
-}
-
-/* every time the page is shown: make sure the devices match the page (also without hde-xsettings, or if something
- * else changed them), then list them */
-static void on_input_page_map(GtkWidget *w, gpointer d)
-{
-    (void)w; (void)d;
-    input_apply_later();
-}
-
-static void on_input_page_destroy(GtkWidget *w, gpointer d)
-{
-    (void)w; (void)d;
-    input_devices_card = NULL;
-    GdkDisplay *dsp = gdk_display_get_default();
-    GdkSeat *seat = dsp ? gdk_display_get_default_seat(dsp) : NULL;
-    if (seat) g_signal_handlers_disconnect_by_func(seat, G_CALLBACK(on_seat_device_changed), NULL);
 }
 
 static gboolean cb_input_bool(GtkSwitch *s, gboolean v, gpointer key)
@@ -595,6 +658,37 @@ static gboolean cb_input_bool(GtkSwitch *s, gboolean v, gpointer key)
     cfg_set_bool(key, v);
     input_apply_later();
     return FALSE;
+}
+
+/* every time the page is shown: show what settings.ini says now (it may have been changed elsewhere, e.g. by the
+ * Touchpad scrolling window at login), make sure the devices match the page (also without hde-xsettings, or if
+ * something else changed them), then list them */
+static void on_input_page_map(GtkWidget *w, gpointer d)
+{
+    (void)w; (void)d;
+    touchpad_direction_sync();
+    for (GSList *l = input_switches; l; l = l->next) {
+        GtkSwitch *sw = l->data;
+        const char *key = g_object_get_data(G_OBJECT(sw), "hde-key");
+        gboolean v = cfg_get_bool(key, GPOINTER_TO_INT(g_object_get_data(G_OBJECT(sw), "hde-default")));
+        if (gtk_switch_get_active(sw) == v) continue;
+        g_signal_handlers_block_by_func(sw, G_CALLBACK(cb_input_bool), (gpointer)key);
+        gtk_switch_set_active(sw, v);
+        g_signal_handlers_unblock_by_func(sw, G_CALLBACK(cb_input_bool), (gpointer)key);
+    }
+    input_apply_later();
+}
+
+static void on_input_page_destroy(GtkWidget *w, gpointer d)
+{
+    (void)w; (void)d;
+    input_devices_card = NULL;
+    input_service_note = NULL;
+    g_slist_free(input_switches);
+    input_switches = NULL;
+    GdkDisplay *dsp = gdk_display_get_default();
+    GdkSeat *seat = dsp ? gdk_display_get_default_seat(dsp) : NULL;
+    if (seat) g_signal_handlers_disconnect_by_func(seat, G_CALLBACK(on_seat_device_changed), NULL);
 }
 
 static void cb_pointer_speed(GtkRange *r, gpointer x)
@@ -608,8 +702,17 @@ static GtkWidget *input_switch(const char *key, gboolean def)
 {
     GtkWidget *s = gtk_switch_new();
     gtk_switch_set_active(GTK_SWITCH(s), cfg_get_bool(key, def));
+    g_object_set_data(G_OBJECT(s), "hde-key", (gpointer)key);
+    g_object_set_data(G_OBJECT(s), "hde-default", GINT_TO_POINTER(def));
     g_signal_connect(s, "state-set", G_CALLBACK(cb_input_bool), (gpointer)key);
+    input_switches = g_slist_prepend(input_switches, s);
     return s;
+}
+
+static void cb_touchpad_try(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    touchpad_setup_show(GTK_WINDOW(window));
 }
 
 static GtkWidget *make_input_page(void)
@@ -617,10 +720,16 @@ static GtkWidget *make_input_page(void)
     GtkWidget *box = page_base();
     /* defaults here = defaults in hde-input.c */
     gtk_box_pack_start(GTK_BOX(box), section("Touchpad"), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Natural scrolling",
-        "On: the content follows your fingers (swipe up and the page moves up, as on a phone). "
-        "Off: the classic direction, where the content moves against your fingers.",
-        input_switch("natural_scroll", TRUE)), FALSE, FALSE, 0);
+    GtkWidget *try_btn = gtk_button_new_with_mnemonic("_Try both…");
+    g_signal_connect(try_btn, "clicked", G_CALLBACK(cb_touchpad_try), NULL);
+    debug_geometry_watch(try_btn, "input-try");
+    gtk_box_pack_start(GTK_BOX(box), row_box("Scroll direction",
+        "Which way the page moves when you scroll with two fingers. Not sure? Try both on a test page.", try_btn),
+        FALSE, FALSE, 0);
+    GtkWidget *cards = touchpad_direction_cards("input");
+    gtk_widget_set_margin_start(cards, 6);
+    gtk_widget_set_margin_bottom(cards, 6);
+    gtk_box_pack_start(GTK_BOX(box), cards, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), row_box("Tap to click",
         "Tap the touchpad to click, tap with two fingers to right-click.", input_switch("tap_to_click", TRUE)),
         FALSE, FALSE, 0);
@@ -643,6 +752,12 @@ static GtkWidget *make_input_page(void)
     gtk_box_pack_start(GTK_BOX(box), section("Devices"), FALSE, FALSE, 0);
     input_devices_card = card_new();
     gtk_box_pack_start(GTK_BOX(box), input_devices_card, FALSE, FALSE, 0);
+    input_service_note = info_label("HDE's input service (hde-xsettings) is not running in this session: the choices "
+                                    "above apply now, but a touchpad or mouse plugged in later, or back after "
+                                    "suspend, keeps its old settings. Log out and log in again.");
+    gtk_style_context_add_class(gtk_widget_get_style_context(input_service_note), "error-text");
+    gtk_widget_set_no_show_all(input_service_note, TRUE);
+    gtk_box_pack_start(GTK_BOX(box), input_service_note, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), info_label("Changes apply immediately, to devices plugged in later too "
                                                 "(and again after suspend)."), FALSE, FALSE, 0);
     g_signal_connect(box, "map", G_CALLBACK(on_input_page_map), NULL);
@@ -769,6 +884,7 @@ static GtkWidget *make_about_page(void)
     gtk_container_add(GTK_CONTAINER(card), row_box("Session", g_getenv("HDE_SESSION_PID") ? "HDE (X11)" : "Not running inside an HDE session", NULL));
     if (wm && *wm) gtk_container_add(GTK_CONTAINER(card), row_box("Window manager setting", wm, NULL));
     gtk_container_add(GTK_CONTAINER(card), row_box("Configuration", "~/.config/hde/settings.ini", NULL));
+    gtk_container_add(GTK_CONTAINER(card), row_box("Build", HDE_VERSION, NULL));
     gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 10);
     return box;
 }
@@ -882,6 +998,7 @@ static void load_css(void)
         ".row-title { font-weight: 600; }"
         ".row-description { opacity: 0.68; font-size: 11px; }"
         ".about-title { font-size: 20px; font-weight: 700; }"
+        ".tp-heading { font-size: 20px; font-weight: 700; }"
         ".status { opacity: 0.7; font-size: 11px; }"
         ".card { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.12); border-radius: 12px; }"
         ".card > row { padding: 2px 8px; border-bottom: 1px solid alpha(@theme_fg_color, 0.07); }"
@@ -1002,6 +1119,22 @@ static int on_command_line(GApplication *app, GApplicationCommandLine *cl, gpoin
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--version")) {
+        printf("hde-settings (HDE) %s\n", HDE_VERSION);
+        return 0;
+    }
+    if (argc > 1 && g_str_has_prefix(argv[1], "--touchpad-setup")) {
+        /* the "Touchpad scrolling" window on its own; =auto (hde-session at login): only if it is needed */
+        if (!strcmp(argv[1], "--touchpad-setup=auto") && !touchpad_setup_needed()) return 0;
+        signal(SIGPIPE, SIG_IGN);
+        gtk_init(&argc, &argv);
+        hde_theme_apply_process();
+        load_css();
+        hde_theme_watch(on_theme_changed, NULL);
+        touchpad_setup_show(NULL);
+        gtk_main();
+        return 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "--apply")) {
         /* headless mode: called by hde-session at login */
         apply_keyboard_settings();
@@ -1026,6 +1159,8 @@ int main(int argc, char **argv)
         printf("Usage: hde-settings [PAGE]   (display appearance input sound network bluetooth windows\n"
                "                             notifications power keyboard users about)\n"
                "       hde-settings --apply  re-apply login-time settings and exit\n"
+               "       hde-settings --touchpad-setup   choose which way the touchpad scrolls, with a test page\n"
+               "       hde-settings --version\n"
                "       hde-settings --style dark|light|toggle   switch Dark mode without opening the window\n");
         return 0;
     }

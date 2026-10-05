@@ -222,7 +222,8 @@ Now (`src/hde-input.c`):
 
 - The touchpad does what Settings shows: **natural scrolling** (swipe up = the content moves up, as on a phone or a
   Windows precision touchpad) and **tap to click** are applied on every login, also when they were never changed.
-  To get the classic direction back, turn *Natural scrolling* off in *Settings → Input → Touchpad*.
+  To get the classic direction back, choose *Like a mouse wheel* in *Settings → Input → Touchpad* (fix 9; it used to
+  be a *Natural scrolling* switch).
 - Applied directly through the X server (XInput 2 device properties): no `xinput` needed. Works with the libinput
   driver (`libinput Natural Scrolling Enabled`, `libinput Tapping Enabled`, speed, acceleration profile) and the
   synaptics driver (negative `Synaptics Scrolling Distance`, `Synaptics Tap Action`).
@@ -249,3 +250,50 @@ events) and DOWN moves it down; the mouse wheel is untouched; hotplug and remove
 direction, tap to click, mouse natural scrolling, speed, acceleration); SIGHUP; `hde-settings --apply`; the device
 list in *Settings → Input*. `make check` checks the same logic in Xvfb with a simulated libinput touchpad, including
 a click on the *Natural scrolling* switch.
+
+## Touchpad still scrolls "the wrong way": pick the direction on the touchpad itself (fix 9)
+
+After fix 8 the touchpad scrolled like a phone (natural scrolling) by default, but "swipe up and it goes down" is
+read both ways: *it* can be the content (then natural scrolling is the cure) or the page position (then it is the
+problem). Neither direction is right for everyone — phones, Macs and Windows precision touchpads move the content
+with the fingers; a mouse wheel and the classic Linux setting go the other way — and the old switch label could not
+make that clear. On top of that, some setups changed the direction back behind HDE's back.
+
+Now:
+
+- **The choice is shown, not described**: *Settings → Input → Touchpad → Scroll direction* has two picture cards,
+  **Like a phone** ("the page follows your fingers: swipe up to read on") and **Like a mouse wheel** ("swipe up to go
+  back toward the top of the page"). Each picture shows two fingers moving up and which way the page then moves.
+- **Try both before deciding**: the **Touchpad scrolling** window (*Try both…* on that page, or
+  `hde-settings --touchpad-setup`) has a test page with numbered lines; scrolling it with two fingers says where you
+  went ("from line 46 to line 70: toward the end of the page"), and a card click changes the touchpad at once.
+- **Asked once, on the machine itself**: at the first login with a touchpad, hde-session opens that window by itself
+  (`hde-settings --touchpad-setup=auto`, 2 s after login). Once the user closes it, `touchpad_direction_chosen=true`
+  is saved and it does not open again.
+- **Nothing changes it back any more**: `hde-xsettings` now watches the touchpad properties (`XI_PropertyEvent`).
+  When another program sets a different value — a window manager with its own touchpad settings (Mutter, Muffin, which
+  the *Auto* window manager setting prefers), an autostart script, `xinput` — it puts Settings' value back within a
+  third of a second (logged as `changed by another program, set back`). A program that keeps fighting is left alone
+  for a minute instead of looping. `settings.ini` is read first, so a change made in Settings is never undone.
+- **Also inside another desktop**: when another XSETTINGS manager already runs (xfsettingsd, gsd-xsettings,
+  xsettingsd) or takes over later, `hde-xsettings` no longer exits — it leaves the theme settings to it and keeps
+  applying the touchpad and mouse settings. A second `hde-xsettings` still exits at once (`--replace` restarts it).
+- **Easy to check**: `hde-xsettings --status` lists every pointer device with its current state and whether it matches
+  Settings (exit status 1 if not), says whether HDE's input service runs, and names devices HDE cannot change (no
+  libinput/synaptics driver). *Settings → Input* warns when the input service is not running in the session.
+- **Which build runs**: *Settings → About → Build*, `--version` and the first line of the session log show the commit
+  HDE was built from (from git, or from `data/version` in a GitHub ZIP download), so an old installed copy is easy to
+  spot.
+
+### Tests
+
+`tests/input-test.sh` (real Xorg, libinput + synaptics drivers, uinput devices) additionally checks: a value changed
+by another program is set back without a signal or re-login (libinput and synaptics); `--status` reports a differing
+device (exit 1) and a matching set (exit 0); a second `hde-xsettings` exits; the *Touchpad scrolling* window opens at
+the first login with a touchpad, a **real two-finger swipe up over its test page goes toward the end with *Like a
+phone* and back toward the top with *Like a mouse wheel***, the choice is applied at once (also to the synaptics
+touchpad) and not undone by `hde-xsettings`, *Done* remembers it and the window does not open again; with another
+XSETTINGS manager running, `hde-xsettings` stays and keeps applying Settings. `make check` (Xvfb) clicks the cards on
+the Input page, opens the window with *Try both…*, scrolls its test page, and checks the first-login window and that
+it stays closed once a direction was chosen.
+

@@ -27,7 +27,11 @@ PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-
 DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
-             src/hde-settings-sound.c src/hde-theme.c src/hde-input.c
+             src/hde-settings-sound.c src/hde-settings-touchpad.c src/hde-theme.c src/hde-input.c
+# Build stamp (commit + date) shown in Settings > About, by --version and at the top of the session log, to tell at a
+# glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
+# programs that show it are rebuilt). See scripts/hde-version.sh.
+VERSION_H = $(BUILD)/hde-version.h
 
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot
 
@@ -42,24 +46,27 @@ $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 $(BUILD)/hde-panel: $(PANEL_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(WNCK_LIBS) -lm
-$(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) | $(BUILD)
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(XI_LIBS) $(X11_LIBS) -lm
+$(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(XI_LIBS) $(X11_LIBS) -lm
 $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-ipc.h src/hde-commands.h | $(BUILD)
 	@[ -n "$(XI_CFLAGS)" ] || echo "WARNING: libxi-dev (pkg-config xi) not found: Super key will not open the Start menu"
 	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(XI_CFLAGS) -o $@ $< $(XI_LIBS) -lX11
 # Built-in screenshot tool (PrtSc / Shift+PrtSc / Alt+PrtSc via hde-hotkeys): no scrot & co. needed
 $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GTK_CFLAGS) $(GLIBX_CFLAGS) -o $@ $< $(GTK_LIBS) $(GLIBX_LIBS) -lm
-# XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug)
-$(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-input.h | $(BUILD)
+# XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
+$(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-input.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	@[ -n "$(XI_CFLAGS)" ] || echo "WARNING: libxi-dev (pkg-config xi) not found: touchpad/mouse settings will not be applied"
-	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(GLIBX_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GLIBX_LIBS) $(XI_LIBS)
+	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc -I$(BUILD) $(GLIBX_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GLIBX_LIBS) $(XI_LIBS)
 $(BUILD):
 	mkdir -p $(BUILD)
+$(VERSION_H): FORCE | $(BUILD)
+	@sh scripts/hde-version.sh $@
+FORCE:
 $(BUILD)/hde-core-demo: apps/hde-core-demo.c $(CORE_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
-$(BUILD)/hde-session: apps/hde-session.c src/hde-wm.h $(CORE_OBJ) | $(BUILD)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $(filter-out %.h,$^)
+$(BUILD)/hde-session: apps/hde-session.c src/hde-wm.h src/hde-build.h $(VERSION_H) $(CORE_OBJ) | $(BUILD)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(BUILD) -o $@ $(filter-out %.h,$^)
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 backend/x11/x11_backend.o: src/hde-commands.h
@@ -104,4 +111,4 @@ reload:
 uninstall:
 	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
 	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
-.PHONY: all clean install uninstall components dev reload check
+.PHONY: all clean install uninstall components dev reload check FORCE

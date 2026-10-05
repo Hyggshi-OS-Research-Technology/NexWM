@@ -3,11 +3,14 @@
 # and synaptics input drivers and virtual uinput devices: a laptop-like touchpad, a second touchpad plugged in later,
 # a wheel mouse, and a touchpad driven by the synaptics driver.
 # Checks that HDE applies Settings > Input — on a fresh account, live, after hotplug and after a remove/re-add
-# (suspend/resume) — and that a two-finger swipe UP really moves the content UP (natural scrolling, the default).
+# (suspend/resume), when another program changes a device, with another XSETTINGS manager running — that a
+# two-finger swipe UP really moves the content UP (natural scrolling, the default), and that in the "Touchpad
+# scrolling" window a real swipe UP over the test page goes toward the end with "Like a phone" and back toward the top
+# with "Like a mouse wheel".
 #
 # Needs root through sudo (Xorg, /dev/uinput, a file in /usr/share/X11/xorg.conf.d): meant for CI, not a desktop.
 #   sudo apt install xserver-xorg-core xserver-xorg-video-dummy xserver-xorg-input-libinput \
-#                    xserver-xorg-input-synaptics xinput x11-utils python3-evdev
+#                    xserver-xorg-input-synaptics xinput x11-utils python3-evdev xdotool
 #   make && sh tests/input-test.sh
 # Output: $HDE_TEST_OUT (default /tmp/hde-input): results.txt, Xorg.log, xsettings.log, shot-*.png
 set -u
@@ -101,6 +104,7 @@ VIN=""
 cleanup() {
     [ -n "$VIN" ] && timeout 3 sh -c "echo quit > '$OUT/vinput.fifo'" 2>/dev/null
     pkill -x hde-xsettings 2>/dev/null
+    pkill -x hde-settings 2>/dev/null
     sudo -n kill "$XORG" 2>/dev/null
     sleep 1
     sudo -n rm -f "$CONF"
@@ -168,6 +172,15 @@ set_ini() {   # KEY VALUE — what Hyggshi Settings writes when a switch is flip
     [ -f "$INI" ] || printf '[settings]\n' > "$INI"
     if grep -q "^$1=" "$INI"; then sed -i "s|^$1=.*|$1=$2|" "$INI"; else echo "$1=$2" >> "$INI"; fi
 }
+# widget NAME LOG -> "X Y" = centre of a widget, from the HDE_DEBUG log of hde-settings (its last position)
+widget() {
+    sed -n "s/^hde-settings: widget $1 at \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p" "$2" | tail -n 1 |
+        awk '{ printf "%d %d\n", $1 + $3 / 2, $2 + $4 / 2 }'
+}
+# shellcheck disable=SC2046  # "X Y" -> two arguments
+click_widget() { set -- $(widget "$1" "$2"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
+# shellcheck disable=SC2046
+point_at() { set -- $(widget "$1" "$2"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2"; }
 
 # devices present at login
 vin add-touchpad "$TP"
@@ -266,10 +279,109 @@ check "pointer acceleration off = flat profile" wait_prop_re "$MOUSE" "libinput 
 set_ini pointer_acceleration true
 check "pointer acceleration on = adaptive profile" wait_prop_re "$MOUSE" "libinput Accel Profile Enabled" '^1, 0(, 0)*$'
 
-# something else changes a device behind HDE's back: SIGHUP re-applies everything
+# ---------- another program changes a device (a WM with its own touchpad settings, a script): HDE sets it back ----------
 xinput set-prop "pointer:$TP" "$NAT" 0
+check "another program turns natural scrolling off: hde-xsettings sets it back at once (no signal, no re-login)" \
+    wait_prop "$TP" "$NAT" 1 20
+xinput set-prop "pointer:$SYN" "Synaptics Scrolling Distance" 72 72
+check "... also on the synaptics touchpad" wait_prop_re "$SYN" "Synaptics Scrolling Distance" '^-[0-9]+, -[0-9]+$'
+check "... and logs it" grep -q "hde-xsettings: input (changed by another program, set back): $TP (touchpad, libinput): natural scrolling on" \
+    "$OUT/xsettings.log"
+r=$(scroll "$TP" up); d=$(direction "$r")
+if [ "$d" = down ]; then pass "after that, swipe UP still moves the content UP ($r)"
+else fail "after that, swipe UP still moves the content UP (got $d: $r)"; fi
+
+# SIGHUP re-applies everything (while hde-xsettings is paused, nothing else can)
+kill -STOP "$XS"
+xinput set-prop "pointer:$TP" "$NAT" 0
+"$B/hde-xsettings" --status > "$OUT/status-differs.txt" 2>&1
+rc=$?
+if [ $rc = 1 ] && grep -q "\] $TP: touchpad, libinput driver: natural scrolling off.*DIFFERS from Settings" "$OUT/status-differs.txt"; then
+    pass "hde-xsettings --status reports a touchpad that differs from Settings (exit 1)"
+else fail "hde-xsettings --status reports a touchpad that differs from Settings (exit $rc)"; fi
+kill -CONT "$XS"
 kill -HUP "$XS"
 check "SIGHUP: hde-xsettings re-applies the settings" wait_prop "$TP" "$NAT" 1
+"$B/hde-xsettings" --status > "$OUT/status.txt" 2>&1
+rc=$?
+if [ $rc = 0 ] && grep -q "\] $TP: touchpad, libinput driver: natural scrolling on, tap to click on  OK" "$OUT/status.txt" &&
+   grep -q "HDE input service (hde-xsettings): running" "$OUT/status.txt"; then
+    pass "hde-xsettings --status: every device matches Settings, the input service runs (exit 0)"
+else fail "hde-xsettings --status: every device matches Settings, the input service runs (exit $rc)"; fi
+sed 's/^/INFO:   status: /' "$OUT/status.txt" >> "$OUT/results.txt"
+timeout 5 "$B/hde-xsettings" > "$OUT/xsettings-second.log" 2>&1
+rc=$?
+if [ $rc = 0 ] && grep -q "already running" "$OUT/xsettings-second.log" && kill -0 "$XS" 2>/dev/null; then
+    pass "a second hde-xsettings exits at once and leaves the running one alone"
+else fail "a second hde-xsettings exits at once and leaves the running one alone (exit $rc)"; fi
+
+# ---------- the Touchpad scrolling window (opened by hde-session at the first login with a touchpad) ----------
+if command -v xdotool >/dev/null 2>&1; then
+    rm -f "$OUT/touchpad-setup.log"
+    sed -i '/^touchpad_direction_chosen=/d' "$INI"
+    HDE_DEBUG=1 "$B/hde-settings" --touchpad-setup=auto > "$OUT/touchpad-setup.log" 2>&1 &
+    TS=$!
+    i=0; while ! xdotool search --onlyvisible --name "^Touchpad scrolling$" >/dev/null 2>&1 && [ $i -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+    sleep 1
+    if xdotool search --onlyvisible --name "^Touchpad scrolling$" >/dev/null 2>&1; then
+        pass "first login with a touchpad: the Touchpad scrolling window opens"
+        point_at setup-test-page "$OUT/touchpad-setup.log"; sleep 0.3
+        vin swipe "$TP" up; sleep 1.2
+        if grep -q "test page: line [0-9]* -> [0-9]* (toward the end)" "$OUT/touchpad-setup.log"; then
+            pass "'Like a phone' (default): a two-finger swipe UP over the test page reads on, toward the END of the page ($(grep 'test page:' "$OUT/touchpad-setup.log" | tail -n 1 | sed 's/.*test page: //'))"
+        else fail "'Like a phone' (default): a two-finger swipe UP over the test page reads on, toward the END ($(grep 'test page:' "$OUT/touchpad-setup.log" | tail -n 1))"; fi
+        command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-21-touchpad-setup.png" 2>/dev/null
+        click_widget setup-wheel "$OUT/touchpad-setup.log"; sleep 0.8
+        check "'Like a mouse wheel' is applied at once (natural scrolling off)" wait_prop "$TP" "$NAT" 0
+        check "... on the synaptics touchpad too" wait_prop_re "$SYN" "Synaptics Scrolling Distance" '^[0-9]+, [0-9]+$'
+        sleep 1.5
+        check "... and hde-xsettings does not undo it (it reads settings.ini first)" test "$(prop "$TP" "$NAT")" = 0
+        n0=$(grep -c 'test page:' "$OUT/touchpad-setup.log")
+        point_at setup-test-page "$OUT/touchpad-setup.log"; sleep 0.3
+        vin swipe "$TP" up; sleep 1.2
+        last=$(grep 'test page:' "$OUT/touchpad-setup.log" | tail -n 1)
+        if [ "$(grep -c 'test page:' "$OUT/touchpad-setup.log")" -gt "$n0" ] && echo "$last" | grep -q "(toward the top)"; then
+            pass "'Like a mouse wheel': a two-finger swipe UP over the test page goes back toward the TOP (${last#*test page: })"
+        else fail "'Like a mouse wheel': a two-finger swipe UP over the test page goes back toward the TOP ($last)"; fi
+        command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-22-touchpad-setup-mouse-wheel.png" 2>/dev/null
+        click_widget setup-done "$OUT/touchpad-setup.log"; sleep 1.2
+        if ! kill -0 "$TS" 2>/dev/null && grep -q "^touchpad_direction_chosen=true" "$INI"; then
+            pass "Done closes the window and remembers that a direction was chosen"
+        else fail "Done closes the window and remembers that a direction was chosen"; kill "$TS" 2>/dev/null; fi
+        timeout 15 "$B/hde-settings" --touchpad-setup=auto > "$OUT/touchpad-setup-again.log" 2>&1
+        check "the window does not open again at the next login" \
+            grep -q "touchpad setup: not shown, the direction was chosen already (like a mouse wheel" "$OUT/touchpad-setup-again.log"
+    else
+        fail "first login with a touchpad: the Touchpad scrolling window opens"
+        tail -n 5 "$OUT/touchpad-setup.log" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+        kill "$TS" 2>/dev/null
+    fi
+    set_ini natural_scroll true
+    check "back to 'Like a phone'" wait_prop "$TP" "$NAT" 1
+else
+    info "xdotool missing: Touchpad scrolling window not checked"
+fi
+
+# ---------- HDE inside another desktop: another XSETTINGS manager runs ----------
+kill "$XS" 2>/dev/null
+wait "$XS" 2>/dev/null
+$XT own-selection _XSETTINGS_S0 30 > "$OUT/foreign-xsettings.txt" 2>&1 &
+FX=$!
+i=0; while ! grep -q '^ready' "$OUT/foreign-xsettings.txt" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+PATH=/nonexistent "$B/hde-xsettings" > "$OUT/xsettings-input-only.log" 2>&1 &
+XS=$!
+sleep 1.5
+if kill -0 "$XS" 2>/dev/null && grep -q "another XSETTINGS manager is running" "$OUT/xsettings-input-only.log"; then
+    pass "with another XSETTINGS manager running, hde-xsettings stays for the touchpad and mouse settings"
+else fail "with another XSETTINGS manager running, hde-xsettings stays for the touchpad and mouse settings"; fi
+check "... leaves the theme settings to the other manager" sh -c "! grep -q 'published serial' '$OUT/xsettings-input-only.log'"
+xinput set-prop "pointer:$TP" "$NAT" 0
+check "... and still keeps natural scrolling on" wait_prop "$TP" "$NAT" 1 20
+set_ini tap_to_click false
+check "... and still applies a change made in Settings" wait_prop "$TP" "$TAP" 0
+set_ini tap_to_click true
+wait_prop "$TP" "$TAP" 1
+kill "$FX" 2>/dev/null
 
 # ---------- hde-settings --apply (login path when hde-xsettings is not running) ----------
 kill "$XS" 2>/dev/null
@@ -287,7 +399,7 @@ if command -v dbus-run-session >/dev/null 2>&1; then
     SP=$!
     sleep 4
     command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-20-settings-input.png" 2>/dev/null
-    if grep -q "hde-settings: input device: $TP: Touchpad · libinput driver · natural scrolling on · tap to click on" "$OUT/settings.log" &&
+    if grep -q "hde-settings: input device: $TP: Touchpad · libinput driver · scrolls like a phone · tap to click on" "$OUT/settings.log" &&
        grep -q "hde-settings: input device: $SYN: Touchpad · synaptics driver" "$OUT/settings.log" &&
        grep -q "hde-settings: input device: $MOUSE: Mouse · libinput driver" "$OUT/settings.log"; then
         pass "Settings > Input lists the touchpads and the mouse with their state"
