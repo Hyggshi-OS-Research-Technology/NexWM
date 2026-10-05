@@ -19,7 +19,8 @@ manager and a system-hotkeys daemon.
 | **Dark mode** | Applies immediately to the panel, menus, Settings and **every running GTK app** (`hde-xsettings`), GTK4/libadwaita via the `color-scheme` setting; picks the dark variant of your theme automatically |
 | **Window managers** | GTK window managers **Metacity, Marco, Mutter, Muffin** (preferred — title bars follow the GTK theme and Dark mode), plus Xfwm4, Openbox, IceWM, Fluxbox, NexWM. Switch live from Settings, no logout |
 | **Session** | Restarts crashed components, XDG autostart (`~/.config/autostart`), polkit authentication agent, D-Bus activation environment |
-| **Settings that apply** | Sound (volume, mute, microphone, output device), keyboard layout + repeat, touchpad/mouse (libinput via xinput), screen timeout, text scale, wallpaper, icons, fonts, accent color |
+| **Touchpad & mouse** | Natural scrolling on the touchpad by default (the content follows your fingers, as on a phone), tap to click, separate mouse wheel direction, pointer speed/acceleration. Applied at login, immediately when changed, and to devices plugged in later or back after suspend (libinput and synaptics drivers, no `xinput` needed) |
+| **Settings that apply** | Sound (volume, mute, microphone, output device), keyboard layout + repeat, touchpad/mouse, screen timeout, text scale, wallpaper, icons, fonts, accent color |
 
 ## Install
 
@@ -80,7 +81,7 @@ On the desktop: `Enter` open, `Alt+Enter` properties, `F2` rename, `Delete` move
 | `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script |
 | `hde-hotkeys` | System shortcuts (Xlib + XInput2) |
 | `hde-screenshot` | Screenshot tool: `hde-screenshot [--area \| --window] [--delay N] [--file PATH \| --clipboard] [--no-clipboard] [--no-notify]` |
-| `hde-xsettings` | XSETTINGS manager: live theme / Dark mode / icons / fonts for all GTK apps |
+| `hde-xsettings` | XSETTINGS manager: live theme / Dark mode / icons / fonts for all GTK apps; also applies the touchpad / mouse settings (login, changes, hotplug) |
 
 ## Configuration
 
@@ -89,7 +90,9 @@ Everything lives in `~/.config/hde/settings.ini` (group `[settings]`), written b
 `wm` (`auto`, `metacity`, `marco`, `mutter`, `muffin`, `xfwm4`, `openbox`, `icewm`, `fluxbox`, `nexwm`),
 `super_menu`, `fkeys_sound`, `media_keys`, `system_shortcuts`, `screenshot_tool` (`builtin` or an installed
 `gnome-screenshot`, `xfce4-screenshooter`, `mate-screenshot`, `flameshot`, `spectacle`, `maim`, `scrot`), `dnd`, `notification_popups`,
-`notification_sounds`, `scale`, `keyboard_layout`, `repeat_rate`, `repeat_delay`, `screen_timeout`, …
+`notification_sounds`, `scale`, `keyboard_layout`, `repeat_rate`, `repeat_delay`, `screen_timeout`,
+`natural_scroll` (touchpad, default `true`), `tap_to_click` (default `true`), `mouse_natural_scroll` (default `false`),
+`pointer_speed` (0–1), `pointer_acceleration`, …
 Desktop wallpaper and icon positions: `~/.config/hde/config.ini`.
 
 ## Tests
@@ -99,8 +102,13 @@ Desktop wallpaper and icon positions: `~/.config/hde/config.ini`.
 holding `Print` before `hde-hotkeys` starts), `Ctrl+Print` to the clipboard, the desktop
 icon selection frame and icon menu (Rename, Trash, Copy/Paste, Properties), the Wi-Fi list (with a simulated
 `nmcli`), live Dark mode, live window manager switching and crash recovery. Needs `xvfb xdotool dbus-x11` (optionally `metacity openbox
-pulseaudio libnotify-bin imagemagick`). CI runs it on Ubuntu 22.04 and 24.04 and also builds HDE on Debian 13
+pulseaudio libnotify-bin imagemagick xinput`). CI runs it on Ubuntu 22.04 and 24.04 and also builds HDE on Debian 13
 (trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
+
+`tests/input-test.sh` (CI only: needs root) checks the touchpad settings against the real X input drivers: Xorg with
+the libinput and synaptics drivers and virtual touchpads / a mouse created through `/dev/uinput`. It checks natural
+scrolling and tap to click on a fresh account, live changes, hotplug and remove/re-add (suspend/resume), and that a
+two-finger swipe up really moves the content up.
 
 ## Architecture
 

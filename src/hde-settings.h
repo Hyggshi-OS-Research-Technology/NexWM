@@ -57,6 +57,8 @@ void apply_keyboard_settings(void);
 /* Switch Light/Dark system-wide (used by the Appearance page and `hde-settings --style dark|light`). */
 void appearance_apply_style(gboolean dark);
 void apply_power_settings(void);
+/* Touchpad / mouse (natural scrolling, tap to click, speed) on every pointer device, see src/hde-input.h.
+ * hde-xsettings does the same at login, on every settings.ini change and when a device is plugged in. */
 void apply_input_settings(void);
 
 #endif

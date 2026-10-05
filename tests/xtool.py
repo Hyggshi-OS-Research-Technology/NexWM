@@ -7,6 +7,9 @@
   xtool.py pixel X Y           print the color of the screen pixel at X,Y as "R G B" (0-255)
   xtool.py selection-owner SEL print the XID of the owner of selection SEL (e.g. CLIPBOARD), 0 if none
   xtool.py selection-targets SEL  print the targets (formats) the owner of selection SEL offers, e.g. image/png
+  xtool.py scroll-watch SECONDS   map a full-screen window, count the scroll "clicks" it receives (core buttons
+                               4-7, also what smooth-scrolling touchpads send to old clients); prints "ready" once
+                               mapped, then "up=N down=N left=N right=N"
 """
 import ctypes
 import ctypes.util
@@ -69,6 +72,31 @@ x.XGetImage.restype = ctypes.POINTER(XImage)
 x.XGetImage.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
                         ctypes.c_ulong, ctypes.c_int]
 ZPIXMAP = 2
+
+x.XSelectInput.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_long]
+x.XMapRaised.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+x.XPending.argtypes = [ctypes.c_void_p]
+x.XNextEvent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+x.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
+x.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
+x.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+
+
+class XButtonEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("root", ctypes.c_ulong),
+                ("subwindow", ctypes.c_ulong), ("time", ctypes.c_ulong), ("x", ctypes.c_int), ("y", ctypes.c_int),
+                ("x_root", ctypes.c_int), ("y_root", ctypes.c_int), ("state", ctypes.c_uint),
+                ("button", ctypes.c_uint), ("same_screen", ctypes.c_int)]
+
+
+class XEvent(ctypes.Union):
+    _fields_ = [("type", ctypes.c_int), ("xbutton", XButtonEvent), ("pad", ctypes.c_long * 24)]
+
+
+BUTTON_PRESS = 4
+BUTTON_PRESS_MASK = 1 << 2
 
 ERRHANDLER = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
 _ignore = ERRHANDLER(lambda d, e: 0)
@@ -189,6 +217,28 @@ def selection_targets(sel_name, timeout=3.0):
     return None
 
 
+def scroll_watch(seconds):
+    """Scroll clicks reaching a full-screen window: button 4 = up (the content moves down), 5 = down (the content
+    moves up), 6 = left, 7 = right."""
+    w = x.XCreateSimpleWindow(d, root, 0, 0, x.XDisplayWidth(d, 0), x.XDisplayHeight(d, 0), 0, 0, 0xFFFFFF)
+    x.XSelectInput(d, w, BUTTON_PRESS_MASK)
+    x.XMapRaised(d, w)
+    x.XSync(d, 0)
+    print("ready", flush=True)
+    counts = {4: 0, 5: 0, 6: 0, 7: 0}
+    ev = XEvent()
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        while x.XPending(d):
+            x.XNextEvent(d, ctypes.byref(ev))
+            if ev.type == BUTTON_PRESS and ev.xbutton.button in counts:
+                counts[ev.xbutton.button] += 1
+        time.sleep(0.01)
+    x.XDestroyWindow(d, w)
+    x.XSync(d, 0)
+    return "up=%d down=%d left=%d right=%d" % (counts[4], counts[5], counts[6], counts[7])
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "popups":
@@ -212,6 +262,8 @@ if __name__ == "__main__":
     elif cmd == "selection-owner":
         owner = x.XGetSelectionOwner(d, x.XInternAtom(d, sys.argv[2].encode(), 0))
         print(hex(owner) if owner else "0")
+    elif cmd == "scroll-watch":
+        print(scroll_watch(float(sys.argv[2])))
     elif cmd == "selection-targets":
         t = selection_targets(sys.argv[2])
         if t is None:

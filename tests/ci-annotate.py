@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ci-annotate.py — publish the HDE smoke test results on GitHub (readable through the API, no artifacts needed).
 
-  ci-annotate.py OUTDIR results      PASS/FAIL summary as a single job annotation
+  ci-annotate.py OUTDIR results [TITLE]   PASS/FAIL summary as job annotations (TITLE default: HDE smoke test)
   ci-annotate.py OUTDIR checkruns    each screenshot -> one check run "hde-shot NAME" (base64 JPEG
                                      in output.summary + output.text). Needs a GITHUB_TOKEN with checks:write permission.
 """
@@ -20,7 +20,7 @@ def esc(s):
     return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def results(out):
+def results(out, title="HDE smoke test"):
     path = os.path.join(out, "results.txt")
     text = open(path, encoding="utf-8", errors="replace").read() if os.path.exists(path) else "no results.txt"
     lines = text.splitlines()
@@ -39,7 +39,7 @@ def results(out):
     chunks.append(cur)
     for i, chunk in enumerate(chunks[:8]):
         part = f" (part {i + 1} of {len(chunks)})" if len(chunks) > 1 else ""
-        print(f"::{level} title=HDE smoke test - {passes} passed - {fails} failed{part}::{esc(chr(10).join(chunk))}")
+        print(f"::{level} title={title} - {passes} passed - {fails} failed{part}::{esc(chr(10).join(chunk))}")
 
 
 def encode(png):
@@ -85,7 +85,7 @@ def checkruns(out):
 if __name__ == "__main__":
     out, mode = sys.argv[1], sys.argv[2]
     if mode == "results":
-        results(out)
+        results(out, *(sys.argv[3:4] or []))
     elif mode == "checkruns":
         checkruns(out)
     else:

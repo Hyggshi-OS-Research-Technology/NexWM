@@ -12,9 +12,11 @@ WNCK_CFLAGS:=$(shell pkg-config --cflags libwnck-3.0 x11 2>/dev/null)
 WNCK_LIBS:=$(shell pkg-config --libs libwnck-3.0 x11 2>/dev/null)
 GLIBX_CFLAGS:=$(shell pkg-config --cflags glib-2.0 x11 2>/dev/null)
 GLIBX_LIBS:=$(shell pkg-config --libs glib-2.0 x11 2>/dev/null || echo "-lglib-2.0 -lX11")
-# XInput2 (libxi-dev): needed for the Super key to open the Start menu. Without it hde-hotkeys still builds, just without Super.
+# XInput2 (libxi-dev, pulled in by libgtk-3-dev): needed for the Super key to open the Start menu and for the touchpad /
+# mouse settings (natural scrolling, tap to click). Without it everything still builds, just without those.
 XI_CFLAGS:=$(shell pkg-config --exists xi 2>/dev/null && echo "-DHAVE_XI2 `pkg-config --cflags xi`")
 XI_LIBS:=$(shell pkg-config --libs xi 2>/dev/null)
+X11_LIBS:=$(shell pkg-config --libs x11 2>/dev/null || echo -lX11)
 
 # Flags for the GTK programs in src/
 GUI_CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
@@ -25,7 +27,7 @@ PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-
 DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
-             src/hde-settings-sound.c src/hde-theme.c
+             src/hde-settings-sound.c src/hde-theme.c src/hde-input.c
 
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot
 
@@ -41,15 +43,17 @@ $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 $(BUILD)/hde-panel: $(PANEL_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(WNCK_LIBS) -lm
 $(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) | $(BUILD)
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(XI_LIBS) $(X11_LIBS) -lm
 $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-ipc.h src/hde-commands.h | $(BUILD)
 	@[ -n "$(XI_CFLAGS)" ] || echo "WARNING: libxi-dev (pkg-config xi) not found: Super key will not open the Start menu"
 	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(XI_CFLAGS) -o $@ $< $(XI_LIBS) -lX11
 # Built-in screenshot tool (PrtSc / Shift+PrtSc / Alt+PrtSc via hde-hotkeys): no scrot & co. needed
 $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GTK_CFLAGS) $(GLIBX_CFLAGS) -o $@ $< $(GTK_LIBS) $(GLIBX_LIBS) -lm
-$(BUILD)/hde-xsettings: src/hde-xsettings.c | $(BUILD)
-	$(CC) -O2 -Wall -Wextra -std=c11 $(GLIBX_CFLAGS) -o $@ $< $(GLIBX_LIBS)
+# XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug)
+$(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-input.h | $(BUILD)
+	@[ -n "$(XI_CFLAGS)" ] || echo "WARNING: libxi-dev (pkg-config xi) not found: touchpad/mouse settings will not be applied"
+	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(GLIBX_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GLIBX_LIBS) $(XI_LIBS)
 $(BUILD):
 	mkdir -p $(BUILD)
 $(BUILD)/hde-core-demo: apps/hde-core-demo.c $(CORE_OBJ) | $(BUILD)

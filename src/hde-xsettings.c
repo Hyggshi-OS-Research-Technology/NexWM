@@ -11,6 +11,12 @@
  *   ~/.config/gtk-3.0/settings.ini [Settings] gtk-theme-name, gtk-icon-theme-name, gtk-font-name,
  *                                          gtk-cursor-theme-name, gtk-cursor-theme-size  (fallback values)
  *
+ * It is also HDE's input settings daemon (src/hde-input.c): touchpad natural scrolling + tap to click, mouse wheel
+ * direction, pointer speed — applied at login, whenever settings.ini changes, and to every pointer device that is
+ * plugged in or re-enabled later (USB/Bluetooth mice, a touchpad that comes back after suspend/resume).
+ * Once more 4 seconds after login and 2 seconds after a hotplug, in case another program (e.g. Mutter, an autostart
+ * script) set its own values at the same moment; SIGHUP re-applies everything at once.
+ *
  * Usage: hde-xsettings [--replace]   (started by hde-session; exits if another manager is already running,
  *        unless --replace is given)
  */
@@ -25,6 +31,8 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/stat.h>
+#include <time.h>
+#include "hde-input.h"
 
 enum { XS_INT = 0, XS_STRING = 1 };
 
@@ -217,6 +225,22 @@ static guint64 file_sig(const char *a, const char *b)
     return sig;
 }
 
+/* One line per touchpad / mouse at startup: shows in ~/.xsession-errors what HDE found and their state. */
+static void log_input_devices(void)
+{
+    HdeInputDevice devs[24];
+    int n = hde_input_list(dpy, devs, (int)G_N_ELEMENTS(devs));
+    for (int i = 0; i < n; i++) {
+        const HdeInputDevice *d = &devs[i];
+        fprintf(stderr, "hde-xsettings: input device %d: %s (%s, %s): natural scrolling %s%s\n", d->id, d->name,
+                d->kind == HDE_INPUT_TOUCHPAD ? "touchpad" : "mouse", d->driver,
+                d->natural < 0 ? "?" : d->natural ? "on" : "off",
+                d->kind != HDE_INPUT_TOUCHPAD ? "" : d->tapping < 0 ? ", tap to click ?" :
+                d->tapping ? ", tap to click on" : ", tap to click off");
+    }
+    if (n == 0) fprintf(stderr, "hde-xsettings: input: no touchpad or mouse with the libinput or synaptics X driver\n");
+}
+
 int main(int argc, char **argv)
 {
     gboolean replace = FALSE;
@@ -275,12 +299,32 @@ int main(int argc, char **argv)
     signal(SIGINT, on_term);
     signal(SIGHUP, on_hup);
 
+    /* touchpad / mouse settings */
+    static const char *const ITAG = "hde-xsettings: input";
+    HdeInputPrefs iprefs;
+    hde_input_prefs_load(&iprefs);
+    gboolean xi = hde_input_watch(dpy);
+    time_t recheck_at = 0;
+    if (xi) {
+        hde_input_apply(dpy, -1, &iprefs, ITAG);
+        log_input_devices();
+        recheck_at = time(NULL) + 4;
+    } else {
+        fprintf(stderr, "hde-xsettings: %s: touchpad and mouse settings are not applied\n",
+                hde_input_supported() ? "no XInput 2 on this X server" : "built without libxi-dev");
+    }
+
     guint64 m1 = file_sig("hde", "settings.ini"), m2 = file_sig("gtk-3.0", "settings.ini");
     int fd = ConnectionNumber(dpy);
     while (!stop_flag) {
         while (XPending(dpy)) {
             XEvent ev;
             XNextEvent(dpy, &ev);
+            int added = xi ? hde_input_handle_event(dpy, &ev, &iprefs, ITAG) : -1;
+            if (added >= 0) {
+                if (added > 0) recheck_at = time(NULL) + 2;
+                continue;
+            }
             if (ev.type == SelectionClear && ev.xselectionclear.selection == sel_atom) {
                 fprintf(stderr, "hde-xsettings: another XSETTINGS manager took over; exiting\n");
                 stop_flag = 1;
@@ -293,11 +337,21 @@ int main(int argc, char **argv)
         struct timeval tv = { 1, 0 };
         if (select(fd + 1, &fds, NULL, NULL, &tv) < 0 && errno != EINTR) break;
         guint64 n1 = file_sig("hde", "settings.ini"), n2 = file_sig("gtk-3.0", "settings.ini");
+        gboolean forced = reload_flag != 0;
         if (reload_flag || n1 != m1 || n2 != m2) {
             reload_flag = 0;
             m1 = n1;
             m2 = n2;
             publish(read_settings());
+            HdeInputPrefs np;
+            hde_input_prefs_load(&np);
+            gboolean changed = !hde_input_prefs_equal(&np, &iprefs);
+            iprefs = np;
+            if (xi && (changed || forced)) hde_input_apply(dpy, -1, &iprefs, ITAG);
+        }
+        if (xi && recheck_at && time(NULL) >= recheck_at) {
+            recheck_at = 0;
+            hde_input_apply(dpy, -1, &iprefs, "hde-xsettings: input re-check");
         }
     }
     XDestroyWindow(dpy, mgr_win);

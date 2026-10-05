@@ -113,7 +113,7 @@ Run again:
 - **Automatic restart after a crash** (panel, desktop, hotkeys, xsettings, WM), rate-limited.
 - Volume/brightness **OSD**, a **calendar** when clicking the clock, an **app search** box, screen locking with a real locker (light-locker, xscreensaver, dm-tool, i3lock…).
 - `dbus-update-activation-environment` so that D-Bus services (portal, keyring…) know the DISPLAY of the session.
-- Settings that really apply: volume/mic/output device, keyboard layout + key repeat rate, touchpad (xinput), screen blanking, font size, wallpaper (Settings used to save the wallpaper to the wrong file, so the desktop never changed).
+- Settings that really apply: volume/mic/output device, keyboard layout + key repeat rate, touchpad (see fix 8), screen blanking, font size, wallpaper (Settings used to save the wallpaper to the wrong file, so the desktop never changed).
 - Build fix: `hde-core/include/hde/core.h` and `hde-core/integration/core.c` were hidden by `.gitignore` (`core.*`), so the repo did not build.
 
 ### Install and try
@@ -207,3 +207,41 @@ binding (`scrot`) still runs. Now:
 saves no file and shows a notification with a preview; with Openbox holding Print before `hde-hotkeys` starts,
 HDE reports it (log + notification), and after the window manager is replaced Print takes HDE's screenshot again
 (the new Openbox, whose `rc.xml` binds Print, does not get it).
+
+## Touchpad scrolls the wrong way (fix 8)
+
+Swiping up on the touchpad moved the content down, and swiping down moved it up. *Settings → Input* showed
+**Natural scrolling: on** ("scroll content in the same direction as your fingers"), but nothing applied it: Settings
+only applied values that had been saved in `settings.ini`, i.e. switches the user had flipped. On a fresh account the
+touchpad therefore kept the X driver's default — classic scrolling (the content moves against the fingers) and no
+tap to click — the opposite of what the page showed. It also needed the `xinput` program, did nothing for touchpads
+driven by the synaptics driver, and nothing re-applied the settings to a device plugged in later or re-added by the
+kernel after suspend/resume.
+
+Now (`src/hde-input.c`):
+
+- The touchpad does what Settings shows: **natural scrolling** (swipe up = the content moves up, as on a phone or a
+  Windows precision touchpad) and **tap to click** are applied on every login, also when they were never changed.
+  To get the classic direction back, turn *Natural scrolling* off in *Settings → Input → Touchpad*.
+- Applied directly through the X server (XInput 2 device properties): no `xinput` needed. Works with the libinput
+  driver (`libinput Natural Scrolling Enabled`, `libinput Tapping Enabled`, speed, acceleration profile) and the
+  synaptics driver (negative `Synaptics Scrolling Distance`, `Synaptics Tap Action`).
+- `hde-xsettings` applies them at login, as soon as `settings.ini` changes, and to every pointer device that is added
+  or enabled later (USB/Bluetooth mice and touchpads, a touchpad re-added after suspend/resume); once more a few
+  seconds later in case another program (Mutter, an autostart script) set its own values at the same moment.
+  `pkill -HUP hde-xsettings` re-applies everything. The session log lists every touchpad/mouse and its state.
+- *Settings → Input* applies a switch immediately, has its own **mouse** wheel direction (*Mouse → Natural
+  scrolling*, off by default) and lists the devices with their current state (driver, natural scrolling, tap to click).
+- Mouse direction, pointer speed and acceleration are only applied once changed in Settings, so a system-wide
+  `xorg.conf` setting keeps working until then.
+
+### Tests
+
+`tests/input-test.sh` (CI job *touchpad*, Ubuntu 22.04 and 24.04) runs a real Xorg server (dummy video driver) with
+the libinput and synaptics input drivers and virtual devices created through `/dev/uinput`: a clickpad, a second
+touchpad plugged in later, a wheel mouse and a synaptics touchpad. It records the driver defaults (classic
+direction — the reported bug) and then checks: natural scrolling and tap to click right after login on a fresh
+account without `xinput` in `PATH`; a real two-finger swipe UP moves the content UP (the window receives scroll-down
+events) and DOWN moves it down; the mouse wheel is untouched; hotplug and remove/re-add; every switch live (classic
+direction, tap to click, mouse natural scrolling, speed, acceleration); SIGHUP; `hde-settings --apply`; the device
+list in *Settings → Input*. `make check` checks the same logic in Xvfb with a simulated libinput touchpad.

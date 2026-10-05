@@ -449,6 +449,36 @@ sz=$(pngsize "$(newest_shot)"); sw=${sz%x*}; sh=${sz#*x}
 if [ "$n1" -gt "$n0" ] && [ "$sw" -ge 980 ] 2>/dev/null && [ "$sw" -le 1120 ] && [ "$sh" -ge 660 ] && [ "$sh" -le 790 ]; then
     pass "Alt+Print captures only the active window ($sz; Settings is 1020x700)"
 else fail "Alt+Print captures only the active window (got $sz, files $n0 -> $n1)"; fi
+
+# ---------- 5c. touchpad settings ----------
+# Xvfb has no touchpad: give the XTEST pointer the properties of a libinput touchpad (driver defaults: classic
+# scrolling, no tapping). The real libinput/synaptics drivers are tested by tests/input-test.sh (Xorg + uinput).
+FAKE_TP="pointer:Virtual core XTEST pointer"
+tp_prop() { xinput list-props "$FAKE_TP" 2>/dev/null | sed -n "s/^[[:space:]]*$1 ([0-9]*):[[:space:]]*//p" | head -n 1; }
+tp_wait() { i=0; while [ $i -lt 50 ]; do [ "$(tp_prop "$1")" = "$2" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+if command -v xinput >/dev/null 2>&1 &&
+   xinput set-prop --type=int --format=8 "$FAKE_TP" "libinput Tapping Enabled" 0 2>/dev/null &&
+   xinput set-prop --type=int --format=8 "$FAKE_TP" "libinput Natural Scrolling Enabled" 0 2>/dev/null; then
+    "$B/hde-settings" input; sleep 2.5
+    check "opening Settings > Input applies natural scrolling to a touchpad (default on)" tp_wait "libinput Natural Scrolling Enabled" 1
+    check "opening Settings > Input applies tap to click (default on)" tp_wait "libinput Tapping Enabled" 1
+    if grep -q "hde-settings: input device: Virtual core XTEST pointer: Touchpad · libinput driver · natural scrolling on · tap to click on" "$OUT/settings.log"; then
+        pass "Settings > Input lists the touchpad with its real state"
+    else fail "Settings > Input lists the touchpad with its real state"; fi
+    shot 08c-settings-input
+    sed -i '/^natural_scroll=/d' "$SETTINGS_INI"; echo "natural_scroll=false" >> "$SETTINGS_INI"
+    check "natural_scroll=false in settings.ini: hde-xsettings switches the touchpad to the classic direction" \
+        tp_wait "libinput Natural Scrolling Enabled" 0
+    sed -i 's/^natural_scroll=.*/natural_scroll=true/' "$SETTINGS_INI"
+    check "natural_scroll=true: back to natural scrolling" tp_wait "libinput Natural Scrolling Enabled" 1
+    xinput set-prop "$FAKE_TP" "libinput Natural Scrolling Enabled" 0
+    "$B/hde-settings" --apply > "$OUT/settings-apply.log" 2>&1
+    check "hde-settings --apply (login) applies natural scrolling" tp_wait "libinput Natural Scrolling Enabled" 1
+    xinput delete-prop "$FAKE_TP" "libinput Natural Scrolling Enabled" 2>/dev/null
+    xinput delete-prop "$FAKE_TP" "libinput Tapping Enabled" 2>/dev/null
+else
+    skip "touchpad settings (needs xinput)"
+fi
 "$B/hde-settings" appearance; sleep 2; shot 09-settings-appearance-light
 
 # ---------- 6. Dark mode ----------

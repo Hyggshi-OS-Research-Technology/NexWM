@@ -9,6 +9,7 @@
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
+#include "hde-input.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <sys/utsname.h>
@@ -428,40 +429,16 @@ void apply_power_settings(void)
     g_free(cmd);
 }
 
-/* libinput via xinput: only apply values the user has changed (present in settings.ini). */
+/* Touchpad / mouse: talks to the X server directly (src/hde-input.c, no `xinput` program needed). The touchpad values
+ * (natural scrolling, tap to click) are always applied, so the touchpad really does what this page shows. */
 void apply_input_settings(void)
 {
-    if (!have_program("xinput")) return;
-    GString *env = g_string_new(NULL);
-    if (cfg_has_key("natural_scroll")) g_string_append_printf(env, "NAT=%d ", cfg_get_bool("natural_scroll", TRUE));
-    if (cfg_has_key("tap_to_click")) g_string_append_printf(env, "TAP=%d ", cfg_get_bool("tap_to_click", TRUE));
-    if (cfg_has_key("pointer_speed")) {
-        char buf[G_ASCII_DTOSTR_BUF_SIZE];
-        g_ascii_formatd(buf, sizeof buf, "%.2f", CLAMP(cfg_get_double("pointer_speed", 0.5), 0, 1) * 2.0 - 1.0);
-        g_string_append_printf(env, "SPEED=%s ", buf);
-    }
-    if (cfg_has_key("pointer_acceleration")) g_string_append_printf(env, "FLAT=%d ", !cfg_get_bool("pointer_acceleration", TRUE));
-    if (env->len == 0) { g_string_free(env, TRUE); return; }
-    char *script = g_strdup_printf(
-        "%s\n"
-        "for id in $(xinput list --id-only 2>/dev/null); do\n"
-        "  p=$(xinput list-props \"$id\" 2>/dev/null) || continue\n"
-        "  touch=0; case \"$p\" in *'libinput Tapping Enabled ('*) touch=1;; esac\n"
-        "  if [ -n \"$NAT\" ] && [ $touch = 1 ]; then xinput set-prop \"$id\" 'libinput Natural Scrolling Enabled' \"$NAT\"; fi\n"
-        "  if [ -n \"$TAP\" ] && [ $touch = 1 ]; then xinput set-prop \"$id\" 'libinput Tapping Enabled' \"$TAP\"; fi\n"
-        "  case \"$p\" in *'libinput Accel Speed ('*)\n"
-        "    if [ -n \"$SPEED\" ]; then xinput set-prop \"$id\" 'libinput Accel Speed' \"$SPEED\"; fi;; esac\n"
-        "  if [ -n \"$FLAT\" ]; then\n"
-        "    n=$(printf '%%s\\n' \"$p\" | grep 'libinput Accel Profile Enabled (' | head -n1 | cut -d: -f2 | tr ',' '\\n' | grep -c .)\n"
-        "    if [ \"$n\" = 2 ]; then [ \"$FLAT\" = 1 ] && v='0 1' || v='1 0';\n"
-        "      xinput set-prop \"$id\" 'libinput Accel Profile Enabled' $v;\n"
-        "    elif [ \"$n\" = 3 ]; then [ \"$FLAT\" = 1 ] && v='0 1 0' || v='1 0 0';\n"
-        "      xinput set-prop \"$id\" 'libinput Accel Profile Enabled' $v; fi\n"
-        "  fi\n"
-        "done 2>/dev/null; exit 0\n", env->str);
-    run_quiet(script);
-    g_free(script);
-    g_string_free(env, TRUE);
+    HdeInputPrefs p;
+    hde_input_prefs_load(&p);
+    Display *dpy = hde_input_open();
+    if (!dpy) return;
+    hde_input_apply(dpy, -1, &p, "hde-settings: input");
+    XCloseDisplay(dpy);
 }
 
 /* ================= simple pages ================= */
@@ -539,11 +516,76 @@ static GtkWidget *make_display_page(void)
 }
 
 static guint input_apply_id;
-static gboolean input_apply_idle(gpointer d) { (void)d; input_apply_id = 0; apply_input_settings(); return G_SOURCE_REMOVE; }
+static GtkWidget *input_devices_card;
+
+/* The touchpads and mice HDE configures, with their state right now (refreshed after every change and hotplug). */
+static void input_devices_refresh(void)
+{
+    if (!input_devices_card) return;
+    card_clear(input_devices_card);
+    HdeInputDevice devs[16];
+    int n = 0;
+    Display *dpy = hde_input_open();
+    if (dpy) {
+        n = hde_input_list(dpy, devs, (int)G_N_ELEMENTS(devs));
+        XCloseDisplay(dpy);
+    }
+    for (int i = 0; i < n; i++) {
+        const HdeInputDevice *d = &devs[i];
+        GString *desc = g_string_new(d->kind == HDE_INPUT_TOUCHPAD ? "Touchpad" : "Mouse");
+        g_string_append_printf(desc, " · %s driver", d->driver);
+        if (d->natural >= 0) g_string_append_printf(desc, " · natural scrolling %s", d->natural ? "on" : "off");
+        if (d->tapping >= 0) g_string_append_printf(desc, " · tap to click %s", d->tapping ? "on" : "off");
+        if (getenv("HDE_DEBUG")) fprintf(stderr, "hde-settings: input device: %s: %s\n", d->name, desc->str);
+        gtk_container_add(GTK_CONTAINER(input_devices_card), row_box(d->name, desc->str, NULL));
+        g_string_free(desc, TRUE);
+    }
+    if (n == 0)
+        gtk_container_add(GTK_CONTAINER(input_devices_card), card_placeholder(
+            !hde_input_supported() ? "HDE was built without libxi-dev, so these settings cannot be applied. "
+                                     "Install it (sudo apt install libxi-dev) and rebuild HDE."
+                                   : "No touchpad or mouse found that uses the libinput or synaptics X driver "
+                                     "(package xserver-xorg-input-libinput)."));
+    gtk_widget_show_all(input_devices_card);
+}
+
+static gboolean input_apply_idle(gpointer d)
+{
+    (void)d;
+    input_apply_id = 0;
+    apply_input_settings();
+    input_devices_refresh();
+    return G_SOURCE_REMOVE;
+}
+
 static void input_apply_later(void)
 {
     if (input_apply_id) g_source_remove(input_apply_id);
-    input_apply_id = g_timeout_add(400, input_apply_idle, NULL);
+    input_apply_id = g_timeout_add(150, input_apply_idle, NULL);
+}
+
+/* a device was plugged in / unplugged while the page is open (hde-xsettings configures it; show it a bit later) */
+static void on_seat_device_changed(GdkSeat *seat, GdkDevice *device, gpointer data)
+{
+    (void)seat; (void)device; (void)data;
+    input_apply_later();
+}
+
+/* every time the page is shown: make sure the devices match the page (also without hde-xsettings, or if something
+ * else changed them), then list them */
+static void on_input_page_map(GtkWidget *w, gpointer d)
+{
+    (void)w; (void)d;
+    input_apply_later();
+}
+
+static void on_input_page_destroy(GtkWidget *w, gpointer d)
+{
+    (void)w; (void)d;
+    input_devices_card = NULL;
+    GdkDisplay *dsp = gdk_display_get_default();
+    GdkSeat *seat = dsp ? gdk_display_get_default_seat(dsp) : NULL;
+    if (seat) g_signal_handlers_disconnect_by_func(seat, G_CALLBACK(on_seat_device_changed), NULL);
 }
 
 static gboolean cb_input_bool(GtkSwitch *s, gboolean v, gpointer key)
@@ -572,19 +614,44 @@ static GtkWidget *input_switch(const char *key, gboolean def)
 static GtkWidget *make_input_page(void)
 {
     GtkWidget *box = page_base();
+    /* defaults here = defaults in hde-input.c */
+    gtk_box_pack_start(GTK_BOX(box), section("Touchpad"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Natural scrolling",
+        "On: the content follows your fingers (swipe up and the page moves up, as on a phone). "
+        "Off: the classic direction, where the content moves against your fingers.",
+        input_switch("natural_scroll", TRUE)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Tap to click",
+        "Tap the touchpad to click, tap with two fingers to right-click.", input_switch("tap_to_click", TRUE)),
+        FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Mouse"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Natural scrolling", "Reverse the direction of the mouse wheel.",
+                                             input_switch("mouse_natural_scroll", FALSE)), FALSE, FALSE, 0);
+
     gtk_box_pack_start(GTK_BOX(box), section("Pointer"), FALSE, FALSE, 0);
     GtkWidget *speed = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, 0.05);
     gtk_scale_set_draw_value(GTK_SCALE(speed), FALSE);
     gtk_widget_set_size_request(speed, 200, -1);
     gtk_range_set_value(GTK_RANGE(speed), cfg_get_double("pointer_speed", 0.5));
     g_signal_connect(speed, "value-changed", G_CALLBACK(cb_pointer_speed), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Pointer speed", "Adjust cursor movement speed.", speed), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Pointer acceleration", "Accelerate the pointer for faster movement.", input_switch("pointer_acceleration", TRUE)), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), section("Touchpad"), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Natural scrolling", "Scroll content in the same direction as your fingers.", input_switch("natural_scroll", TRUE)), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Tap to click", "Use a touchpad tap as a primary click.", input_switch("tap_to_click", TRUE)), FALSE, FALSE, 0);
-    if (!have_program("xinput"))
-        gtk_box_pack_start(GTK_BOX(box), info_label("Install xinput (sudo apt install xinput) so these settings are applied to your devices."), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Pointer speed", "Adjust cursor movement speed (touchpad and mouse).", speed),
+                       FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Pointer acceleration", "Accelerate the pointer for faster movement.",
+                                             input_switch("pointer_acceleration", TRUE)), FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Devices"), FALSE, FALSE, 0);
+    input_devices_card = card_new();
+    gtk_box_pack_start(GTK_BOX(box), input_devices_card, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), info_label("Changes apply immediately, to devices plugged in later too "
+                                                "(and again after suspend)."), FALSE, FALSE, 0);
+    g_signal_connect(box, "map", G_CALLBACK(on_input_page_map), NULL);
+    g_signal_connect(box, "destroy", G_CALLBACK(on_input_page_destroy), NULL);
+    GdkDisplay *dsp = gdk_display_get_default();
+    GdkSeat *seat = dsp ? gdk_display_get_default_seat(dsp) : NULL;
+    if (seat) {
+        g_signal_connect(seat, "device-added", G_CALLBACK(on_seat_device_changed), NULL);
+        g_signal_connect(seat, "device-removed", G_CALLBACK(on_seat_device_changed), NULL);
+    }
     return box;
 }
 
