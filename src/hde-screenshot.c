@@ -355,12 +355,13 @@ static void finish(GdkPixbuf *p)
     fflush(stdout);
     if (!opt_no_clip) copy_to_clipboard(p);
     if (!opt_no_notify) {
-        char *shown = home_relative(path);
-        char *body = g_markup_printf_escaped("Saved as <b>%s</b>%s", shown,
-                                             clip_active ? "\nand copied to the clipboard." : ".");
+        char *dir = g_path_get_dirname(path);
+        char *shown = home_relative(dir);
+        char *body = g_markup_printf_escaped("Saved in %s%s", shown, clip_active ? " and copied to the clipboard." : ".");
         notify_user("Screenshot taken", body, path, TRUE);
         g_free(body);
         g_free(shown);
+        g_free(dir);
     }
     if (clip_active || notif_active) g_timeout_add_seconds(600, on_give_up, NULL);
     quit_if_idle();

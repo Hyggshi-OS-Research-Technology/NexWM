@@ -720,7 +720,11 @@ static void load_css(void)
         ".hde-notification .notif-summary { font-weight: bold; }"
         ".hde-notification .notif-app { font-size: 9px; color: %s; }"
         ".hde-notification .notif-body { color: %s; }"
-        ".hde-notification button { padding: 3px 8px; }"
+        ".hde-notification button { padding: 3px 8px; background: %s; background-image: none; border: 1px solid %s;"
+        "  border-radius: 6px; box-shadow: none; text-shadow: none; }"
+        ".hde-notification button:hover { background: shade(%s, 1.2); }"
+        ".hde-notification button label { color: %s; }"
+        ".hde-notification button.notif-close { background: transparent; border: none; padding: 2px; }"
         ".hde-search entry { background: %s; color: %s; border-radius: 8px; padding: 6px 8px; min-height: 26px; }"
         ".hde-search list, .hde-search scrolledwindow, .hde-search viewport { background: transparent; }"
         ".hde-search row { border-radius: 8px; color: %s; }"
@@ -735,6 +739,7 @@ static void load_css(void)
         fg, hover, ti.accent, ti.accent, ti.accent, runbg, hover, sub, ti.accent, fg,
         popbg, fg, popbd, fg, hover, ti.accent,
         sub, fg,
+        runbg, popbd, runbg, fg,
         entry, fg, fg, ti.accent, sub,
         fg, ti.accent);
     if (!panel_css) {

@@ -429,6 +429,8 @@ if [ -n "$BLUEZ_MOCK" ]; then
     if grep -q "AgentManager1\|RegisterAgent" "$OUT/bluez-mock.log" 2>/dev/null; then :; fi
 fi
 "$B/hde-settings" keyboard; sleep 2; shot 08-settings-keyboard
+xdotool mousemove 760 600; for i in 1 2 3 4 5 6 7 8 9 10; do xdotool click 5; done; sleep 0.6
+shot 08b-settings-keyboard-screenshots
 n0=$(nshots); xdotool key alt+Print; sleep 3; n1=$(nshots)
 sz=$(pngsize "$(newest_shot)"); sw=${sz%x*}; sh=${sz#*x}
 if [ "$n1" -gt "$n0" ] && [ "$sw" -ge 980 ] 2>/dev/null && [ "$sw" -le 1120 ] && [ "$sh" -ge 660 ] && [ "$sh" -le 790 ]; then

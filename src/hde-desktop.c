@@ -1460,6 +1460,7 @@ static void prop_row(GtkWidget *grid, int row, const char *key, const char *valu
     gtk_label_set_selectable(GTK_LABEL(v), TRUE);
     gtk_label_set_line_wrap(GTK_LABEL(v), TRUE);
     gtk_label_set_line_wrap_mode(GTK_LABEL(v), PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_width_chars(GTK_LABEL(v), 34);          /* without a minimum width the window gets very tall */
     gtk_label_set_max_width_chars(GTK_LABEL(v), 46);
     gtk_widget_set_hexpand(v, TRUE);
     gtk_grid_attach(GTK_GRID(grid), k, 0, row, 1, 1);
@@ -1476,7 +1477,7 @@ static void show_properties(GPtrArray *paths)
     GtkWidget *dlg = gtk_dialog_new_with_buttons(title, NULL, 0, "_Close", GTK_RESPONSE_CLOSE, NULL);
     g_free(title);
     gtk_window_set_position(GTK_WINDOW(dlg), GTK_WIN_POS_CENTER);
-    gtk_window_set_default_size(GTK_WINDOW(dlg), 420, -1);
+    gtk_window_set_resizable(GTK_WINDOW(dlg), FALSE);     /* exactly as big as its contents */
     g_signal_connect(dlg, "response", G_CALLBACK(gtk_widget_destroy), NULL);
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
     gtk_container_set_border_width(GTK_CONTAINER(content), 14);
@@ -1508,6 +1509,9 @@ static void show_properties(GPtrArray *paths)
         g_free(m);
         gtk_label_set_selectable(GTK_LABEL(name), TRUE);
         gtk_label_set_line_wrap(GTK_LABEL(name), TRUE);
+        gtk_label_set_line_wrap_mode(GTK_LABEL(name), PANGO_WRAP_WORD_CHAR);
+        gtk_label_set_width_chars(GTK_LABEL(name), 24);
+        gtk_label_set_max_width_chars(GTK_LABEL(name), 40);
         gtk_label_set_xalign(GTK_LABEL(name), 0);
         gtk_box_pack_start(GTK_BOX(head), img, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(head), name, TRUE, TRUE, 0);
