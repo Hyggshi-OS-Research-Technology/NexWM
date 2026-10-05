@@ -123,10 +123,10 @@ mkfifo "$OUT/vinput.fifo"
 sudo -n python3 "$HERE/vinput.py" serve "$OUT/vinput.fifo" "$OUT/vinput.resp" > "$OUT/vinput.log" 2>&1 &
 VIN=$!
 vin() {     # vin COMMAND...: run a vinput.py command, wait for its answer
-    n0=$(wc -l < "$OUT/vinput.resp")
+    vin_n0=$(wc -l < "$OUT/vinput.resp")
     timeout 5 sh -c 'echo "$1" > "$2"' _ "$*" "$OUT/vinput.fifo" || { info "vinput: no answer to '$*'"; return 1; }
     i=0
-    while [ "$(wc -l < "$OUT/vinput.resp")" -le "$n0" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+    while [ "$(wc -l < "$OUT/vinput.resp")" -le "$vin_n0" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
     r=$(tail -n 1 "$OUT/vinput.resp")
     case "$r" in "ok "*) return 0 ;; esac
     info "vinput: $r"
@@ -336,11 +336,11 @@ if command -v xdotool >/dev/null 2>&1; then
         check "... on the synaptics touchpad too" wait_prop_re "$SYN" "Synaptics Scrolling Distance" '^[0-9]+, [0-9]+$'
         sleep 1.5
         check "... and hde-xsettings does not undo it (it reads settings.ini first)" test "$(prop "$TP" "$NAT")" = 0
-        n0=$(grep -c 'test page:' "$OUT/touchpad-setup.log")
+        tp_lines=$(grep -c 'test page:' "$OUT/touchpad-setup.log")     # (not n0: vin() uses that name)
         point_at setup-test-page "$OUT/touchpad-setup.log"; sleep 0.3
         vin swipe "$TP" up; sleep 1.2
         last=$(grep 'test page:' "$OUT/touchpad-setup.log" | tail -n 1)
-        if [ "$(grep -c 'test page:' "$OUT/touchpad-setup.log")" -gt "$n0" ] && echo "$last" | grep -q "(toward the top)"; then
+        if [ "$(grep -c 'test page:' "$OUT/touchpad-setup.log")" -gt "$tp_lines" ] && echo "$last" | grep -q "(toward the top)"; then
             pass "'Like a mouse wheel': a two-finger swipe UP over the test page goes back toward the TOP (${last#*test page: })"
         else fail "'Like a mouse wheel': a two-finger swipe UP over the test page goes back toward the TOP ($last)"; fi
         command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-22-touchpad-setup-mouse-wheel.png" 2>/dev/null
