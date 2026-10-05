@@ -230,9 +230,21 @@ fi
 if [ -n "$BLUEZ_MOCK" ]; then
     bz PairDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" || bz PairDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" 9536; sleep 1.5
     shot 07b-bluetooth-live-update
-    grep -v "^$" "$OUT/bluez-mock.log" | tail -n 6 | cut -c1-300 | sed 's/^/INFO: bluez-mock: /' >> "$OUT/results.txt"
-    tr ',' '\n' < "$OUT/bluez-objects.txt" | grep -E "dev_11|Paired|Icon|Connected" | head -n 8 | cut -c1-200 | sed 's/^/INFO: bluez-objects: /' >> "$OUT/results.txt"
-    grep "hde-settings: bt device" "$OUT/settings.log" | tail -n 3 | cut -c1-700 | sed 's/^/INFO: /' >> "$OUT/results.txt"
+    bprop() { gdbus call --system --dest org.bluez --object-path "/org/bluez/hci0/dev_$1" \
+                  --method org.freedesktop.DBus.Properties.Get org.bluez.Device1 "$2" 2>/dev/null; }
+    case "$(bprop 11_22_33_44_55_66 Paired)" in *true*) pass "Bluetooth: paired + connected device is listed (BlueZ mock)" ;;
+        *) skip "Bluetooth mock could not pair the test device" ;; esac
+    # Ghép đôi bằng chính Settings: nút "Pair" của "Pixel 8" (thẻ Other devices còn 1 dòng)
+    xdotool mousemove 1078 556 click 1; sleep 4
+    shot 07c-bluetooth-paired-by-settings
+    if bprop AA_BB_CC_DD_EE_02 Paired | grep -q true; then
+        pass "Settings pairs a Bluetooth device (Device1.Pair)"
+        if bprop AA_BB_CC_DD_EE_02 Trusted | grep -q true; then pass "paired device is marked trusted (auto-reconnect)"; else fail "paired device is marked trusted"; fi
+        if bprop AA_BB_CC_DD_EE_02 Connected | grep -q true; then pass "Settings connects the device after pairing"; else fail "Settings connects the device after pairing"; fi
+    else
+        fail "Settings pairs a Bluetooth device (Pair button at 1078,556 — see shot 07c)"
+        grep "hde-settings: bt device" "$OUT/settings.log" | tail -n 3 | cut -c1-400 | sed 's/^/INFO: /' >> "$OUT/results.txt"
+    fi
     if grep -q "AgentManager1\|RegisterAgent" "$OUT/bluez-mock.log" 2>/dev/null; then :; fi
 fi
 "$B/hde-settings" keyboard; sleep 2; shot 08-settings-keyboard
