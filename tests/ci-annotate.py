@@ -27,9 +27,19 @@ def results(out):
     fails = sum(1 for l in lines if l.startswith("FAIL"))
     passes = sum(1 for l in lines if l.startswith("PASS"))
     level = "error" if fails else "notice"
-    # annotations are cut at 4096 characters: put the FAIL lines first
+    # annotations are cut at 4096 characters: put the FAIL lines first and split the rest into several annotations
+    # (no comma in the title: it separates the properties of a workflow command)
     ordered = [l for l in lines if l.startswith("FAIL")] + [l for l in lines if not l.startswith("FAIL")]
-    print(f"::{level} title=HDE smoke test: {passes} passed, {fails} failed::{esc(chr(10).join(ordered))}")
+    chunks, cur = [], []
+    for l in ordered:
+        if cur and len("\n".join(cur + [l])) > 3900:
+            chunks.append(cur)
+            cur = []
+        cur.append(l[:1000])
+    chunks.append(cur)
+    for i, chunk in enumerate(chunks[:8]):
+        part = f" (part {i + 1} of {len(chunks)})" if len(chunks) > 1 else ""
+        print(f"::{level} title=HDE smoke test - {passes} passed - {fails} failed{part}::{esc(chr(10).join(chunk))}")
 
 
 def encode(png):

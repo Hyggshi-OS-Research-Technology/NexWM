@@ -23,7 +23,7 @@ jobs:
         shell: bash
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install dependencies
       run: |
@@ -61,7 +61,7 @@ jobs:
 
     - name: Upload test output (logs + screenshots)
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: hde-smoke-${{ matrix.os }}
         path: |
@@ -87,7 +87,7 @@ jobs:
         shell: bash
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install build dependencies
       run: |

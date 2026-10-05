@@ -344,8 +344,8 @@ static int find_builtin_shot(char *out, size_t len)
         char *slash = strrchr(self, '/');
         if (slash) {
             *slash = '\0';
-            snprintf(out, len, "%s/hde-screenshot", self);
-            if (access(out, X_OK) == 0) return 1;
+            int w = snprintf(out, len, "%s/hde-screenshot", self);
+            if (w > 0 && (size_t)w < len && access(out, X_OK) == 0) return 1;
         }
     }
     return find_bin("hde-screenshot", out, len);
