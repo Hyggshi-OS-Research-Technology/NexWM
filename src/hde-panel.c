@@ -32,14 +32,18 @@ typedef struct {
 } Category;
 
 static const Category categories[] = {
-    { "Internet",       "applications-internet",    { "Network", "WebBrowser", "Email", NULL } },
-    { "Office",         "applications-office",      { "Office", NULL } },
-    { "Graphics",       "applications-graphics",    { "Graphics", NULL } },
-    { "Audio & Video",  "applications-multimedia",  { "AudioVideo", "Audio", "Video", NULL } },
-    { "Programming",    "applications-development", { "Development", NULL } },
-    { "Games",          "applications-games",       { "Game", NULL } },
-    { "Utilities",      "applications-utilities",   { "Utility", NULL } },
-    { "System",         "applications-system",      { "System", "Settings", NULL } },
+    /* icon: các tên thay thế cách nhau bởi '|' (theme Adwaita mới đã bỏ nhiều tên applications-*) */
+    { "Internet",       "applications-internet|web-browser|emblem-web|network-workgroup|web-browser-symbolic",
+                        { "Network", "WebBrowser", "Email", NULL } },
+    { "Office",         "applications-office|x-office-document|x-office-document-symbolic", { "Office", NULL } },
+    { "Graphics",       "applications-graphics|image-x-generic|applications-graphics-symbolic", { "Graphics", NULL } },
+    { "Audio & Video",  "applications-multimedia|audio-x-generic|applications-multimedia-symbolic",
+                        { "AudioVideo", "Audio", "Video", NULL } },
+    { "Programming",    "applications-development|applications-engineering|text-x-script|utilities-terminal|applications-engineering-symbolic",
+                        { "Development", NULL } },
+    { "Games",          "applications-games|input-gaming|applications-games-symbolic", { "Game", NULL } },
+    { "Utilities",      "applications-utilities|applications-accessories|applications-utilities-symbolic", { "Utility", NULL } },
+    { "System",         "applications-system|preferences-system|applications-system-symbolic", { "System", "Settings", NULL } },
 };
 #define N_CATS G_N_ELEMENTS(categories)
 
@@ -51,6 +55,8 @@ static GtkWidget *menu_btn;
 static GtkWidget *app_menu;
 static GtkCssProvider *panel_css;
 static Atom cmd_atom;
+static gboolean debug_on;          /* HDE_DEBUG=1: ghi log chẩn đoán ra stderr (~/.cache/hde/session.log) */
+#define DBG(...) do { if (debug_on) { g_printerr("hde-panel: " __VA_ARGS__); g_printerr("\n"); } } while (0)
 
 static void run_cmd(GtkMenuItem *item, gpointer cmd);
 static void show_power_dialog(GtkMenuItem *item, gpointer data);
@@ -113,6 +119,7 @@ static void toggle_calendar(GtkButton *b, gpointer d)
         g_signal_connect(cal_win, "key-press-event", G_CALLBACK(cal_key), NULL);
         g_signal_connect(cal_win, "map-event", G_CALLBACK(cal_map), NULL);
         g_signal_connect(cal_win, "delete-event", G_CALLBACK(gtk_widget_hide_on_delete), NULL);
+        hde_popup_setup_alpha(cal_win);
         GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
         gtk_container_set_border_width(GTK_CONTAINER(box), 12);
         cal_title = gtk_label_new("");
@@ -149,13 +156,26 @@ static void toggle_calendar(GtkButton *b, gpointer d)
 }
 
 /* ---------- Start menu ---------- */
+static char *pick_icon(const char *spec)
+{
+    char **names = g_strsplit(spec ? spec : "application-x-executable", "|", -1);
+    GtkIconTheme *t = gtk_icon_theme_get_default();
+    char *res = NULL;
+    for (int i = 0; names[i] && !res; i++)
+        if (gtk_icon_theme_has_icon(t, names[i])) res = g_strdup(names[i]);
+    if (!res) res = g_strdup(names[0]);
+    g_strfreev(names);
+    return res;
+}
+
 static GtkWidget *make_item(const char *label, GIcon *gicon, const char *icon_name)
 {
     GtkWidget *item = gtk_menu_item_new();
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    char *picked = gicon ? NULL : pick_icon(icon_name ? icon_name : "application-x-executable");
     GtkWidget *img = gicon ? gtk_image_new_from_gicon(gicon, GTK_ICON_SIZE_LARGE_TOOLBAR)
-                           : gtk_image_new_from_icon_name(icon_name ? icon_name : "application-x-executable",
-                                                          GTK_ICON_SIZE_LARGE_TOOLBAR);
+                           : gtk_image_new_from_icon_name(picked, GTK_ICON_SIZE_LARGE_TOOLBAR);
+    g_free(picked);
     gtk_image_set_pixel_size(GTK_IMAGE(img), 22);
     GtkWidget *lbl = gtk_label_new(label);
     gtk_label_set_xalign(GTK_LABEL(lbl), 0);
@@ -270,7 +290,7 @@ static void add_custom_start_apps(GtkWidget *menu)
     }
     g_dir_close(d);
     if (count > 0) {
-        GtkWidget *it = make_item("Custom", NULL, "applications-other");
+        GtkWidget *it = make_item("Custom", NULL, "applications-other|application-x-executable");
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), sub);
         gtk_menu_shell_insert(GTK_MENU_SHELL(menu), it, 2);     /* ngay dưới ô Search */
     } else {
@@ -284,7 +304,7 @@ static GtkWidget *build_menu(void)
     GtkWidget *menu = new_menu();
     gtk_style_context_add_class(gtk_widget_get_style_context(menu), "hde-start-menu");
 
-    GtkWidget *search = make_item("Search applications…", NULL, "system-search");
+    GtkWidget *search = make_item("Search applications…", NULL, "system-search|edit-find|system-search-symbolic");
     gtk_widget_set_tooltip_text(search, "Or just start typing while the menu is open");
     g_signal_connect(search, "activate", G_CALLBACK(on_search_item), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), search);
@@ -319,7 +339,7 @@ static GtkWidget *build_menu(void)
     for (GList *l = apps; l; l = l->next)
         if (!g_hash_table_contains(placed, l->data)) { add_app(other, l->data); n_other++; }
     if (n_other) {
-        GtkWidget *it = make_item("Other", NULL, "applications-other");
+        GtkWidget *it = make_item("Other", NULL, "applications-other|application-x-executable");
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), other);
         gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
     } else {
@@ -329,10 +349,10 @@ static GtkWidget *build_menu(void)
     add_custom_start_apps(menu);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-    GtkWidget *settings = make_item("Settings", NULL, "preferences-system");
+    GtkWidget *settings = make_item("Settings", NULL, "preferences-system|preferences-system-symbolic|emblem-system-symbolic");
     g_signal_connect(settings, "activate", G_CALLBACK(on_settings_item), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), settings);
-    GtkWidget *power = make_item("Power / Session…", NULL, "system-shutdown");
+    GtkWidget *power = make_item("Power / Session…", NULL, "system-shutdown|system-shutdown-symbolic");
     g_signal_connect(power, "activate", G_CALLBACK(show_power_dialog), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), power);
 
@@ -382,6 +402,17 @@ static void open_menu(guint32 time, gboolean keyboard)
     gtk_menu_popup_at_widget(GTK_MENU(app_menu), menu_btn, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_SOUTH_WEST, trigger);
     if (trigger) gdk_event_free(trigger);
     if (keyboard) {
+        DBG("menu popup by keyboard (time %u): mapped=%d retry=%d", time, gtk_widget_get_mapped(app_menu), menu_retry);
+        if (!gtk_widget_get_mapped(app_menu) && debug_on) {
+            /* tìm nguyên nhân: ai đang giữ grab bàn phím / chuột? */
+            GdkSeat *seat = gdk_display_get_default_seat(gdk_display_get_default());
+            GdkWindow *pw = gtk_widget_get_window(panel_win);
+            GdkGrabStatus k = gdk_seat_grab(seat, pw, GDK_SEAT_CAPABILITY_KEYBOARD, TRUE, NULL, NULL, NULL, NULL);
+            if (k == GDK_GRAB_SUCCESS) gdk_seat_ungrab(seat);
+            GdkGrabStatus p = gdk_seat_grab(seat, pw, GDK_SEAT_CAPABILITY_ALL_POINTING, TRUE, NULL, NULL, NULL, NULL);
+            if (p == GDK_GRAB_SUCCESS) gdk_seat_ungrab(seat);
+            DBG("grab probe: keyboard=%d pointer=%d (0 ok, 1 already grabbed, 2 invalid time, 3 not viewable, 4 frozen)", k, p);
+        }
         if (!gtk_widget_get_mapped(app_menu) && menu_retry < 3) {
             menu_retry++;                            /* WM vẫn đang giữ grab của phím Super: thử lại */
             g_timeout_add(120, retry_menu, NULL);
@@ -394,6 +425,7 @@ static void open_menu(guint32 time, gboolean keyboard)
 
 static void toggle_menu(guint32 time)
 {
+    DBG("toggle menu: search_visible=%d menu_mapped=%d", hde_search_visible(), app_menu && gtk_widget_get_mapped(app_menu));
     if (hde_search_visible()) { hde_search_hide(); return; }
     if (app_menu && gtk_widget_get_mapped(app_menu)) {
         gtk_menu_shell_deactivate(GTK_MENU_SHELL(app_menu));
@@ -545,6 +577,7 @@ typedef struct { long cmd, arg; guint32 time; } PanelCmd;
 static gboolean run_panel_cmd(gpointer p)
 {
     PanelCmd *c = p;
+    DBG("command %ld (time %u, arg %ld)", c->cmd, c->time, c->arg);
     switch (c->cmd) {
     case HDE_CMD_MENU:   toggle_menu(c->time); break;
     case HDE_CMD_SEARCH:
@@ -663,7 +696,7 @@ static void load_css(void)
         "  padding: 2px 8px; color: %s; box-shadow: none; text-shadow: none; -gtk-icon-shadow: none; }"
         ".hde-panel button:hover { background: %s; }"
         ".hde-panel button:checked { background: %s; color: white; }"
-        ".hde-panel .menu-btn { font-weight: bold; background: %s; color: white; }"
+        ".hde-panel .menu-btn, .hde-panel .menu-btn label { font-weight: bold; background: %s; color: white; }"
         ".hde-panel .menu-btn:hover { background: shade(%s, 1.15); }"
         ".hde-panel .run-btn { background: %s; }"
         ".hde-panel .run-btn:hover { background: %s; }"
@@ -676,7 +709,9 @@ static void load_css(void)
         "  font-size: 9px; font-weight: bold; }"
         ".hde-panel label { color: %s; }"
         ".hde-osd, .hde-notification, .hde-search, .hde-calendar { background: %s; color: %s;"
-        "  border: 1px solid %s; border-radius: 10px; }"
+        "  border: 1px solid %s; border-radius: 0; }"
+        /* bo góc chỉ khi WM có compositing (hde_popup_setup_alpha thêm lớp .rounded), tránh góc đen */
+        ".hde-osd.rounded, .hde-notification.rounded, .hde-search.rounded, .hde-calendar.rounded { border-radius: 10px; }"
         ".hde-osd label, .hde-notification label, .hde-search label, .hde-calendar label { color: %s; }"
         ".hde-osd levelbar trough { min-height: 6px; border-radius: 3px; background: %s; border: none; }"
         ".hde-osd levelbar block.filled { background: %s; border-radius: 3px; border: none; min-height: 6px; }"
@@ -757,6 +792,7 @@ int main(int argc, char **argv)
     }
 
     gtk_init(&argc, &argv);
+    debug_on = g_getenv("HDE_DEBUG") != NULL;
     wnck_set_client_type(WNCK_CLIENT_TYPE_PAGER);
     hde_theme_apply_process();
     load_css();

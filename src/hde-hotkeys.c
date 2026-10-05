@@ -37,6 +37,7 @@
 #include "hde-ipc.h"
 
 static volatile sig_atomic_t stop_flag = 0;
+static int debug_on;               /* HDE_DEBUG=1: log chẩn đoán */
 static volatile sig_atomic_t reload_flag = 0;
 static Display *dpy;
 static Window root;
@@ -301,8 +302,9 @@ static void toggle_show_desktop(void)
 
 static void panel_cmd(long cmd, Time t)
 {
-    if (hde_ipc_send(dpy, cmd, 0, t) != 0)
-        fprintf(stderr, "hde-hotkeys: hde-panel is not running (command %ld ignored)\n", cmd);
+    int rc = hde_ipc_send(dpy, cmd, 0, t);
+    if (rc != 0) fprintf(stderr, "hde-hotkeys: hde-panel is not running (command %ld ignored)\n", cmd);
+    else if (debug_on) fprintf(stderr, "hde-hotkeys: sent command %ld to hde-panel (time %lu)\n", cmd, (unsigned long)t);
 }
 
 static void do_action(int act, Time t)
@@ -433,6 +435,10 @@ static void xi2_event(XGenericEventCookie *c)
 {
     XIRawEvent *re = c->data;
     int is_super = re->detail != 0 && ((KeyCode)re->detail == super_l || (KeyCode)re->detail == super_r);
+    if (debug_on && c->evtype != XI_RawButtonPress)
+        fprintf(stderr, "hde-hotkeys: raw key %s code=%d super=%d down=%d other=%d dev=%d src=%d\n",
+                c->evtype == XI_RawKeyPress ? "press" : "release", re->detail, is_super, super_down, super_other,
+                re->deviceid, re->sourceid);
     switch (c->evtype) {
     case XI_RawKeyPress:
         if (is_super) {
@@ -484,6 +490,7 @@ int main(int argc, char **argv)
     if (xdg && *xdg) snprintf(cfg_path, sizeof cfg_path, "%s/hde/settings.ini", xdg);
     else snprintf(cfg_path, sizeof cfg_path, "%s/.config/hde/settings.ini", home ? home : "/tmp");
 
+    debug_on = getenv("HDE_DEBUG") != NULL;
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
         fprintf(stderr, "hde-hotkeys: cannot open X display\n");

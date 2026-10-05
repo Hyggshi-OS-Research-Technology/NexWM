@@ -7,6 +7,32 @@
 static GtkWidget *osd_win, *osd_icon, *osd_level, *osd_label;
 static guint osd_timer;
 
+static gboolean alpha_draw(GtkWidget *w, cairo_t *cr, gpointer d)
+{
+    (void)d;
+    cairo_save(cr);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+    cairo_restore(cr);
+    GtkStyleContext *ctx = gtk_widget_get_style_context(w);
+    int W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
+    gtk_render_background(ctx, cr, 0, 0, W, H);
+    gtk_render_frame(ctx, cr, 0, 0, W, H);
+    return FALSE;                      /* GTK vẽ tiếp các widget con */
+}
+
+void hde_popup_setup_alpha(GtkWidget *window)
+{
+    GdkScreen *scr = gtk_widget_get_screen(window);
+    GdkVisual *rgba = gdk_screen_get_rgba_visual(scr);
+    if (!rgba || !gdk_screen_is_composited(scr)) return;
+    gtk_widget_set_visual(window, rgba);
+    gtk_widget_set_app_paintable(window, TRUE);
+    g_signal_connect(window, "draw", G_CALLBACK(alpha_draw), NULL);
+    gtk_style_context_add_class(gtk_widget_get_style_context(window), "rounded");
+}
+
 static gboolean osd_hide(gpointer d)
 {
     (void)d;
@@ -21,11 +47,8 @@ static void osd_build(void)
     gtk_window_set_type_hint(GTK_WINDOW(osd_win), GDK_WINDOW_TYPE_HINT_NOTIFICATION);
     gtk_window_set_accept_focus(GTK_WINDOW(osd_win), FALSE);
     gtk_window_set_resizable(GTK_WINDOW(osd_win), FALSE);
-    GdkScreen *scr = gtk_widget_get_screen(osd_win);
-    GdkVisual *rgba = gdk_screen_get_rgba_visual(scr);
-    if (rgba && gdk_screen_is_composited(scr)) gtk_widget_set_visual(osd_win, rgba);
-    gtk_widget_set_app_paintable(osd_win, FALSE);
     gtk_style_context_add_class(gtk_widget_get_style_context(osd_win), "hde-osd");
+    hde_popup_setup_alpha(osd_win);
 
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_container_set_border_width(GTK_CONTAINER(box), 14);

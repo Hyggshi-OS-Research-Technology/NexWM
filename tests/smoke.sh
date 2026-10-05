@@ -76,6 +76,28 @@ if command -v pulseaudio >/dev/null 2>&1; then
     sleep 1.5
 fi
 
+# BlueZ giả lập (python3-dbusmock) trên một "system bus" riêng: kiểm tra danh sách thiết bị Bluetooth
+BLUEZ_MOCK=""
+SYSBUS_PID=""
+bz() { m=$1; shift; gdbus call --system --dest org.bluez --object-path / --method "org.bluez.Mock.$m" "$@" >> "$OUT/bluez-mock.log" 2>&1; }
+if python3 -c "import dbusmock" >/dev/null 2>&1; then
+    set -- $(dbus-daemon --session --fork --print-address=1 --print-pid=1 2>/dev/null)
+    if [ -n "${1:-}" ]; then
+        export DBUS_SYSTEM_BUS_ADDRESS="$1"
+        SYSBUS_PID="${2:-}"
+        python3 -m dbusmock --system --template bluez5 >> "$OUT/bluez-mock.log" 2>&1 &
+        BLUEZ_MOCK=$!
+        for i in $(seq 1 40); do gdbus introspect --system --dest org.bluez --object-path / >/dev/null 2>&1 && break; sleep 0.2; done
+        bz AddAdapter "'hci0'" "'HDE test PC'"
+        bz AddDevice "'hci0'" "'11:22:33:44:55:66'" "'Galaxy Buds2'"
+        bz PairDevice "'hci0'" "'11:22:33:44:55:66'"
+        bz ConnectDevice "'hci0'" "'11:22:33:44:55:66'"
+        bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" "'MX Keys'"
+        bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:02'" "'Pixel 8'"
+    fi
+fi
+
+export HDE_DEBUG=1
 "$B/hde-session" > "$OUT/session.log" 2>&1 &
 SESSION=$!
 export HDE_SESSION_PID=$SESSION
@@ -155,7 +177,53 @@ sleep 4
 check "Settings window opens" xdotool search --onlyvisible --name "Hyggshi Settings"
 shot 06-settings-wifi
 if grep -q "device wifi list" "$OUT/nmcli.log" 2>/dev/null; then pass "Network page asks NetworkManager for the Wi-Fi list"; else fail "Network page asks NetworkManager for the Wi-Fi list"; fi
+
+# Super khi một ứng dụng đang có focus (trường hợp dùng thật phổ biến nhất)
+n0=$(popups); xdotool key super; sleep 1.5; n1=$(popups)
+if [ "$n1" -gt "$n0" ]; then pass "Super opens the Start menu while an application window has focus ($n0 -> $n1)"
+else
+    fail "Super opens the Start menu while an application window has focus ($n0 -> $n1)"
+    grep -E "hde-(panel|hotkeys):" "$OUT/session.log" | tail -n 14 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+fi
+shot 06b-menu-over-app
+xdotool key Escape; sleep 0.8
+
+# Kết nối Wi-Fi có mật khẩu: bấm vào dòng "Neighbor 5G" (vị trí cố định: cửa sổ 1020x700 giữa màn hình 1280x800)
+xdotool mousemove 600 436 click 1; sleep 1.5
+if xdotool search --onlyvisible --name "Wi-Fi Network Authentication" >/dev/null 2>&1; then
+    pass "choosing a secured Wi-Fi network asks for its password"
+    shot 06c-wifi-password
+    xdotool type --delay 40 "correct-horse"; xdotool key Return; sleep 2.5
+    if grep -q "PW-STDIN-LEN: 13" "$OUT/nmcli.log"; then pass "Wi-Fi password is handed to nmcli on stdin"; else fail "Wi-Fi password is handed to nmcli on stdin"; fi
+    if grep "^ARGS:" "$OUT/nmcli.log" | grep -q "correct-horse"; then fail "Wi-Fi password must not appear on the nmcli command line"
+    else pass "Wi-Fi password never appears on the command line (ps)"; fi
+    if grep -q "ARGS: --ask -w 45 device wifi connect Neighbor 5G ifname wlan0" "$OUT/nmcli.log"; then pass "nmcli connects to the chosen network on the right device"
+    else fail "nmcli connects to the chosen network ($(grep 'wifi connect' "$OUT/nmcli.log" | tail -n1))"; fi
+    shot 06d-wifi-connected
+else
+    fail "choosing a secured Wi-Fi network asks for its password"
+fi
+xdotool mousemove 600 542 click 1; sleep 1.5
+if xdotool search --onlyvisible --name "Wi-Fi Network Authentication" >/dev/null 2>&1; then
+    xdotool type --delay 40 "wrong-password"; xdotool key Return; sleep 2.5
+    if xdotool search --onlyvisible --name "Wi-Fi Network Authentication" >/dev/null 2>&1; then
+        pass "a wrong Wi-Fi password asks again"
+        shot 06e-wifi-wrong-password
+        xdotool key Escape; sleep 1.5
+        if grep -q "connection delete id Office: Guest" "$OUT/nmcli.log"; then pass "cancelling leaves no broken Wi-Fi profile behind"
+        else fail "cancelling leaves no broken Wi-Fi profile behind"; fi
+    else
+        fail "a wrong Wi-Fi password asks again"
+    fi
+else
+    fail "second secured network asks for its password"
+fi
 "$B/hde-settings" bluetooth; sleep 2.5; shot 07-settings-bluetooth
+if [ -n "$BLUEZ_MOCK" ]; then
+    bz PairDevice "'hci0'" "'AA:BB:CC:DD:EE:01'"; sleep 1.5
+    shot 07b-bluetooth-live-update
+    if grep -q "AgentManager1\|RegisterAgent" "$OUT/bluez-mock.log" 2>/dev/null; then :; fi
+fi
 "$B/hde-settings" keyboard; sleep 2; shot 08-settings-keyboard
 "$B/hde-settings" appearance; sleep 2; shot 09-settings-appearance-light
 
@@ -214,5 +282,7 @@ n=$(sort -u "$OUT/gtk-warnings.txt" | wc -l)
 echo "INFO: $n GTK/GLib warning line(s) in the logs (see gtk-warnings.txt)" | tee -a "$OUT/results.txt"
 sort -u "$OUT/gtk-warnings.txt" | head -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
 pulseaudio -k >/dev/null 2>&1
+[ -n "$BLUEZ_MOCK" ] && kill "$BLUEZ_MOCK" 2>/dev/null
+[ -n "$SYSBUS_PID" ] && kill "$SYSBUS_PID" 2>/dev/null
 [ "$FAILS" -gt 100 ] && FAILS=100
 exit "$FAILS"

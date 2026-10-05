@@ -11,6 +11,7 @@
 #include "hde-notify.h"
 #include "hde-theme.h"
 #include "hde-status.h"
+#include "hde-osd.h"
 #include <gio/gdesktopappinfo.h>
 #include <string.h>
 
@@ -334,6 +335,7 @@ static void build_popup(Notif *n)
     gtk_widget_set_size_request(win, POPUP_WIDTH, -1);
     gtk_style_context_add_class(gtk_widget_get_style_context(win), "hde-notification");
     if (n->urgency == 2) gtk_style_context_add_class(gtk_widget_get_style_context(win), "critical");
+    hde_popup_setup_alpha(win);
     gtk_widget_add_events(win, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
     g_signal_connect(win, "enter-notify-event", G_CALLBACK(on_popup_enter), n);
     g_signal_connect(win, "leave-notify-event", G_CALLBACK(on_popup_leave), n);

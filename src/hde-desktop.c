@@ -1153,7 +1153,9 @@ static void load_css(void)
 {
     const char *css =
         ".desk-icon { border: 1px solid transparent; border-radius: 8px; padding: 2px; }"
-        ".desk-icon label { color: white; text-shadow: 1px 1px 2px black, 0 0 4px black; }"
+        ".desk-icon label, .desk-icon label:backdrop { color: white; text-shadow: 1px 1px 2px black, 0 0 4px black; }"
+        /* icon dạng symbolic lấy màu chữ: giữ sáng cả khi desktop không có focus (:backdrop) */
+        ".desk-icon image, .desk-icon image:backdrop { color: #eef1f6; -gtk-icon-shadow: 0 1px 3px rgba(0,0,0,0.65); }"
         ".desk-icon.selected { background: rgba(61,111,217,0.52); border: 2px solid rgba(125,175,255,0.95); border-radius: 8px; box-shadow: 0 0 0 1px rgba(20,50,100,0.65), 0 2px 8px rgba(0,0,0,0.28); }"
         ".desk-icon.selected label { color: #ffffff; font-weight: 600; }"
         ".desk-icon:hover { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; }";

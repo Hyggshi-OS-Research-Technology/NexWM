@@ -6,4 +6,8 @@
  * percent < 0: không vẽ thanh mức, chỉ hiện icon + text. */
 void hde_osd_show(const char *icon_name, int percent, const char *text);
 
+/* Cửa sổ popup có góc bo tròn trong suốt khi WM có compositing (thêm lớp CSS "rounded").
+ * Phải gọi trước khi cửa sổ được realize. */
+void hde_popup_setup_alpha(GtkWidget *window);
+
 #endif

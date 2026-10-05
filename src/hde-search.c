@@ -1,5 +1,6 @@
 /* hde-search: ô tìm ứng dụng của Start menu. */
 #include "hde-search.h"
+#include "hde-osd.h"
 #include <gio/gdesktopappinfo.h>
 #include <gdk/gdkx.h>
 #include <string.h>
@@ -244,6 +245,7 @@ static void build(void)
     gtk_window_set_resizable(GTK_WINDOW(swin), FALSE);
     gtk_widget_set_size_request(swin, SEARCH_W, SEARCH_H);
     gtk_style_context_add_class(gtk_widget_get_style_context(swin), "hde-search");
+    hde_popup_setup_alpha(swin);
     g_signal_connect(swin, "delete-event", G_CALLBACK(gtk_widget_hide_on_delete), NULL);
     g_signal_connect(swin, "focus-out-event", G_CALLBACK(on_focus_out), NULL);
     g_signal_connect(swin, "map-event", G_CALLBACK(on_map), NULL);

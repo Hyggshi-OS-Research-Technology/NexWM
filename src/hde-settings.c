@@ -30,17 +30,20 @@ static GtkCssProvider *app_css;
 
 typedef struct { const char *id; const char *icon; const char *title; const char *subtitle; } SettingItem;
 static const SettingItem items[] = {
-    { "display", "video-display-symbolic", "Display", "Resolution, scale and monitors" },
-    { "appearance", "preferences-desktop-theme-symbolic", "Appearance", "Dark mode, theme, accent, icons and fonts" },
+    /* icon: nhiều tên thay thế cách nhau bởi '|', dùng tên đầu tiên theme icon có */
+    { "display", "video-display-symbolic|preferences-desktop-display-symbolic", "Display", "Resolution, scale and monitors" },
+    { "appearance", "preferences-desktop-appearance-symbolic|preferences-desktop-theme-symbolic|applications-graphics-symbolic|weather-clear-night-symbolic",
+      "Appearance", "Dark mode, theme, accent, icons and fonts" },
     { "input", "input-mouse-symbolic", "Input", "Mouse, touchpad and pointer" },
     { "sound", "audio-volume-high-symbolic", "Sound", "Output, input and volume" },
     { "network", "network-wireless-symbolic", "Network", "Wi-Fi networks, Ethernet and VPN" },
-    { "bluetooth", "bluetooth-active-symbolic", "Bluetooth", "Pair and connect Bluetooth devices" },
-    { "windows", "preferences-system-windows", "Window Management", "Window manager used by the desktop" },
-    { "notifications", "preferences-system-notifications-symbolic", "Notifications", "Alerts and Do Not Disturb" },
-    { "power", "battery-good-symbolic", "Power", "Sleep, screen timeout and battery" },
+    { "bluetooth", "bluetooth-active-symbolic|bluetooth-symbolic", "Bluetooth", "Pair and connect Bluetooth devices" },
+    { "windows", "preferences-system-windows-symbolic|focus-windows-symbolic|view-dual-symbolic|window-maximize-symbolic",
+      "Window Management", "Window manager used by the desktop" },
+    { "notifications", "preferences-system-notifications-symbolic|notification-symbolic", "Notifications", "Alerts and Do Not Disturb" },
+    { "power", "battery-good-symbolic|battery-full-symbolic", "Power", "Sleep, screen timeout and battery" },
     { "keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat, Super key and sound keys" },
-    { "users", "system-users-symbolic", "Users", "Accounts and administrator" },
+    { "users", "system-users-symbolic|avatar-default-symbolic", "Users", "Accounts and administrator" },
     { "about", "help-about-symbolic", "About", "Hyggshi Desktop Environment" },
 };
 
@@ -746,6 +749,19 @@ static void cb_sidebar(GtkToggleButton *t, gpointer id)
     }
 }
 
+/* "a|b|c": tên icon đầu tiên có trong theme (theme Adwaita mới đã bỏ nhiều tên cũ) */
+static char *pick_icon(const char *spec)
+{
+    char **names = g_strsplit(spec, "|", -1);
+    GtkIconTheme *t = gtk_icon_theme_get_default();
+    char *res = NULL;
+    for (int i = 0; names[i] && !res; i++)
+        if (gtk_icon_theme_has_icon(t, names[i])) res = g_strdup(names[i]);
+    if (!res) res = g_strdup(names[0]);
+    g_strfreev(names);
+    return res;
+}
+
 static GtkWidget *make_sidebar(void)
 {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
@@ -762,7 +778,9 @@ static GtkWidget *make_sidebar(void)
         GtkWidget *b = gtk_toggle_button_new();
         gtk_button_set_relief(GTK_BUTTON(b), GTK_RELIEF_NONE);
         GtkWidget *r = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-        GtkWidget *im = gtk_image_new_from_icon_name(items[i].icon, GTK_ICON_SIZE_BUTTON);
+        char *icon = pick_icon(items[i].icon);
+        GtkWidget *im = gtk_image_new_from_icon_name(icon, GTK_ICON_SIZE_BUTTON);
+        g_free(icon);
         GtkWidget *l = gtk_label_new(items[i].title);
         gtk_widget_set_halign(l, GTK_ALIGN_START);
         gtk_box_pack_start(GTK_BOX(r), im, FALSE, FALSE, 0);

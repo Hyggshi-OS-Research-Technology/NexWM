@@ -18,7 +18,7 @@ static const char *const accent_names[] = { "Blue", "Purple", "Green", "Orange",
 static const char *const accent_values[] = { "#3584e4", "#9141ac", "#2ec27e", "#ff7800", "#d56199", "#e01b24",
                                              "#2190a4", "#6f8396" };
 
-static GtkWidget *light_card, *dark_card, *theme_combo, *icon_combo, *style_note;
+static GtkWidget *light_card, *dark_card, *theme_combo, *icon_combo, *accent_combo, *style_note;
 static gboolean loading;
 
 static gboolean current_is_dark(void)
@@ -227,6 +227,21 @@ static GtkWidget *style_card(const char *title, gboolean dark, GtkWidget *group)
     return rb;
 }
 
+/* settings.ini đổi từ nơi khác (`hde-settings --style`, panel, ...): cập nhật giao diện, không áp lại */
+static void on_external_change(gpointer d)
+{
+    (void)d;
+    if (!light_card) return;
+    loading = TRUE;
+    int idx = cfg_get_int("theme_index", 0);
+    if (idx == 1 || idx == 2)
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(idx == 2 ? dark_card : light_card), TRUE);
+    if (accent_combo)
+        gtk_combo_box_set_active(GTK_COMBO_BOX(accent_combo),
+                                 CLAMP(cfg_get_int("accent_index", 0), 0, (int)G_N_ELEMENTS(accent_names) - 1));
+    loading = FALSE;
+}
+
 GtkWidget *page_appearance_new(void)
 {
     loading = TRUE;
@@ -263,7 +278,7 @@ GtkWidget *page_appearance_new(void)
     g_signal_connect(theme_combo, "changed", G_CALLBACK(on_theme_changed), NULL);
     gtk_box_pack_start(GTK_BOX(box), row_box("GTK theme", "Light/dark variants of this theme are picked automatically.", theme_combo), FALSE, FALSE, 0);
 
-    GtkWidget *accent = gtk_combo_box_text_new();
+    GtkWidget *accent = accent_combo = gtk_combo_box_text_new();
     for (guint i = 0; i < G_N_ELEMENTS(accent_names); i++)
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(accent), accent_names[i]);
     gtk_combo_box_set_active(GTK_COMBO_BOX(accent), CLAMP(cfg_get_int("accent_index", 0), 0, (int)G_N_ELEMENTS(accent_names) - 1));
@@ -300,5 +315,6 @@ GtkWidget *page_appearance_new(void)
     g_signal_connect(mode, "changed", G_CALLBACK(on_wallpaper_mode), NULL);
     gtk_box_pack_start(GTK_BOX(box), row_box("Wallpaper mode", "How the picture fits the screen.", mode), FALSE, FALSE, 0);
     loading = FALSE;
+    hde_theme_watch(on_external_change, NULL);
     return box;
 }
