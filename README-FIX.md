@@ -234,6 +234,9 @@ Now (`src/hde-input.c`):
   scrolling*, off by default) and lists the devices with their current state (driver, natural scrolling, tap to click).
 - Mouse direction, pointer speed and acceleration are only applied once changed in Settings, so a system-wide
   `xorg.conf` setting keeps working until then.
+- Settings: every page now opens at its top. All pages share one scrolled area and used to keep the scroll position
+  of the previous page, so after scrolling e.g. *Keyboard & Shortcuts*, the Input page opened scrolled down with the
+  touchpad switches out of sight (Appearance showed only "Wallpaper").
 
 ### Tests
 
@@ -244,4 +247,5 @@ direction — the reported bug) and then checks: natural scrolling and tap to cl
 account without `xinput` in `PATH`; a real two-finger swipe UP moves the content UP (the window receives scroll-down
 events) and DOWN moves it down; the mouse wheel is untouched; hotplug and remove/re-add; every switch live (classic
 direction, tap to click, mouse natural scrolling, speed, acceleration); SIGHUP; `hde-settings --apply`; the device
-list in *Settings → Input*. `make check` checks the same logic in Xvfb with a simulated libinput touchpad.
+list in *Settings → Input*. `make check` checks the same logic in Xvfb with a simulated libinput touchpad, including
+a click on the *Natural scrolling* switch.

@@ -23,6 +23,7 @@
 
 static GtkWidget *window;
 static GtkWidget *content_stack;
+static GtkWidget *content_scroll;
 static GtkWidget *page_title;
 static GtkWidget *page_subtitle;
 static GtkWidget *sidebar;
@@ -793,6 +794,10 @@ static void select_page(const char *id, GtkWidget *button)
 {
     if (!content_stack || !sidebar) return;
     gtk_stack_set_visible_child_name(GTK_STACK(content_stack), id);
+    /* All pages share one scrolled area: start every page at its top (it used to keep the scroll position of the
+     * previous page, so e.g. Input or Appearance opened scrolled down, with their first sections out of sight). */
+    if (content_scroll)
+        gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(content_scroll)), 0);
     GList *children = gtk_container_get_children(GTK_CONTAINER(sidebar));
     for (GList *l = children; l; l = l->next)
         if (GTK_IS_TOGGLE_BUTTON(l->data) && GTK_WIDGET(l->data) != button)
@@ -964,7 +969,8 @@ static void on_activate(GtkApplication *app, gpointer d)
     content_stack = gtk_stack_new();
     gtk_stack_set_transition_type(GTK_STACK(content_stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
     gtk_stack_set_transition_duration(GTK_STACK(content_stack), 160);
-    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_stack_set_vhomogeneous(GTK_STACK(content_stack), FALSE);     /* each page as tall as its content */
+    GtkWidget *scroll = content_scroll = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_container_add(GTK_CONTAINER(scroll), content_stack);
     gtk_box_pack_start(GTK_BOX(main_box), scroll, TRUE, TRUE, 0);

@@ -466,6 +466,23 @@ if command -v xinput >/dev/null 2>&1 &&
         pass "Settings > Input lists the touchpad with its real state"
     else fail "Settings > Input lists the touchpad with its real state"; fi
     shot 08c-settings-input
+    # flip the real "Natural scrolling" switch (the first switch of the page: find its blue "on" color)
+    sw_y=""
+    for y in $(seq 200 3 300); do
+        set -- $($XT pixel 1074 "$y" 2>/dev/null)
+        if [ "${3:-0}" -gt 180 ] && [ "${1:-255}" -lt 110 ] && [ "${2:-0}" -gt 100 ] && [ "${2:-0}" -lt 175 ]; then sw_y=$y; break; fi
+    done
+    if [ -n "$sw_y" ]; then
+        xdotool mousemove 1090 "$sw_y" click 1; sleep 1.2
+        if tp_wait "libinput Natural Scrolling Enabled" 0 && grep -q "^natural_scroll=false" "$SETTINGS_INI"; then
+            pass "flipping the Natural scrolling switch switches the touchpad to the classic direction at once (switch at y=$sw_y)"
+        else fail "flipping the Natural scrolling switch switches the touchpad to the classic direction at once (switch at y=$sw_y)"; fi
+        shot 08d-settings-input-natural-off
+        xdotool mousemove 1090 "$sw_y" click 1; sleep 1.2
+        check "flipping it back turns natural scrolling on again" tp_wait "libinput Natural Scrolling Enabled" 1
+    else
+        fail "the Natural scrolling switch is visible at the top of Settings > Input (see shot 08c)"
+    fi
     sed -i '/^natural_scroll=/d' "$SETTINGS_INI"; echo "natural_scroll=false" >> "$SETTINGS_INI"
     check "natural_scroll=false in settings.ini: hde-xsettings switches the touchpad to the classic direction" \
         tp_wait "libinput Natural Scrolling Enabled" 0
