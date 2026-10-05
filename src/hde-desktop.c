@@ -2,6 +2,7 @@
 #include <gtk/gtk.h>
 #include <gio/gdesktopappinfo.h>
 #include <glib/gstdio.h>
+#include "hde-theme.h"
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -16,6 +17,7 @@
 static GtkWidget *win, *fixed;
 static GdkPixbuf *wallpaper;
 static char *wallpaper_path;
+static int wallpaper_mode;          /* 0 Fill, 1 Fit, 2 Stretch, 3 Center (Settings > Appearance) */
 static GtkWidget *selected;
 static GdkRectangle mon;
 
@@ -51,10 +53,21 @@ static char *config_file(void)
 
 static void load_wallpaper(const char *path)
 {
+    if (path && wallpaper_path && !strcmp(path, wallpaper_path) && wallpaper) {
+        if (win) gtk_widget_queue_draw(win);
+        return;
+    }
     g_clear_object(&wallpaper);
     g_free(wallpaper_path);
     wallpaper_path = path ? g_strdup(path) : NULL;
-    if (path) wallpaper = gdk_pixbuf_new_from_file(path, NULL);
+    if (path) {
+        GError *e = NULL;
+        wallpaper = gdk_pixbuf_new_from_file(path, &e);
+        if (!wallpaper) {
+            g_printerr("hde-desktop: cannot load wallpaper %s: %s\n", path, e ? e->message : "?");
+            g_clear_error(&e);
+        }
+    }
     if (win) gtk_widget_queue_draw(win);
 }
 
@@ -62,10 +75,24 @@ static void load_config(void)
 {
     GKeyFile *kf = g_key_file_new();
     char *cf = config_file();
+    char *wp = NULL;
+    wallpaper_mode = 0;
     if (g_key_file_load_from_file(kf, cf, G_KEY_FILE_NONE, NULL)) {
-        char *wp = g_key_file_get_string(kf, "desktop", "wallpaper", NULL);
-        if (wp) { load_wallpaper(wp); g_free(wp); }
+        wp = g_key_file_get_string(kf, "desktop", "wallpaper", NULL);
+        wallpaper_mode = CLAMP(g_key_file_get_integer(kf, "desktop", "wallpaper_mode", NULL), 0, 3);
     }
+    if (!wp) {
+        /* Bản Settings cũ chỉ lưu wallpaper vào settings.ini */
+        GKeyFile *sk = g_key_file_new();
+        char *sp = hde_settings_ini_path();
+        if (g_key_file_load_from_file(sk, sp, G_KEY_FILE_NONE, NULL))
+            wp = g_key_file_get_string(sk, "settings", "wallpaper", NULL);
+        g_free(sp);
+        g_key_file_free(sk);
+    }
+    if (wp && *wp) load_wallpaper(wp);
+    else if (win) gtk_widget_queue_draw(win);
+    g_free(wp);
     g_key_file_free(kf);
     g_free(cf);
 }
@@ -91,10 +118,20 @@ static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
 
     if (wallpaper) {
         double pw = gdk_pixbuf_get_width(wallpaper), ph = gdk_pixbuf_get_height(wallpaper);
-        double s = MAX(W / pw, H / ph);
+        double sx, sy;
+        switch (wallpaper_mode) {
+        case 1:  sx = sy = MIN(W / pw, H / ph); break;          /* Fit: thấy trọn ảnh */
+        case 2:  sx = W / pw; sy = H / ph; break;                /* Stretch */
+        case 3:  sx = sy = 1.0; break;                           /* Center: giữ kích thước gốc */
+        default: sx = sy = MAX(W / pw, H / ph); break;           /* Fill: phủ kín, cắt phần thừa */
+        }
+        if (wallpaper_mode == 1 || wallpaper_mode == 3) {
+            cairo_set_source_rgb(cr, 0.10, 0.12, 0.16);
+            cairo_paint(cr);
+        }
         cairo_save(cr);
-        cairo_translate(cr, -(pw * s - W) / 2, -(ph * s - H) / 2);
-        cairo_scale(cr, s, s);
+        cairo_translate(cr, (W - pw * sx) / 2, (H - ph * sy) / 2);
+        cairo_scale(cr, sx, sy);
         gdk_cairo_set_source_pixbuf(cr, wallpaper, 0, 0);
         cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
         cairo_paint(cr);
@@ -1095,6 +1132,23 @@ static void on_dir_changed(GFileMonitor *m, GFile *f, GFile *o, GFileMonitorEven
     reload_icons();
 }
 
+/* Settings > Appearance ghi hình nền vào config.ini: nạp lại ngay khi file đổi. */
+static guint config_reload_id;
+static gboolean config_reload(gpointer d)
+{
+    (void)d;
+    config_reload_id = 0;
+    load_config();
+    return G_SOURCE_REMOVE;
+}
+
+static void on_config_changed(GFileMonitor *m, GFile *f, GFile *o, GFileMonitorEvent ev, gpointer d)
+{
+    (void)m; (void)f; (void)o; (void)d;
+    if (ev == G_FILE_MONITOR_EVENT_ATTRIBUTE_CHANGED) return;
+    if (!config_reload_id) config_reload_id = g_timeout_add(300, config_reload, NULL);
+}
+
 static void load_css(void)
 {
     const char *css =
@@ -1113,6 +1167,8 @@ static void load_css(void)
 int main(int argc, char **argv)
 {
     gtk_init(&argc, &argv);
+    hde_theme_apply_process();          /* menu chuột phải / hộp thoại theo Dark mode */
+    hde_theme_watch(NULL, NULL);
     load_css();
 
     GdkDisplay *dpy = gdk_display_get_default();
@@ -1150,6 +1206,17 @@ int main(int argc, char **argv)
 
     load_config();
     reload_icons();
+    {
+        char *cf = config_file();
+        char *dir = g_path_get_dirname(cf);
+        g_mkdir_with_parents(dir, 0755);
+        GFile *f = g_file_new_for_path(cf);
+        GFileMonitor *cm = g_file_monitor_file(f, G_FILE_MONITOR_NONE, NULL, NULL);
+        if (cm) g_signal_connect(cm, "changed", G_CALLBACK(on_config_changed), NULL);
+        g_object_unref(f);
+        g_free(dir);
+        g_free(cf);
+    }
 
     const char *ddir = g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP);
     if (ddir) {

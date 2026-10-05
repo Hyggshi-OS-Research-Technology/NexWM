@@ -1,15 +1,24 @@
-/* Hyggshi Settings - GTK3 settings center for Hyggshi Desktop Environment */
-#include <gtk/gtk.h>
+/* Hyggshi Settings — trung tâm cài đặt GTK3 của Hyggshi Desktop Environment.
+ *
+ *   hde-settings              mở cửa sổ cài đặt
+ *   hde-settings <trang>      mở thẳng một trang: display appearance input sound network bluetooth
+ *                             windows notifications power keyboard users about
+ *   hde-settings --apply      áp lại các thiết lập cần chạy mỗi lần đăng nhập rồi thoát (hde-session gọi)
+ *
+ * Các trang lớn nằm ở file riêng: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound}.c
+ */
+#include "hde-settings.h"
+#include "hde-theme.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <sys/utsname.h>
+#include <signal.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 #define APP_NAME "Hyggshi Settings"
-#define CONFIG_GROUP "settings"
 
 static GtkWidget *window;
 static GtkWidget *content_stack;
@@ -17,91 +26,156 @@ static GtkWidget *page_title;
 static GtkWidget *page_subtitle;
 static GtkWidget *sidebar;
 static GtkWidget *status_label;
-static GKeyFile *config;
-static char *config_path;
-
-static const char *accent_names[] = {"Blue", "Purple", "Green", "Orange", "Pink"};
-static const char *accent_values[] = {"#3584e4", "#9141ac", "#2ec27e", "#ff7800", "#e66100"};
+static GtkCssProvider *app_css;
 
 typedef struct { const char *id; const char *icon; const char *title; const char *subtitle; } SettingItem;
 static const SettingItem items[] = {
-    {"display", "video-display-symbolic", "Display", "Resolution, scale and monitors"},
-    {"appearance", "preferences-desktop-theme-symbolic", "Appearance", "Theme, accent, icons and fonts"},
-    {"input", "input-mouse-symbolic", "Input", "Mouse, touchpad and pointer"},
-    {"sound", "audio-volume-high-symbolic", "Sound", "Output, input and volume"},
-    {"network", "network-wireless-symbolic", "Network", "Wi-Fi, Ethernet and VPN"},
-    {"bluetooth", "bluetooth-active-symbolic", "Bluetooth", "Bluetooth devices and adapter"},
-    {"windows", "preferences-system-windows", "Window Management", "WM used by GTK and X11 applications"},
-    {"notifications", "preferences-system-notifications-symbolic", "Notifications", "Alerts and Do Not Disturb"},
-    {"power", "battery-good-symbolic", "Power", "Sleep, screen timeout and battery"},
-    {"keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat and shortcuts"},
-    {"users", "system-users-symbolic", "Users", "Accounts and administrator"},
-    {"about", "help-about-symbolic", "About", "Hyggshi Desktop Environment"},
+    { "display", "video-display-symbolic", "Display", "Resolution, scale and monitors" },
+    { "appearance", "preferences-desktop-theme-symbolic", "Appearance", "Dark mode, theme, accent, icons and fonts" },
+    { "input", "input-mouse-symbolic", "Input", "Mouse, touchpad and pointer" },
+    { "sound", "audio-volume-high-symbolic", "Sound", "Output, input and volume" },
+    { "network", "network-wireless-symbolic", "Network", "Wi-Fi networks, Ethernet and VPN" },
+    { "bluetooth", "bluetooth-active-symbolic", "Bluetooth", "Pair and connect Bluetooth devices" },
+    { "windows", "preferences-system-windows", "Window Management", "Window manager used by the desktop" },
+    { "notifications", "preferences-system-notifications-symbolic", "Notifications", "Alerts and Do Not Disturb" },
+    { "power", "battery-good-symbolic", "Power", "Sleep, screen timeout and battery" },
+    { "keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat, Super key and sound keys" },
+    { "users", "system-users-symbolic", "Users", "Accounts and administrator" },
+    { "about", "help-about-symbolic", "About", "Hyggshi Desktop Environment" },
 };
 
-static void save_config(void)
+/* ================= cấu hình ================= */
+static char *cfg_path(void) { return hde_settings_ini_path(); }
+
+static GKeyFile *cfg_load(void)
 {
-    if (!config || !config_path) return;
-    char *dir = g_path_get_dirname(config_path);
+    GKeyFile *kf = g_key_file_new();
+    char *p = cfg_path();
+    g_key_file_load_from_file(kf, p, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_free(p);
+    return kf;
+}
+
+static void cfg_save(GKeyFile *kf)
+{
+    char *p = cfg_path();
+    char *dir = g_path_get_dirname(p);
     g_mkdir_with_parents(dir, 0755);
-    g_key_file_save_to_file(config, config_path, NULL);
+    GError *e = NULL;
+    if (!g_key_file_save_to_file(kf, p, &e)) {
+        settings_status("Could not save settings: %s", e->message);
+        g_clear_error(&e);
+    } else {
+        settings_status("Changes saved");
+    }
     g_free(dir);
+    g_free(p);
 }
 
-static const char *get_str(const char *key, const char *fallback)
+GKeyFile *cfg_begin(void)
 {
-    char *s = g_key_file_get_string(config, CONFIG_GROUP, key, NULL);
-    if (!s) return fallback;
-    /* Caller cannot own this pointer, so use only for transient widgets via helper below. */
-    static char *slot;
-    g_free(slot);
-    slot = s;
-    return slot;
+    return cfg_load();
 }
 
-static gboolean get_bool(const char *key, gboolean fallback)
+void cfg_commit(GKeyFile *kf)
 {
+    cfg_save(kf);
+    g_key_file_free(kf);
+}
+
+gboolean cfg_has_key(const char *key)
+{
+    GKeyFile *kf = cfg_load();
+    gboolean r = g_key_file_has_key(kf, CONFIG_GROUP, key, NULL);
+    g_key_file_free(kf);
+    return r;
+}
+
+gboolean cfg_get_bool(const char *key, gboolean fallback)
+{
+    GKeyFile *kf = cfg_load();
     GError *e = NULL;
-    gboolean v = g_key_file_get_boolean(config, CONFIG_GROUP, key, &e);
-    if (e) { g_clear_error(&e); return fallback; }
+    gboolean v = g_key_file_get_boolean(kf, CONFIG_GROUP, key, &e);
+    if (e) { v = fallback; g_clear_error(&e); }
+    g_key_file_free(kf);
     return v;
 }
 
-static int get_int(const char *key, int fallback)
+int cfg_get_int(const char *key, int fallback)
 {
+    GKeyFile *kf = cfg_load();
     GError *e = NULL;
-    int v = g_key_file_get_integer(config, CONFIG_GROUP, key, &e);
-    if (e) { g_clear_error(&e); return fallback; }
+    int v = g_key_file_get_integer(kf, CONFIG_GROUP, key, &e);
+    if (e) { v = fallback; g_clear_error(&e); }
+    g_key_file_free(kf);
     return v;
 }
 
-static void set_status(const char *text)
+double cfg_get_double(const char *key, double fallback)
 {
-    if (status_label) gtk_label_set_text(GTK_LABEL(status_label), text ? text : "");
+    GKeyFile *kf = cfg_load();
+    GError *e = NULL;
+    double v = g_key_file_get_double(kf, CONFIG_GROUP, key, &e);
+    if (e) { v = fallback; g_clear_error(&e); }
+    g_key_file_free(kf);
+    return v;
 }
 
-static void save_bool(const char *key, gboolean value)
+char *cfg_get_string(const char *key, const char *fallback)
 {
-    g_key_file_set_boolean(config, CONFIG_GROUP, key, value);
-    save_config();
-    set_status("Changes saved");
+    GKeyFile *kf = cfg_load();
+    char *v = g_key_file_get_string(kf, CONFIG_GROUP, key, NULL);
+    g_key_file_free(kf);
+    return v ? v : g_strdup(fallback);
 }
 
-static void save_int(const char *key, int value)
+void cfg_set_bool(const char *key, gboolean value)
 {
-    g_key_file_set_integer(config, CONFIG_GROUP, key, value);
-    save_config();
-    set_status("Changes saved");
+    GKeyFile *kf = cfg_load();
+    g_key_file_set_boolean(kf, CONFIG_GROUP, key, value);
+    cfg_save(kf);
+    g_key_file_free(kf);
 }
 
-static void save_string(const char *key, const char *value)
+void cfg_set_int(const char *key, int value)
 {
-    g_key_file_set_string(config, CONFIG_GROUP, key, value ? value : "");
-    save_config();
-    set_status("Changes saved");
+    GKeyFile *kf = cfg_load();
+    g_key_file_set_integer(kf, CONFIG_GROUP, key, value);
+    cfg_save(kf);
+    g_key_file_free(kf);
 }
 
-static GtkWidget *row_box(const char *title, const char *description, GtkWidget *control)
+void cfg_set_double(const char *key, double value)
+{
+    GKeyFile *kf = cfg_load();
+    g_key_file_set_double(kf, CONFIG_GROUP, key, value);
+    cfg_save(kf);
+    g_key_file_free(kf);
+}
+
+void cfg_set_string(const char *key, const char *value)
+{
+    GKeyFile *kf = cfg_load();
+    g_key_file_set_string(kf, CONFIG_GROUP, key, value ? value : "");
+    cfg_save(kf);
+    g_key_file_free(kf);
+}
+
+/* ================= tiện ích giao diện ================= */
+GtkWidget *settings_window(void) { return window; }
+
+void settings_status(const char *fmt, ...)
+{
+    if (!status_label) return;
+    va_list ap;
+    va_start(ap, fmt);
+    char *s = g_strdup_vprintf(fmt, ap);
+    va_end(ap);
+    gtk_label_set_text(GTK_LABEL(status_label), s);
+    g_free(s);
+}
+
+GtkWidget *row_box(const char *title, const char *description, GtkWidget *control)
 {
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 18);
     gtk_widget_set_margin_top(row, 8); gtk_widget_set_margin_bottom(row, 8);
@@ -110,415 +184,771 @@ static GtkWidget *row_box(const char *title, const char *description, GtkWidget 
     gtk_widget_set_hexpand(labels, TRUE);
     GtkWidget *t = gtk_label_new(title);
     gtk_widget_set_halign(t, GTK_ALIGN_START);
+    gtk_label_set_xalign(GTK_LABEL(t), 0);
     gtk_style_context_add_class(gtk_widget_get_style_context(t), "row-title");
-    GtkWidget *d = gtk_label_new(description ? description : "");
-    gtk_label_set_line_wrap(GTK_LABEL(d), TRUE); gtk_widget_set_halign(d, GTK_ALIGN_START);
-    gtk_style_context_add_class(gtk_widget_get_style_context(d), "row-description");
     gtk_box_pack_start(GTK_BOX(labels), t, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(labels), d, FALSE, FALSE, 0);
+    if (description && *description) {
+        GtkWidget *d = gtk_label_new(description);
+        gtk_label_set_line_wrap(GTK_LABEL(d), TRUE);
+        gtk_label_set_xalign(GTK_LABEL(d), 0);
+        gtk_widget_set_halign(d, GTK_ALIGN_START);
+        gtk_style_context_add_class(gtk_widget_get_style_context(d), "row-description");
+        gtk_box_pack_start(GTK_BOX(labels), d, FALSE, FALSE, 0);
+        g_object_set_data(G_OBJECT(row), "hde-description", d);
+    }
     gtk_box_pack_start(GTK_BOX(row), labels, TRUE, TRUE, 0);
-    if (control) { gtk_widget_set_valign(control, GTK_ALIGN_CENTER); gtk_box_pack_start(GTK_BOX(row), control, FALSE, FALSE, 0); }
+    if (control) {
+        gtk_widget_set_valign(control, GTK_ALIGN_CENTER);
+        gtk_box_pack_start(GTK_BOX(row), control, FALSE, FALSE, 0);
+    }
     return row;
 }
 
-static GtkWidget *section(const char *title)
+GtkWidget *section(const char *title)
 {
     GtkWidget *l = gtk_label_new(title);
     gtk_widget_set_halign(l, GTK_ALIGN_START);
-    gtk_widget_set_margin_top(l, 18); gtk_widget_set_margin_bottom(l, 5);
+    gtk_widget_set_margin_top(l, 18);
+    gtk_widget_set_margin_bottom(l, 5);
     gtk_style_context_add_class(gtk_widget_get_style_context(l), "section-title");
     return l;
 }
 
-/* Tiêu đề + mô tả trang đã được vẽ bởi header chung của cửa sổ (page_title/page_subtitle,
- * cập nhật trong select_page). Trước đây page_base vẽ thêm lần nữa nên mỗi trang bị lặp tiêu đề. */
-static GtkWidget *page_base(const char *title, const char *subtitle)
+GtkWidget *page_base(void)
 {
-    (void)title; (void)subtitle;
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_margin_start(box, 28); gtk_widget_set_margin_end(box, 28);
     gtk_widget_set_margin_top(box, 4); gtk_widget_set_margin_bottom(box, 26);
     return box;
 }
 
-static void choose_wallpaper(GtkButton *button, gpointer data)
+GtkWidget *info_label(const char *text)
 {
-    (void)button; (void)data;
-    GtkWidget *dlg = gtk_file_chooser_dialog_new("Choose Wallpaper", GTK_WINDOW(window), GTK_FILE_CHOOSER_ACTION_OPEN,
-        "_Cancel", GTK_RESPONSE_CANCEL, "_Select", GTK_RESPONSE_ACCEPT, NULL);
-    GtkFileFilter *filter = gtk_file_filter_new();
-    gtk_file_filter_set_name(filter, "Images"); gtk_file_filter_add_pixbuf_formats(filter);
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), filter);
-    const char *pictures = g_get_user_special_dir(G_USER_DIRECTORY_PICTURES);
-    if (pictures) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), pictures);
-    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
-        char *path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
-        save_string("wallpaper", path); g_free(path);
-    }
-    gtk_widget_destroy(dlg);
+    GtkWidget *l = gtk_label_new(text);
+    gtk_label_set_line_wrap(GTK_LABEL(l), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(l), 0);
+    gtk_widget_set_halign(l, GTK_ALIGN_FILL);
+    gtk_style_context_add_class(gtk_widget_get_style_context(l), "row-description");
+    gtk_widget_set_margin_top(l, 4);
+    gtk_widget_set_margin_bottom(l, 4);
+    return l;
 }
 
-static void set_wallpaper_mode(GtkComboBoxText *combo, gpointer data)
+GtkWidget *card_new(void)
 {
-    (void)data; save_int("wallpaper_mode_index", gtk_combo_box_get_active(GTK_COMBO_BOX(combo))); }
-
-static void accent_changed(GtkComboBoxText *combo, gpointer data)
-{
-    (void)data; int i = gtk_combo_box_get_active(GTK_COMBO_BOX(combo));
-    if (i >= 0 && i < 5) { save_int("accent_index", i); save_string("accent", accent_values[i]); }
+    GtkWidget *lb = gtk_list_box_new();
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(lb), GTK_SELECTION_NONE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(lb), "card");
+    return lb;
 }
 
-static void launch_candidates(const char *const *commands)
+static void destroy_child(GtkWidget *w, gpointer d) { (void)d; gtk_widget_destroy(w); }
+
+void card_clear(GtkWidget *card)
+{
+    gtk_container_foreach(GTK_CONTAINER(card), destroy_child, NULL);
+}
+
+GtkWidget *card_placeholder(const char *text)
+{
+    GtkWidget *l = gtk_label_new(text);
+    gtk_label_set_line_wrap(GTK_LABEL(l), TRUE);
+    gtk_widget_set_margin_top(l, 14); gtk_widget_set_margin_bottom(l, 14);
+    gtk_widget_set_margin_start(l, 12); gtk_widget_set_margin_end(l, 12);
+    gtk_style_context_add_class(gtk_widget_get_style_context(l), "row-description");
+    gtk_widget_show(l);
+    return l;
+}
+
+GtkWidget *icon_button(const char *icon_name, const char *tooltip)
+{
+    GtkWidget *b = gtk_button_new_from_icon_name(icon_name, GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(b, tooltip);
+    gtk_widget_set_valign(b, GTK_ALIGN_CENTER);
+    return b;
+}
+
+void message_dialog(GtkMessageType type, const char *title, const char *detail)
+{
+    GtkWidget *m = gtk_message_dialog_new(GTK_WINDOW(window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                          type, GTK_BUTTONS_CLOSE, "%s", title);
+    if (detail && *detail) gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(m), "%s", detail);
+    gtk_dialog_run(GTK_DIALOG(m));
+    gtk_widget_destroy(m);
+}
+
+gboolean have_program(const char *name)
+{
+    char *p = g_find_program_in_path(name);
+    g_free(p);
+    return p != NULL;
+}
+
+void launch_candidates(const char *const *commands)
 {
     for (int i = 0; commands[i]; i++) {
-        char *p = g_find_program_in_path(commands[i]);
-        if (!p) continue;
+        char **w = g_strsplit(commands[i], " ", 2);
+        gboolean ok = w[0] && have_program(w[0]);
+        g_strfreev(w);
+        if (!ok) continue;
         GError *e = NULL;
-        if (g_spawn_command_line_async(p, &e)) { g_free(p); g_clear_error(&e); return; }
-        g_clear_error(&e); g_free(p);
+        if (g_spawn_command_line_async(commands[i], &e)) return;
+        g_clear_error(&e);
+    }
+    settings_status("No suitable tool found for this action");
+}
+
+/* ================= chạy lệnh bất đồng bộ ================= */
+typedef struct {
+    SettingsRunCb cb;
+    gpointer data;
+    GSubprocess *proc;
+    guint timer;
+    gboolean timed_out;
+} RunCtx;
+
+static gboolean run_timeout_cb(gpointer p)
+{
+    RunCtx *r = p;
+    r->timer = 0;
+    r->timed_out = TRUE;
+    g_subprocess_force_exit(r->proc);
+    return G_SOURCE_REMOVE;
+}
+
+static char *bytes_to_utf8(GBytes *b)
+{
+    if (!b) return g_strdup("");
+    gsize n = 0;
+    const char *d = g_bytes_get_data(b, &n);
+    return d ? g_utf8_make_valid(d, (gssize)n) : g_strdup("");
+}
+
+static void run_done_cb(GObject *src, GAsyncResult *res, gpointer p)
+{
+    RunCtx *r = p;
+    GBytes *ob = NULL, *eb = NULL;
+    GError *e = NULL;
+    gboolean comm_ok = g_subprocess_communicate_finish(G_SUBPROCESS(src), res, &ob, &eb, &e);
+    if (r->timer) g_source_remove(r->timer);
+    char *out = bytes_to_utf8(ob), *err = bytes_to_utf8(eb);
+    int status = -1;
+    gboolean ok = FALSE;
+    if (comm_ok && g_subprocess_get_if_exited(r->proc)) {
+        status = g_subprocess_get_exit_status(r->proc);
+        ok = status == 0;
+    }
+    if (r->timed_out) { g_free(err); err = g_strdup("The operation timed out"); ok = FALSE; }
+    else if (!comm_ok && e && !*err) { g_free(err); err = g_strdup(e->message); }
+    if (r->cb) r->cb(ok, status, out, err, r->data);
+    g_clear_error(&e);
+    if (ob) g_bytes_unref(ob);
+    if (eb) g_bytes_unref(eb);
+    g_free(out); g_free(err);
+    g_object_unref(r->proc);
+    g_free(r);
+}
+
+void run_argv_async(const char *const *argv, const char *stdin_text, int timeout_sec, SettingsRunCb cb, gpointer data)
+{
+    GSubprocessFlags fl = G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE |
+                          (stdin_text ? G_SUBPROCESS_FLAGS_STDIN_PIPE : G_SUBPROCESS_FLAGS_STDIN_INHERIT);
+    GSubprocessLauncher *l = g_subprocess_launcher_new(fl);
+    /* thông báo lỗi bằng tiếng Anh để phân tích được; giữ LC_CTYPE (UTF-8) cho tên mạng/thiết bị */
+    g_subprocess_launcher_unsetenv(l, "LC_ALL");
+    g_subprocess_launcher_unsetenv(l, "LANGUAGE");
+    g_subprocess_launcher_setenv(l, "LC_MESSAGES", "C", TRUE);
+    GError *e = NULL;
+    GSubprocess *p = g_subprocess_launcher_spawnv(l, argv, &e);
+    g_object_unref(l);
+    if (!p) {
+        if (cb) cb(FALSE, -1, "", e ? e->message : "Could not start process", data);
+        g_clear_error(&e);
+        return;
+    }
+    RunCtx *r = g_new0(RunCtx, 1);
+    r->cb = cb;
+    r->data = data;
+    r->proc = p;
+    r->timer = timeout_sec > 0 ? g_timeout_add_seconds(timeout_sec, run_timeout_cb, r) : 0;
+    GBytes *in = stdin_text ? g_bytes_new(stdin_text, strlen(stdin_text)) : NULL;
+    g_subprocess_communicate_async(p, in, NULL, run_done_cb, r);
+    if (in) g_bytes_unref(in);
+}
+
+void run_shell_async(const char *script, SettingsRunCb cb, gpointer data)
+{
+    const char *argv[] = { "/bin/sh", "-c", script, NULL };
+    run_argv_async(argv, NULL, 30, cb, data);
+}
+
+/* ================= áp thiết lập khi đăng nhập ================= */
+static void run_quiet(const char *script)
+{
+    gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)script, NULL };
+    GError *e = NULL;
+    if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                      NULL, NULL, NULL, NULL, NULL, &e))
+        g_clear_error(&e);
+}
+
+void apply_keyboard_settings(void)
+{
+    static const char *const layouts[] = { "us", "vn", "gb", "jp" };
+    if (cfg_has_key("keyboard_layout") && have_program("setxkbmap")) {
+        int i = cfg_get_int("keyboard_layout", 0);
+        if (i >= 0 && i < (int)G_N_ELEMENTS(layouts)) {
+            char *cmd = g_strdup_printf("setxkbmap -layout %s", layouts[i]);
+            run_quiet(cmd);
+            g_free(cmd);
+        }
+    }
+    if ((cfg_has_key("repeat_rate") || cfg_has_key("repeat_delay")) && have_program("xset")) {
+        static const int delays[] = { 250, 500, 800 };
+        int rate = 10 + CLAMP(cfg_get_int("repeat_rate", 50), 0, 100) / 2;      /* 10..60 lần/giây */
+        int delay = delays[CLAMP(cfg_get_int("repeat_delay", 1), 0, 2)];
+        char *cmd = g_strdup_printf("xset r on; xset r rate %d %d", delay, rate);
+        run_quiet(cmd);
+        g_free(cmd);
     }
 }
 
-static void display_dialog(GtkButton *button, gpointer data)
+void apply_power_settings(void)
 {
-    (void)button; (void)data;
-    const char *cmds[] = {"arandr", "gnome-control-center", "xfce4-display-settings", "lxqt-config-monitor", NULL};
+    if (!cfg_has_key("screen_timeout") || !have_program("xset")) return;
+    static const int mins[] = { 0, 5, 10, 15, 30, 60 };
+    int i = CLAMP(cfg_get_int("screen_timeout", 2), 0, 5);
+    int s = mins[i] * 60;
+    char *cmd = s == 0 ? g_strdup("xset s off; xset -dpms")
+                       : g_strdup_printf("xset s %d %d; xset +dpms; xset dpms %d %d %d", s, s, s, s, s);
+    run_quiet(cmd);
+    g_free(cmd);
+}
+
+/* libinput qua xinput: chỉ áp những giá trị người dùng đã chỉnh (có trong settings.ini). */
+void apply_input_settings(void)
+{
+    if (!have_program("xinput")) return;
+    GString *env = g_string_new(NULL);
+    if (cfg_has_key("natural_scroll")) g_string_append_printf(env, "NAT=%d ", cfg_get_bool("natural_scroll", TRUE));
+    if (cfg_has_key("tap_to_click")) g_string_append_printf(env, "TAP=%d ", cfg_get_bool("tap_to_click", TRUE));
+    if (cfg_has_key("pointer_speed")) {
+        char buf[G_ASCII_DTOSTR_BUF_SIZE];
+        g_ascii_formatd(buf, sizeof buf, "%.2f", CLAMP(cfg_get_double("pointer_speed", 0.5), 0, 1) * 2.0 - 1.0);
+        g_string_append_printf(env, "SPEED=%s ", buf);
+    }
+    if (cfg_has_key("pointer_acceleration")) g_string_append_printf(env, "FLAT=%d ", !cfg_get_bool("pointer_acceleration", TRUE));
+    if (env->len == 0) { g_string_free(env, TRUE); return; }
+    char *script = g_strdup_printf(
+        "%s\n"
+        "for id in $(xinput list --id-only 2>/dev/null); do\n"
+        "  p=$(xinput list-props \"$id\" 2>/dev/null) || continue\n"
+        "  touch=0; case \"$p\" in *'libinput Tapping Enabled ('*) touch=1;; esac\n"
+        "  if [ -n \"$NAT\" ] && [ $touch = 1 ]; then xinput set-prop \"$id\" 'libinput Natural Scrolling Enabled' \"$NAT\"; fi\n"
+        "  if [ -n \"$TAP\" ] && [ $touch = 1 ]; then xinput set-prop \"$id\" 'libinput Tapping Enabled' \"$TAP\"; fi\n"
+        "  case \"$p\" in *'libinput Accel Speed ('*)\n"
+        "    if [ -n \"$SPEED\" ]; then xinput set-prop \"$id\" 'libinput Accel Speed' \"$SPEED\"; fi;; esac\n"
+        "  if [ -n \"$FLAT\" ]; then\n"
+        "    n=$(printf '%%s\\n' \"$p\" | grep 'libinput Accel Profile Enabled (' | head -n1 | cut -d: -f2 | tr ',' '\\n' | grep -c .)\n"
+        "    if [ \"$n\" = 2 ]; then [ \"$FLAT\" = 1 ] && v='0 1' || v='1 0';\n"
+        "      xinput set-prop \"$id\" 'libinput Accel Profile Enabled' $v;\n"
+        "    elif [ \"$n\" = 3 ]; then [ \"$FLAT\" = 1 ] && v='0 1 0' || v='1 0 0';\n"
+        "      xinput set-prop \"$id\" 'libinput Accel Profile Enabled' $v; fi\n"
+        "  fi\n"
+        "done 2>/dev/null; exit 0\n", env->str);
+    run_quiet(script);
+    g_free(script);
+    g_string_free(env, TRUE);
+}
+
+/* ================= các trang đơn giản ================= */
+static void display_dialog(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    const char *cmds[] = { "arandr", "lxrandr", "xfce4-display-settings", "lxqt-config-monitor", "gnome-control-center display", NULL };
     launch_candidates(cmds);
 }
 
-
-static void cb_combo_scale(GtkComboBox *c, gpointer x){(void)x;save_int("scale",gtk_combo_box_get_active(c));}
-static void cb_combo_orientation(GtkComboBox *c, gpointer x){(void)x;save_int("orientation",gtk_combo_box_get_active(c));}
-static gboolean cb_night(GtkSwitch*s,gboolean v,gpointer x){(void)s;(void)x;save_bool("night_light",v);return FALSE;}
-static void cb_theme(GtkComboBox*c,gpointer x){(void)x;save_int("theme_index",gtk_combo_box_get_active(c));}
-static void cb_icons(GtkComboBox*c,gpointer x){(void)x;save_int("icon_theme",gtk_combo_box_get_active(c));}
-static void cb_font(GtkFontButton*b,gpointer x){(void)x;save_string("font",gtk_font_chooser_get_font(GTK_FONT_CHOOSER(b)));}
-static void cb_pointer_speed(GtkRange*r,gpointer x){(void)x;g_key_file_set_double(config,CONFIG_GROUP,"pointer_speed",gtk_range_get_value(r));save_config();}
-static gboolean cb_bool(GtkSwitch*s,gboolean v,gpointer x){(void)s;save_bool((const char*)x,v);return FALSE;}
-static void cb_int_range(GtkRange*r,gpointer x){save_int((const char*)x,(int)gtk_range_get_value(r));}
-static void cb_int_combo(GtkComboBox*c,gpointer x){save_int((const char*)x,gtk_combo_box_get_active(c));}
-static void cb_sound_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"pavucontrol","pavucontrol-qt","gnome-control-center",NULL};launch_candidates(cmds);}
-static gboolean run_shell_async(const char *cmd)
+static void cb_scale(GtkComboBox *c, gpointer x)
 {
-    gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)cmd, NULL };
-    GError *e = NULL;
-    gboolean ok = g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &e);
-    if (e) g_clear_error(&e);
-    return ok;
+    (void)x;
+    cfg_set_int("scale", gtk_combo_box_get_active(c));
+    settings_status("Text scale applied to running GTK applications");
 }
 
-static void cb_network_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"nm-connection-editor","gnome-control-center","nm-applet",NULL};launch_candidates(cmds);}
-/* Chạy lệnh shell, trả về stdout (g_free) hoặc NULL. */
-static char *capture_shell(const char *cmd)
+static void cb_int_combo(GtkComboBox *c, gpointer key) { cfg_set_int(key, gtk_combo_box_get_active(c)); }
+
+static gboolean cb_bool(GtkSwitch *s, gboolean v, gpointer key)
 {
-    gchar *out = NULL; gint st = 0;
-    gchar *argv[] = {(gchar*)"/bin/sh", (gchar*)"-c", (gchar*)cmd, NULL};
-    if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, &out, NULL, &st, NULL)) { g_free(out); return NULL; }
-    return out;
+    (void)s;
+    cfg_set_bool(key, v);
+    return FALSE;
 }
 
-static gboolean cb_wifi(GtkSwitch*s,gboolean v,gpointer x){(void)s;(void)x;run_shell_async(v?"nmcli radio wifi on":"nmcli radio wifi off");save_bool("wifi_enabled",v);return FALSE;}
+static GtkWidget *combo_with(const char *const *labels, int n, int active)
+{
+    GtkWidget *c = gtk_combo_box_text_new();
+    for (int i = 0; i < n; i++) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(c), labels[i]);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(c), CLAMP(active, 0, n - 1));
+    return c;
+}
 
-static void cb_bluetooth_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"blueman-manager","gnome-control-center bluetooth","bluetoothctl",NULL};launch_candidates(cmds);}
-static gboolean cb_bluetooth(GtkSwitch*s,gboolean v,gpointer x){(void)s;(void)x;const char *cmd=v?"bluetoothctl power on":"bluetoothctl power off";run_shell_async(cmd);save_bool("bluetooth_enabled",v);return FALSE;}
-static void cb_wm_select(GtkComboBox*c,gpointer x){(void)x;const char*wm[]={"auto","xfwm4","openbox","marco","metacity","icewm","fluxbox","nexwm"};int i=gtk_combo_box_get_active(c);if(i>=0&&i<8)save_string("wm",wm[i]);}
-static void cb_user_settings(GtkButton*b,gpointer x){(void)b;(void)x;const char*cmds[]={"gnome-control-center","cinnamon-settings-users","system-config-users",NULL};launch_candidates(cmds);}
-static void sidebar_clicked(GtkToggleButton *button, gpointer data);
-static void cb_sidebar(GtkToggleButton*t,gpointer x){if(gtk_toggle_button_get_active(t))sidebar_clicked(t,x);}
+static GtkWidget *switch_with(const char *key, gboolean def)
+{
+    GtkWidget *s = gtk_switch_new();
+    gtk_switch_set_active(GTK_SWITCH(s), cfg_get_bool(key, def));
+    g_signal_connect(s, "state-set", G_CALLBACK(cb_bool), (gpointer)key);
+    return s;
+}
 
 static GtkWidget *make_display_page(void)
 {
-    GtkWidget *p = page_base("Display", "Configure your screens and how Hyggshi presents your desktop.");
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); gtk_box_pack_start(GTK_BOX(p), box, TRUE, TRUE, 0);
-    GdkDisplay *d = gdk_display_get_default(); int n = d ? gdk_display_get_n_monitors(d) : 0;
-    char buf[128]; snprintf(buf, sizeof buf, "%d monitor%s detected", n, n == 1 ? "" : "s");
+    GtkWidget *box = page_base();
+    GdkDisplay *d = gdk_display_get_default();
+    int n = d ? gdk_display_get_n_monitors(d) : 0;
     gtk_box_pack_start(GTK_BOX(box), section("Screens"), FALSE, FALSE, 0);
-    GtkWidget *info = gtk_label_new(buf); gtk_widget_set_halign(info, GTK_ALIGN_START);
-    gtk_box_pack_start(GTK_BOX(box), info, FALSE, FALSE, 8);
-    if (d) for (int i = 0; i < n; i++) {
-        GdkMonitor *m = gdk_display_get_monitor(d, i); GdkRectangle r; gdk_monitor_get_geometry(m, &r);
-        const char *name = gdk_monitor_get_model(m);
-        char text[256]; snprintf(text, sizeof text, "%s — %dx%d at %d,%d", name ? name : "Display", r.width, r.height, r.x, r.y);
-        GtkWidget *l = gtk_label_new(text); gtk_widget_set_halign(l, GTK_ALIGN_START); gtk_box_pack_start(GTK_BOX(box), l, FALSE, FALSE, 5);
+    GtkWidget *card = card_new();
+    for (int i = 0; d && i < n; i++) {
+        GdkMonitor *m = gdk_display_get_monitor(d, i);
+        GdkRectangle r;
+        gdk_monitor_get_geometry(m, &r);
+        const char *model = gdk_monitor_get_model(m);
+        char *title = g_strdup_printf("%s%s", model ? model : "Display", gdk_monitor_is_primary(m) ? " (primary)" : "");
+        char *desc = g_strdup_printf("%d × %d at %d,%d · %d Hz", r.width, r.height, r.x, r.y,
+                                     (gdk_monitor_get_refresh_rate(m) + 500) / 1000);
+        gtk_container_add(GTK_CONTAINER(card), row_box(title, desc, NULL));
+        g_free(title); g_free(desc);
     }
+    if (!n) gtk_container_add(GTK_CONTAINER(card), card_placeholder("No monitors detected"));
+    gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
+
     gtk_box_pack_start(GTK_BOX(box), section("Display settings"), FALSE, FALSE, 0);
-    GtkWidget *scale = gtk_combo_box_text_new(); gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(scale), "100%"); gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(scale), "125%"); gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(scale), "150%"); gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(scale), "200%");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(scale), get_int("scale", 0));
-    g_signal_connect(scale, "changed", G_CALLBACK(cb_combo_scale), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Scale", "UI scaling preference for the desktop.", scale), FALSE, FALSE, 0);
-    GtkWidget *orient = gtk_combo_box_text_new(); const char *orients[] = {"Landscape", "Portrait", "Landscape (flipped)", "Portrait (flipped)"}; for (int i=0;i<4;i++) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(orient),orients[i]); gtk_combo_box_set_active(GTK_COMBO_BOX(orient), get_int("orientation",0));
-    g_signal_connect(orient, "changed", G_CALLBACK(cb_combo_orientation), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Orientation", "Choose the preferred screen orientation.", orient), FALSE, FALSE, 0);
-    GtkWidget *night = gtk_switch_new(); gtk_switch_set_active(GTK_SWITCH(night), get_bool("night_light", FALSE)); g_signal_connect(night,"state-set",G_CALLBACK(cb_night),NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Night Light", "Reduce blue light during evening hours.", night), FALSE, FALSE, 0);
-    GtkWidget *btn = gtk_button_new_with_label("Open advanced display settings"); g_signal_connect(btn,"clicked",G_CALLBACK(display_dialog),NULL); gtk_box_pack_start(GTK_BOX(box),btn,FALSE,FALSE,10);
-    return p;
+    const char *scales[] = { "100%", "125%", "150%", "200%" };
+    GtkWidget *scale = combo_with(scales, 4, cfg_get_int("scale", 0));
+    g_signal_connect(scale, "changed", G_CALLBACK(cb_scale), NULL);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Text scale", "Scales text in GTK applications (applies immediately).", scale), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Night Light", "Reduce blue light during evening hours.", switch_with("night_light", FALSE)), FALSE, FALSE, 0);
+    GtkWidget *btn = gtk_button_new_with_label("Open advanced display settings (resolution, rotation, arrangement)");
+    gtk_widget_set_halign(btn, GTK_ALIGN_START);
+    g_signal_connect(btn, "clicked", G_CALLBACK(display_dialog), NULL);
+    gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 10);
+    return box;
 }
 
-static GtkWidget *make_appearance_page(void)
+static guint input_apply_id;
+static gboolean input_apply_idle(gpointer d) { (void)d; input_apply_id = 0; apply_input_settings(); return G_SOURCE_REMOVE; }
+static void input_apply_later(void)
 {
-    GtkWidget *p = page_base("Appearance", "Personalize the look and feel of Hyggshi Desktop."); GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0); gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);
-    gtk_box_pack_start(GTK_BOX(box),section("Theme"),FALSE,FALSE,0);
-    GtkWidget *theme=gtk_combo_box_text_new(); gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(theme),"System default"); gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(theme),"Light"); gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(theme),"Dark"); gtk_combo_box_set_active(GTK_COMBO_BOX(theme),get_int("theme_index",2)); g_signal_connect(theme,"changed",G_CALLBACK(cb_theme),NULL); gtk_box_pack_start(GTK_BOX(box),row_box("Style","Choose a light or dark desktop style.",theme),FALSE,FALSE,0);
-    GtkWidget *accent=gtk_combo_box_text_new(); for(int i=0;i<5;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(accent),accent_names[i]); gtk_combo_box_set_active(GTK_COMBO_BOX(accent),get_int("accent_index",0)); g_signal_connect(accent,"changed",G_CALLBACK(accent_changed),NULL); gtk_box_pack_start(GTK_BOX(box),row_box("Accent color","Color used for selections, switches and highlights.",accent),FALSE,FALSE,0);
-    GtkWidget *icons=gtk_combo_box_text_new(); const char *it[] = {"System icons","Adwaita","Papirus","hicolor"}; for(int i=0;i<4;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(icons),it[i]); gtk_combo_box_set_active(GTK_COMBO_BOX(icons),get_int("icon_theme",0)); g_signal_connect(icons,"changed",G_CALLBACK(cb_icons),NULL); gtk_box_pack_start(GTK_BOX(box),row_box("Icon theme","Select the icon set used by GTK applications.",icons),FALSE,FALSE,0);
-    GtkWidget *font=gtk_font_button_new(); gtk_font_chooser_set_font(GTK_FONT_CHOOSER(font),get_str("font","Sans 10")); g_signal_connect(font,"font-set",G_CALLBACK(cb_font),NULL); gtk_box_pack_start(GTK_BOX(box),row_box("Font","Default desktop font.",font),FALSE,FALSE,0);
-    gtk_box_pack_start(GTK_BOX(box),section("Wallpaper"),FALSE,FALSE,0);
-    GtkWidget *wp=gtk_button_new_with_label("Choose wallpaper…"); g_signal_connect(wp,"clicked",G_CALLBACK(choose_wallpaper),NULL); gtk_box_pack_start(GTK_BOX(box),wp,FALSE,FALSE,4);
-    GtkWidget *mode=gtk_combo_box_text_new(); const char *modes[]={"Fill","Fit","Stretch","Center"}; for(int i=0;i<4;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(mode),modes[i]); gtk_combo_box_set_active(GTK_COMBO_BOX(mode),get_int("wallpaper_mode_index",0)); g_signal_connect(mode,"changed",G_CALLBACK(set_wallpaper_mode),NULL); gtk_box_pack_start(GTK_BOX(box),row_box("Wallpaper mode","How the selected wallpaper is positioned.",mode),FALSE,FALSE,0);
-    return p;
+    if (input_apply_id) g_source_remove(input_apply_id);
+    input_apply_id = g_timeout_add(400, input_apply_idle, NULL);
+}
+
+static gboolean cb_input_bool(GtkSwitch *s, gboolean v, gpointer key)
+{
+    (void)s;
+    cfg_set_bool(key, v);
+    input_apply_later();
+    return FALSE;
+}
+
+static void cb_pointer_speed(GtkRange *r, gpointer x)
+{
+    (void)x;
+    cfg_set_double("pointer_speed", gtk_range_get_value(r));
+    input_apply_later();
+}
+
+static GtkWidget *input_switch(const char *key, gboolean def)
+{
+    GtkWidget *s = gtk_switch_new();
+    gtk_switch_set_active(GTK_SWITCH(s), cfg_get_bool(key, def));
+    g_signal_connect(s, "state-set", G_CALLBACK(cb_input_bool), (gpointer)key);
+    return s;
 }
 
 static GtkWidget *make_input_page(void)
 {
-    GtkWidget *p=page_base("Input","Mouse, touchpad and pointer behavior."); GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0); gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0); gtk_box_pack_start(GTK_BOX(box),section("Pointer"),FALSE,FALSE,0);
-    GtkWidget *speed=gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,0,1,0.05); gtk_widget_set_size_request(speed,180,-1); gtk_range_set_value(GTK_RANGE(speed),g_key_file_get_double(config,CONFIG_GROUP,"pointer_speed",NULL)); g_signal_connect(speed,"value-changed",G_CALLBACK(cb_pointer_speed),NULL); gtk_box_pack_start(GTK_BOX(box),row_box("Pointer speed","Adjust cursor movement speed.",speed),FALSE,FALSE,0);
-    GtkWidget *acc=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(acc),get_bool("pointer_acceleration",TRUE));g_signal_connect(acc,"state-set",G_CALLBACK(cb_bool),"pointer_acceleration");gtk_box_pack_start(GTK_BOX(box),row_box("Pointer acceleration","Accelerate the pointer for faster movement.",acc),FALSE,FALSE,0);
-    GtkWidget *nat=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(nat),get_bool("natural_scroll",TRUE));g_signal_connect(nat,"state-set",G_CALLBACK(cb_bool),"natural_scroll");gtk_box_pack_start(GTK_BOX(box),row_box("Natural scrolling","Scroll content in the same direction as your fingers.",nat),FALSE,FALSE,0);
-    GtkWidget *tap=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(tap),get_bool("tap_to_click",TRUE));g_signal_connect(tap,"state-set",G_CALLBACK(cb_bool),"tap_to_click");gtk_box_pack_start(GTK_BOX(box),row_box("Tap to click","Use a touchpad tap as a primary click.",tap),FALSE,FALSE,0);
-    return p;
+    GtkWidget *box = page_base();
+    gtk_box_pack_start(GTK_BOX(box), section("Pointer"), FALSE, FALSE, 0);
+    GtkWidget *speed = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, 0.05);
+    gtk_scale_set_draw_value(GTK_SCALE(speed), FALSE);
+    gtk_widget_set_size_request(speed, 200, -1);
+    gtk_range_set_value(GTK_RANGE(speed), cfg_get_double("pointer_speed", 0.5));
+    g_signal_connect(speed, "value-changed", G_CALLBACK(cb_pointer_speed), NULL);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Pointer speed", "Adjust cursor movement speed.", speed), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Pointer acceleration", "Accelerate the pointer for faster movement.", input_switch("pointer_acceleration", TRUE)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), section("Touchpad"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Natural scrolling", "Scroll content in the same direction as your fingers.", input_switch("natural_scroll", TRUE)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Tap to click", "Use a touchpad tap as a primary click.", input_switch("tap_to_click", TRUE)), FALSE, FALSE, 0);
+    if (!have_program("xinput"))
+        gtk_box_pack_start(GTK_BOX(box), info_label("Install xinput (sudo apt install xinput) so these settings are applied to your devices."), FALSE, FALSE, 0);
+    return box;
 }
 
-static GtkWidget *make_sound_page(void)
+static void send_test_notification(GtkButton *b, gpointer d)
 {
-    GtkWidget *p=page_base("Sound","Control output, input and notification volume.");GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(box),section("Output"),FALSE,FALSE,0);
-    GtkWidget *vol=gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,0,100,1);gtk_widget_set_size_request(vol,180,-1);gtk_range_set_value(GTK_RANGE(vol),get_int("volume",70));g_signal_connect(vol,"value-changed",G_CALLBACK(cb_int_range),"volume");gtk_box_pack_start(GTK_BOX(box),row_box("Output volume","Main speaker or headphone volume.",vol),FALSE,FALSE,0);
-    GtkWidget *mute=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(mute),get_bool("mute",FALSE));g_signal_connect(mute,"state-set",G_CALLBACK(cb_bool),"mute");gtk_box_pack_start(GTK_BOX(box),row_box("Mute","Mute audio output.",mute),FALSE,FALSE,0);
-    GtkWidget *mic=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(mic),get_bool("mic_mute",FALSE));g_signal_connect(mic,"state-set",G_CALLBACK(cb_bool),"mic_mute");gtk_box_pack_start(GTK_BOX(box),row_box("Microphone mute","Mute the default microphone.",mic),FALSE,FALSE,0);
-    GtkWidget *test=gtk_button_new_with_label("Open system sound settings");g_signal_connect(test,"clicked",G_CALLBACK(cb_sound_settings),NULL);gtk_box_pack_start(GTK_BOX(box),test,FALSE,FALSE,10);return p;
-}
-
-static const char *net_type_name(const char *t)
-{
-    if (!g_strcmp0(t, "wifi")) return "Wi-Fi";
-    if (!g_strcmp0(t, "ethernet")) return "Ethernet";
-    if (!g_strcmp0(t, "bridge")) return "Bridge";
-    if (!g_strcmp0(t, "wireguard") || !g_strcmp0(t, "vpn")) return "VPN";
-    return t;
-}
-
-static const char *net_state_name(const char *st)
-{
-    if (g_str_has_prefix(st, "connected (externally)")) return "Connected (externally)";
-    if (g_str_has_prefix(st, "connected")) return "Connected";
-    if (g_str_has_prefix(st, "connecting")) return "Connecting…";
-    if (!g_strcmp0(st, "disconnected")) return "Disconnected";
-    if (!g_strcmp0(st, "unavailable")) return "Unavailable";
-    if (!g_strcmp0(st, "unmanaged")) return "Not managed by NetworkManager";
-    return st;
-}
-
-static GtkWidget *make_network_page(void)
-{
-    GtkWidget*p=page_base("Network","Manage Wi-Fi, Ethernet and VPN connections.");
-    GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);
-    gtk_box_pack_start(GTK_BOX(box),section("Connections"),FALSE,FALSE,0);
-
-    char *nm=g_find_program_in_path("nmcli");
-    if(!nm){
-        GtkWidget*info=gtk_label_new("NetworkManager (nmcli) not found");gtk_widget_set_halign(info,GTK_ALIGN_START);
-        gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,8);
-    } else {
-        g_free(nm);
-        /* -e no: không escape ':' -> CONNECTION (cột cuối) có thể chứa ':' mà không vỡ */
-        char *out=capture_shell("nmcli -t -e no -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null");
-        int shown=0;
-        if(out){
-            gchar **lines=g_strsplit(out,"\n",-1);
-            for(int i=0;lines[i];i++){
-                if(!*lines[i]) continue;
-                gchar **f=g_strsplit(lines[i],":",4);
-                if(g_strv_length(f)>=3 && g_strcmp0(f[1],"loopback") && g_strcmp0(f[1],"wifi-p2p")){
-                    const char *conn=(f[3]&&*f[3]&&g_strcmp0(f[3],"--"))?f[3]:NULL;
-                    char *desc=g_strdup_printf("%s · %s · %s",f[0],net_type_name(f[1]),net_state_name(f[2]));
-                    gtk_box_pack_start(GTK_BOX(box),row_box(conn?conn:f[0],desc,NULL),FALSE,FALSE,0);
-                    g_free(desc); shown++;
-                }
-                g_strfreev(f);
-            }
-            g_strfreev(lines);
-            g_free(out);
-        }
-        if(!shown){
-            GtkWidget*info=gtk_label_new("No network devices found");gtk_widget_set_halign(info,GTK_ALIGN_START);
-            gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,8);
-        }
-
-        /* Công tắc Wi-Fi: đọc trạng thái thật và điều khiển thật (nmcli radio wifi). */
-        char *radio=capture_shell("nmcli radio wifi 2>/dev/null");
-        gboolean wifi_on=radio?g_str_has_prefix(g_strstrip(radio),"enabled"):get_bool("wifi_enabled",TRUE);
-        g_free(radio);
-        gtk_box_pack_start(GTK_BOX(box),section("Wireless"),FALSE,FALSE,0);
-        GtkWidget*wifi_sw=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(wifi_sw),wifi_on);
-        g_signal_connect(wifi_sw,"state-set",G_CALLBACK(cb_wifi),NULL);
-        gtk_box_pack_start(GTK_BOX(box),row_box("Wi-Fi","Turn the wireless radio on or off.",wifi_sw),FALSE,FALSE,0);
+    (void)b; (void)d;
+    GError *e = NULL;
+    GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &e);
+    if (!bus) {
+        settings_status("No session bus: %s", e->message);
+        g_clear_error(&e);
+        return;
     }
-    GtkWidget*btn=gtk_button_new_with_label("Open NetworkManager settings");g_signal_connect(btn,"clicked",G_CALLBACK(cb_network_settings),NULL);gtk_box_pack_start(GTK_BOX(box),btn,FALSE,FALSE,10);
-    return p;
-}
-
-static GtkWidget *make_bluetooth_page(void)
-{
-    GtkWidget*p=page_base("Bluetooth","Manage the Bluetooth adapter and nearby devices.");
-    GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);
-    gtk_box_pack_start(GTK_BOX(box),section("Adapter"),FALSE,FALSE,0);
-    char *out=NULL; gboolean detected=FALSE;
-    if(g_find_program_in_path("bluetoothctl")){
-        { gchar *argv[]={(gchar*)"/bin/sh",(gchar*)"-c",(gchar*)"bluetoothctl show 2>/dev/null | grep -q 'Controller' && echo detected || true",NULL}; g_spawn_sync(NULL,argv,NULL,G_SPAWN_SEARCH_PATH,NULL,NULL,&out,NULL,NULL,NULL); }
-        detected=out&&*out;
-    }
-    GtkWidget*info=gtk_label_new(detected?"Bluetooth adapter detected":"Bluetooth tools/adapter not detected");
-    gtk_widget_set_halign(info,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,8);g_free(out);
-    GtkWidget*sw=gtk_switch_new();
-    gboolean bt_on=get_bool("bluetooth_enabled",TRUE);
-    if(detected){
-        char *pw=capture_shell("bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo yes");
-        bt_on=pw&&*pw; g_free(pw);
-    }
-    gtk_switch_set_active(GTK_SWITCH(sw),bt_on);
-    g_signal_connect(sw,"state-set",G_CALLBACK(cb_bluetooth),NULL);
-    gtk_box_pack_start(GTK_BOX(box),row_box("Bluetooth","Power the Bluetooth adapter when supported by bluetoothctl.",sw),FALSE,FALSE,0);
-    GtkWidget*btn=gtk_button_new_with_label("Open Bluetooth settings");
-    g_signal_connect(btn,"clicked",G_CALLBACK(cb_bluetooth_settings),NULL);
-    gtk_box_pack_start(GTK_BOX(box),btn,FALSE,FALSE,10);
-    return p;
-}
-
-static GtkWidget *make_windows_page(void)
-{
-    GtkWidget*p=page_base("Window Management","Choose the X11 window manager used before GTK applications start.");
-    GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);
-    gtk_box_pack_start(GTK_BOX(box),section("Window manager"),FALSE,FALSE,0);
-    const char*wm[]={"Automatic fallback","xfwm4","openbox","marco","metacity","icewm","fluxbox","nexwm"};
-    GtkWidget*c=gtk_combo_box_text_new();for(int i=0;i<8;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(c),wm[i]);
-    const char*cur=get_str("wm","auto");int active=0;const char*ids[]={"auto","xfwm4","openbox","marco","metacity","icewm","fluxbox","nexwm"};
-    for(int i=0;i<8;i++)if(!g_strcmp0(cur,ids[i]))active=i;
-    gtk_combo_box_set_active(GTK_COMBO_BOX(c),active);g_signal_connect(c,"changed",G_CALLBACK(cb_wm_select),NULL);
-    gtk_box_pack_start(GTK_BOX(box),row_box("WM","HDE starts this WM before hde-desktop, hde-panel and GTK applications.",c),FALSE,FALSE,0);
-    GtkWidget*info=gtk_label_new("GTK apps are normal X11 clients in an HDE X11 session. A running WM supplies focus, borders, stacking and move/resize behavior.");
-    gtk_label_set_line_wrap(GTK_LABEL(info),TRUE);gtk_widget_set_halign(info,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),info,FALSE,FALSE,10);
-    return p;
+    const char *actions[] = { NULL };
+    GVariantBuilder hints;
+    g_variant_builder_init(&hints, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&hints, "{sv}", "desktop-entry", g_variant_new_string("hyggshi-settings"));
+    GVariant *r = g_dbus_connection_call_sync(bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications", "Notify",
+        g_variant_new("(susss^asa{sv}i)", "Hyggshi Settings", 0u, "preferences-system-notifications",
+                      "Test notification", "Notifications are working. <b>Do Not Disturb</b> hides popups like this one.",
+                      actions, &hints, -1),
+        G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 3000, NULL, &e);
+    if (r) { settings_status("Test notification sent"); g_variant_unref(r); }
+    else { settings_status("No notification daemon answered: %s", e->message); g_clear_error(&e); }
+    g_object_unref(bus);
 }
 
 static GtkWidget *make_notifications_page(void)
 {
-    GtkWidget*p=page_base("Notifications","Choose when and how apps can interrupt you.");GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);GtkWidget*dnd=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(dnd),get_bool("dnd",FALSE));g_signal_connect(dnd,"state-set",G_CALLBACK(cb_bool),"dnd");gtk_box_pack_start(GTK_BOX(box),row_box("Do Not Disturb","Temporarily suppress notification popups.",dnd),FALSE,FALSE,0);GtkWidget*pop=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(pop),get_bool("notification_popups",TRUE));g_signal_connect(pop,"state-set",G_CALLBACK(cb_bool),"notification_popups");gtk_box_pack_start(GTK_BOX(box),row_box("Notification popups","Show notification banners on screen.",pop),FALSE,FALSE,0);GtkWidget*snd=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(snd),get_bool("notification_sounds",TRUE));g_signal_connect(snd,"state-set",G_CALLBACK(cb_bool),"notification_sounds");gtk_box_pack_start(GTK_BOX(box),row_box("Notification sounds","Play a sound for incoming notifications.",snd),FALSE,FALSE,0);return p;
+    GtkWidget *box = page_base();
+    gtk_box_pack_start(GTK_BOX(box), section("Notifications"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Do Not Disturb", "Hide notification popups (critical alerts still appear). Also available from the bell on the panel.", switch_with("dnd", FALSE)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Notification popups", "Show notification banners above the panel.", switch_with("notification_popups", TRUE)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Notification sounds", "Play a sound for incoming notifications.", switch_with("notification_sounds", TRUE)), FALSE, FALSE, 0);
+    GtkWidget *test = gtk_button_new_with_label("Send a test notification");
+    gtk_widget_set_halign(test, GTK_ALIGN_START);
+    g_signal_connect(test, "clicked", G_CALLBACK(send_test_notification), NULL);
+    gtk_box_pack_start(GTK_BOX(box), test, FALSE, FALSE, 10);
+    return box;
+}
+
+static void cb_screen_timeout(GtkComboBox *c, gpointer x)
+{
+    (void)x;
+    cfg_set_int("screen_timeout", gtk_combo_box_get_active(c));
+    apply_power_settings();
 }
 
 static GtkWidget *make_power_page(void)
 {
-    GtkWidget*p=page_base("Power","Control sleep, screen timeout and battery behavior.");GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);GtkWidget*screen=gtk_combo_box_text_new();const char*times[]={"Never","5 minutes","10 minutes","15 minutes","30 minutes","1 hour"};for(int i=0;i<6;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(screen),times[i]);gtk_combo_box_set_active(GTK_COMBO_BOX(screen),get_int("screen_timeout",2));g_signal_connect(screen,"changed",G_CALLBACK(cb_int_combo),"screen_timeout");gtk_box_pack_start(GTK_BOX(box),row_box("Screen timeout","Turn off the display after inactivity.",screen),FALSE,FALSE,0);GtkWidget*sleep=gtk_combo_box_text_new();for(int i=0;i<6;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sleep),times[i]);gtk_combo_box_set_active(GTK_COMBO_BOX(sleep),get_int("sleep_timeout",3));g_signal_connect(sleep,"changed",G_CALLBACK(cb_int_combo),"sleep_timeout");gtk_box_pack_start(GTK_BOX(box),row_box("Automatic suspend","Suspend the computer after inactivity.",sleep),FALSE,FALSE,0);GtkWidget*bat=gtk_switch_new();gtk_switch_set_active(GTK_SWITCH(bat),get_bool("battery_saver",FALSE));g_signal_connect(bat,"state-set",G_CALLBACK(cb_bool),"battery_saver");gtk_box_pack_start(GTK_BOX(box),row_box("Battery saver","Reduce background activity when enabled.",bat),FALSE,FALSE,0);return p;
+    GtkWidget *box = page_base();
+    const char *times[] = { "Never", "5 minutes", "10 minutes", "15 minutes", "30 minutes", "1 hour" };
+    gtk_box_pack_start(GTK_BOX(box), section("Power saving"), FALSE, FALSE, 0);
+    GtkWidget *screen = combo_with(times, 6, cfg_get_int("screen_timeout", 2));
+    g_signal_connect(screen, "changed", G_CALLBACK(cb_screen_timeout), NULL);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Screen timeout", "Turn off the display after inactivity.", screen), FALSE, FALSE, 0);
+    GtkWidget *sleep = combo_with(times, 6, cfg_get_int("sleep_timeout", 3));
+    g_signal_connect(sleep, "changed", G_CALLBACK(cb_int_combo), "sleep_timeout");
+    gtk_box_pack_start(GTK_BOX(box), row_box("Automatic suspend", "Suspend the computer after inactivity (needs a power manager such as xfce4-power-manager).", sleep), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Battery saver", "Reduce background activity when enabled.", switch_with("battery_saver", FALSE)), FALSE, FALSE, 0);
+    return box;
 }
 
-static GtkWidget *make_keyboard_page(void)
+static void cb_user_settings(GtkButton *b, gpointer x)
 {
-    GtkWidget*p=page_base("Keyboard & Shortcuts","Configure keyboard layout and typing behavior.");GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);GtkWidget*layout=gtk_combo_box_text_new();const char*l[]={"English (US)","Vietnamese","English (UK)","Japanese","Custom…"};for(int i=0;i<5;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(layout),l[i]);gtk_combo_box_set_active(GTK_COMBO_BOX(layout),get_int("keyboard_layout",0));g_signal_connect(layout,"changed",G_CALLBACK(cb_int_combo),"keyboard_layout");gtk_box_pack_start(GTK_BOX(box),row_box("Keyboard layout","Choose the primary keyboard layout.",layout),FALSE,FALSE,0);GtkWidget*repeat=gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,0,100,5);gtk_widget_set_size_request(repeat,180,-1);gtk_range_set_value(GTK_RANGE(repeat),get_int("repeat_rate",50));g_signal_connect(repeat,"value-changed",G_CALLBACK(cb_int_range),"repeat_rate");gtk_box_pack_start(GTK_BOX(box),row_box("Repeat rate","How quickly a held key repeats.",repeat),FALSE,FALSE,0);GtkWidget*delay=gtk_combo_box_text_new();const char*ds[]={"Short","Medium","Long"};for(int i=0;i<3;i++)gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(delay),ds[i]);gtk_combo_box_set_active(GTK_COMBO_BOX(delay),get_int("repeat_delay",1));g_signal_connect(delay,"changed",G_CALLBACK(cb_int_combo),"repeat_delay");gtk_box_pack_start(GTK_BOX(box),row_box("Repeat delay","Delay before key repetition begins.",delay),FALSE,FALSE,0);return p;
+    (void)b; (void)x;
+    const char *cmds[] = { "mugshot", "users-admin", "gnome-control-center user-accounts", "system-config-users", NULL };
+    launch_candidates(cmds);
 }
 
 static GtkWidget *make_users_page(void)
 {
-    GtkWidget*p=page_base("Users","Account information for the current Hyggshi session.");GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);const char*user=g_get_user_name();const char*name=g_get_real_name();const char*home=g_get_home_dir();gtk_box_pack_start(GTK_BOX(box),section("Current account"),FALSE,FALSE,0);GtkWidget*grid=gtk_grid_new();gtk_grid_set_row_spacing(GTK_GRID(grid),10);gtk_grid_set_column_spacing(GTK_GRID(grid),24);const char*labels[]={"Username","Name","Home directory","Administrator"};const char*vals[]={user,name,home,(geteuid()==0?"Yes":"No")};for(int i=0;i<4;i++){GtkWidget*a=gtk_label_new(labels[i]);gtk_widget_set_halign(a,GTK_ALIGN_START);GtkWidget*b=gtk_label_new(vals[i]);gtk_widget_set_halign(b,GTK_ALIGN_START);gtk_grid_attach(GTK_GRID(grid),a,0,i,1,1);gtk_grid_attach(GTK_GRID(grid),b,1,i,1,1);}gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,8);GtkWidget*btn=gtk_button_new_with_label("Open system user management");g_signal_connect(btn,"clicked",G_CALLBACK(cb_user_settings),NULL);gtk_box_pack_start(GTK_BOX(box),btn,FALSE,FALSE,12);return p;
+    GtkWidget *box = page_base();
+    gtk_box_pack_start(GTK_BOX(box), section("Current account"), FALSE, FALSE, 0);
+    GtkWidget *card = card_new();
+    const char *labels[] = { "Username", "Name", "Home directory", "Administrator" };
+    gboolean admin = geteuid() == 0;
+    char *idout = NULL;
+    if (g_spawn_command_line_sync("id -nG", &idout, NULL, NULL, NULL) && idout)
+        admin = admin || strstr(idout, "sudo") || strstr(idout, "wheel") || strstr(idout, "admin");
+    g_free(idout);
+    const char *vals[] = { g_get_user_name(), g_get_real_name(), g_get_home_dir(), admin ? "Yes" : "No" };
+    for (int i = 0; i < 4; i++) gtk_container_add(GTK_CONTAINER(card), row_box(labels[i], vals[i], NULL));
+    gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
+    GtkWidget *btn = gtk_button_new_with_label("Open system user management");
+    gtk_widget_set_halign(btn, GTK_ALIGN_START);
+    g_signal_connect(btn, "clicked", G_CALLBACK(cb_user_settings), NULL);
+    gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 12);
+    return box;
 }
 
 static GtkWidget *make_about_page(void)
 {
-    GtkWidget*p=page_base("About","Hyggshi Desktop Environment");GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);gtk_box_pack_start(GTK_BOX(p),box,TRUE,TRUE,0);GtkWidget*logo=gtk_image_new_from_icon_name("preferences-system",GTK_ICON_SIZE_DIALOG);gtk_widget_set_halign(logo,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),logo,FALSE,FALSE,5);GtkWidget*v=gtk_label_new("Hyggshi Desktop Environment 1.0");gtk_widget_set_halign(v,GTK_ALIGN_START);gtk_style_context_add_class(gtk_widget_get_style_context(v),"about-title");gtk_box_pack_start(GTK_BOX(box),v,FALSE,FALSE,0);struct utsname u;if(uname(&u)==0){char text[512];snprintf(text,sizeof text,"Kernel: %s %s\nArchitecture: %s\nSession: %s",u.sysname,u.release,u.machine,g_get_user_name());GtkWidget*l=gtk_label_new(text);gtk_widget_set_halign(l,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),l,FALSE,FALSE,8);}GtkWidget*license=gtk_label_new("A lightweight GTK3 settings center for Hyggshi OS.\nConfiguration: ~/.config/hde/settings.ini");gtk_widget_set_halign(license,GTK_ALIGN_START);gtk_box_pack_start(GTK_BOX(box),license,FALSE,FALSE,0);return p;
+    GtkWidget *box = page_base();
+    GtkWidget *logo = gtk_image_new_from_icon_name("preferences-system", GTK_ICON_SIZE_DIALOG);
+    gtk_widget_set_halign(logo, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(box), logo, FALSE, FALSE, 5);
+    GtkWidget *v = gtk_label_new("Hyggshi Desktop Environment 1.0");
+    gtk_widget_set_halign(v, GTK_ALIGN_START);
+    gtk_style_context_add_class(gtk_widget_get_style_context(v), "about-title");
+    gtk_box_pack_start(GTK_BOX(box), v, FALSE, FALSE, 0);
+    GtkWidget *card = card_new();
+    struct utsname u;
+    if (uname(&u) == 0) {
+        char *k = g_strdup_printf("%s %s", u.sysname, u.release);
+        gtk_container_add(GTK_CONTAINER(card), row_box("Kernel", k, NULL));
+        gtk_container_add(GTK_CONTAINER(card), row_box("Architecture", u.machine, NULL));
+        g_free(k);
+    }
+    char *os = g_get_os_info(G_OS_INFO_KEY_PRETTY_NAME);
+    if (os) { gtk_container_add(GTK_CONTAINER(card), row_box("Operating system", os, NULL)); g_free(os); }
+    const char *wm = g_getenv("HDE_WM");
+    gtk_container_add(GTK_CONTAINER(card), row_box("Session", g_getenv("HDE_SESSION_PID") ? "HDE (X11)" : "Not running inside an HDE session", NULL));
+    if (wm && *wm) gtk_container_add(GTK_CONTAINER(card), row_box("Window manager setting", wm, NULL));
+    gtk_container_add(GTK_CONTAINER(card), row_box("Configuration", "~/.config/hde/settings.ini", NULL));
+    gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 10);
+    return box;
 }
 
 static GtkWidget *make_page(const char *id)
 {
-    if (!strcmp(id,"display")) return make_display_page();
-    if (!strcmp(id,"appearance")) return make_appearance_page();
-    if (!strcmp(id,"input")) return make_input_page();
-    if (!strcmp(id,"sound")) return make_sound_page();
-    if (!strcmp(id,"network")) return make_network_page();
-    if (!strcmp(id,"bluetooth")) return make_bluetooth_page();
-    if (!strcmp(id,"windows")) return make_windows_page();
-    if (!strcmp(id,"notifications")) return make_notifications_page();
-    if (!strcmp(id,"power")) return make_power_page();
-    if (!strcmp(id,"keyboard")) return make_keyboard_page();
-    if (!strcmp(id,"users")) return make_users_page();
+    if (!strcmp(id, "display")) return make_display_page();
+    if (!strcmp(id, "appearance")) return page_appearance_new();
+    if (!strcmp(id, "input")) return make_input_page();
+    if (!strcmp(id, "sound")) return page_sound_new();
+    if (!strcmp(id, "network")) return page_network_new();
+    if (!strcmp(id, "bluetooth")) return page_bluetooth_new();
+    if (!strcmp(id, "windows")) return page_windows_new();
+    if (!strcmp(id, "notifications")) return make_notifications_page();
+    if (!strcmp(id, "power")) return make_power_page();
+    if (!strcmp(id, "keyboard")) return page_keyboard_new();
+    if (!strcmp(id, "users")) return make_users_page();
     return make_about_page();
 }
 
+/* ================= khung cửa sổ ================= */
 static void select_page(const char *id, GtkWidget *button)
 {
-    if (!content_stack || !sidebar) return;   /* gọi sớm khi đang dựng sidebar */
+    if (!content_stack || !sidebar) return;
     gtk_stack_set_visible_child_name(GTK_STACK(content_stack), id);
     GList *children = gtk_container_get_children(GTK_CONTAINER(sidebar));
-    for (GList *l = children; l; l = l->next) {
+    for (GList *l = children; l; l = l->next)
         if (GTK_IS_TOGGLE_BUTTON(l->data) && GTK_WIDGET(l->data) != button)
             gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(l->data), FALSE);
-    }
     g_list_free(children);
-    for (guint i=0;i<G_N_ELEMENTS(items);i++)
-        if(!strcmp(items[i].id,id)){
-            gtk_label_set_text(GTK_LABEL(page_title),items[i].title);
-            gtk_label_set_text(GTK_LABEL(page_subtitle),items[i].subtitle);
+    for (guint i = 0; i < G_N_ELEMENTS(items); i++)
+        if (!strcmp(items[i].id, id)) {
+            gtk_label_set_text(GTK_LABEL(page_title), items[i].title);
+            gtk_label_set_text(GTK_LABEL(page_subtitle), items[i].subtitle);
             break;
         }
 }
 
-static void sidebar_clicked(GtkToggleButton *button, gpointer data)
+static void cb_sidebar(GtkToggleButton *t, gpointer id)
 {
-    if (!gtk_toggle_button_get_active(button)) return;
-    select_page((const char*)data, GTK_WIDGET(button));
+    if (gtk_toggle_button_get_active(t)) select_page(id, GTK_WIDGET(t));
+    else {
+        /* không cho bỏ chọn trang đang mở */
+        const char *cur = content_stack ? gtk_stack_get_visible_child_name(GTK_STACK(content_stack)) : NULL;
+        if (cur && !g_strcmp0(cur, id)) gtk_toggle_button_set_active(t, TRUE);
+    }
 }
 
 static GtkWidget *make_sidebar(void)
 {
-    GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,2);
-    gtk_widget_set_size_request(box,260,-1);
-    gtk_container_set_border_width(GTK_CONTAINER(box),14);
-    gtk_style_context_add_class(gtk_widget_get_style_context(box),"sidebar");
-    GtkWidget *brand=gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(brand),"<b>Hyggshi Settings</b>");
-    gtk_widget_set_halign(brand,GTK_ALIGN_START);
-    gtk_widget_set_margin_start(brand,10);
-    gtk_widget_set_margin_bottom(brand,15);
-    gtk_box_pack_start(GTK_BOX(box),brand,FALSE,FALSE,0);
-    for(guint i=0;i<G_N_ELEMENTS(items);i++) {
-        GtkWidget*b=gtk_toggle_button_new();
-        gtk_button_set_relief(GTK_BUTTON(b),GTK_RELIEF_NONE);
-        gtk_widget_set_halign(b,GTK_ALIGN_FILL);
-        gtk_widget_set_margin_start(b,2);
-        gtk_widget_set_margin_end(b,2);
-        GtkWidget*r=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,12);
-        GtkWidget*im=gtk_image_new_from_icon_name(items[i].icon,GTK_ICON_SIZE_BUTTON);
-        GtkWidget*l=gtk_label_new(items[i].title);
-        gtk_widget_set_halign(l,GTK_ALIGN_START);
-        gtk_box_pack_start(GTK_BOX(r),im,FALSE,FALSE,0);
-        gtk_box_pack_start(GTK_BOX(r),l,TRUE,TRUE,0);
-        gtk_container_add(GTK_CONTAINER(b),r);
-        g_object_set_data(G_OBJECT(b),"hde-id",(gpointer)items[i].id);
-        g_signal_connect(b,"toggled",G_CALLBACK(cb_sidebar),g_strdup(items[i].id));
-        gtk_box_pack_start(GTK_BOX(box),b,FALSE,FALSE,0);
-        if(i==0) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(b),TRUE);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_size_request(box, 250, -1);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 14);
+    gtk_style_context_add_class(gtk_widget_get_style_context(box), "sidebar");
+    GtkWidget *brand = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(brand), "<b>Hyggshi Settings</b>");
+    gtk_widget_set_halign(brand, GTK_ALIGN_START);
+    gtk_widget_set_margin_start(brand, 10);
+    gtk_widget_set_margin_bottom(brand, 15);
+    gtk_box_pack_start(GTK_BOX(box), brand, FALSE, FALSE, 0);
+    for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
+        GtkWidget *b = gtk_toggle_button_new();
+        gtk_button_set_relief(GTK_BUTTON(b), GTK_RELIEF_NONE);
+        GtkWidget *r = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        GtkWidget *im = gtk_image_new_from_icon_name(items[i].icon, GTK_ICON_SIZE_BUTTON);
+        GtkWidget *l = gtk_label_new(items[i].title);
+        gtk_widget_set_halign(l, GTK_ALIGN_START);
+        gtk_box_pack_start(GTK_BOX(r), im, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(r), l, TRUE, TRUE, 0);
+        gtk_container_add(GTK_CONTAINER(b), r);
+        g_object_set_data(G_OBJECT(b), "hde-id", (gpointer)items[i].id);
+        g_signal_connect(b, "toggled", G_CALLBACK(cb_sidebar), (gpointer)items[i].id);
+        gtk_box_pack_start(GTK_BOX(box), b, FALSE, FALSE, 0);
     }
     return box;
 }
 
-static void css(void)
+/* CSS dựa trên màu của theme GTK (@theme_*) nên tự đúng ở cả chế độ sáng và tối. */
+static void load_css(void)
 {
-    const char *data="* { font-family: Sans; } window { background: #f6f7f9; } .sidebar { background: #eceef2; } .sidebar button { color: #24262b; padding: 9px 10px; border-radius: 10px; } .sidebar button:checked { background: #3584e4; color: white; } .page-heading { font-size: 24px; font-weight: 700; } .page-description { color: #686b73; font-size: 13px; } .section-title { color: #3584e4; font-weight: 700; font-size: 12px; } .row-title { font-weight: 600; } .row-description { color: #777a82; font-size: 11px; } .about-title { font-size: 20px; font-weight: 700; } .status { color: #5f636b; font-size: 11px; } button { border-radius: 8px; }";
-    GtkCssProvider *p=gtk_css_provider_new();gtk_css_provider_load_from_data(p,data,-1,NULL);gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),GTK_STYLE_PROVIDER(p),GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);g_object_unref(p);
+    HdeThemeInfo ti;
+    hde_theme_info_load(&ti);
+    const char *a = ti.accent;
+    char *data = g_strdup_printf(
+        ".sidebar { background-color: shade(@theme_bg_color, 0.96); border-right: 1px solid alpha(@theme_fg_color, 0.10); }"
+        ".sidebar button { color: @theme_fg_color; padding: 9px 10px; border-radius: 10px; }"
+        ".sidebar button:checked { background: %s; color: white; }"
+        ".sidebar button:checked label, .sidebar button:checked image { color: white; }"
+        ".page-heading { font-size: 24px; font-weight: 700; }"
+        ".page-description { opacity: 0.7; font-size: 13px; }"
+        ".section-title { color: %s; font-weight: 700; font-size: 12px; }"
+        ".row-title { font-weight: 600; }"
+        ".row-description { opacity: 0.68; font-size: 11px; }"
+        ".about-title { font-size: 20px; font-weight: 700; }"
+        ".status { opacity: 0.7; font-size: 11px; }"
+        ".card { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.12); border-radius: 12px; }"
+        ".card > row { padding: 2px 8px; border-bottom: 1px solid alpha(@theme_fg_color, 0.07); }"
+        ".card > row:last-child { border-bottom: none; }"
+        ".badge { font-size: 10px; padding: 1px 8px; border-radius: 9px; background-color: alpha(%s, 0.16); color: %s; }"
+        ".badge-ok { background-color: alpha(#2ec27e, 0.18); color: #26a269; }"
+        ".error-text { color: #e01b24; }"
+        ".style-card { padding: 8px; border-radius: 12px; background-image: none; }"
+        ".style-card:checked { box-shadow: inset 0 0 0 2px %s; background-color: alpha(%s, 0.08); }"
+        ".preview { border-radius: 8px; min-width: 150px; min-height: 92px; }"
+        ".preview-light { background-color: #f6f7f9; border: 1px solid #d0d4da; }"
+        ".preview-dark { background-color: #1e222a; border: 1px solid #3a4150; }"
+        ".preview-light .pv-win { background-color: #ffffff; border: 1px solid #d8dbe0; border-radius: 5px; }"
+        ".preview-dark .pv-win { background-color: #2b303a; border: 1px solid #3a4150; border-radius: 5px; }"
+        ".preview-light .pv-bar { background-color: #e2e5ea; } .preview-dark .pv-bar { background-color: #14171c; }"
+        ".pv-accent { background-color: %s; border-radius: 3px; }"
+        "button { border-radius: 8px; }",
+        a, a, a, a, a, a, a);
+    if (!app_css) {
+        app_css = gtk_css_provider_new();
+        gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(app_css),
+                                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    gtk_css_provider_load_from_data(app_css, data, -1, NULL);
+    g_free(data);
+    hde_theme_info_clear(&ti);
 }
 
-int main(int argc,char **argv)
+static void on_theme_changed(gpointer d)
 {
-    gtk_init(&argc,&argv); config=g_key_file_new();config_path=g_build_filename(g_get_user_config_dir(),"hde","settings.ini",NULL);g_key_file_load_from_file(config,config_path,G_KEY_FILE_NONE,NULL);css();
-    window=gtk_window_new(GTK_WINDOW_TOPLEVEL);gtk_window_set_title(GTK_WINDOW(window),APP_NAME);gtk_window_set_default_size(GTK_WINDOW(window),1000,680);gtk_window_set_position(GTK_WINDOW(window),GTK_WIN_POS_CENTER);gtk_window_set_icon_name(GTK_WINDOW(window),"preferences-system");g_signal_connect(window,"destroy",G_CALLBACK(gtk_main_quit),NULL);
-    GtkWidget*root=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,0);gtk_container_add(GTK_CONTAINER(window),root);GtkWidget *sidebar_scroll=gtk_scrolled_window_new(NULL,NULL); gtk_widget_set_size_request(sidebar_scroll,260,-1); gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sidebar_scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC); sidebar=make_sidebar(); gtk_container_add(GTK_CONTAINER(sidebar_scroll),sidebar); gtk_box_pack_start(GTK_BOX(root),sidebar_scroll,FALSE,TRUE,0);
-    GtkWidget*main=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);gtk_box_pack_start(GTK_BOX(root),main,TRUE,TRUE,0);GtkWidget*header=gtk_box_new(GTK_ORIENTATION_VERTICAL,2);gtk_container_set_border_width(GTK_CONTAINER(header),24);page_title=gtk_label_new("Display");gtk_widget_set_halign(page_title,GTK_ALIGN_START);gtk_style_context_add_class(gtk_widget_get_style_context(page_title),"page-heading");page_subtitle=gtk_label_new("Resolution, scale and monitors");gtk_widget_set_halign(page_subtitle,GTK_ALIGN_START);gtk_style_context_add_class(gtk_widget_get_style_context(page_subtitle),"page-description");gtk_box_pack_start(GTK_BOX(header),page_title,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(header),page_subtitle,FALSE,FALSE,2);gtk_box_pack_start(GTK_BOX(main),header,FALSE,FALSE,0);
-    content_stack=gtk_stack_new();gtk_stack_set_transition_type(GTK_STACK(content_stack),GTK_STACK_TRANSITION_TYPE_CROSSFADE);gtk_stack_set_transition_duration(GTK_STACK(content_stack),160);GtkWidget*scroll=gtk_scrolled_window_new(NULL,NULL);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);gtk_container_add(GTK_CONTAINER(scroll),content_stack);gtk_box_pack_start(GTK_BOX(main),scroll,TRUE,TRUE,0);
-    for(guint i=0;i<G_N_ELEMENTS(items);i++){GtkWidget*p=make_page(items[i].id);gtk_stack_add_named(GTK_STACK(content_stack),p,items[i].id);}gtk_stack_set_visible_child_name(GTK_STACK(content_stack),"display");
-    status_label=gtk_label_new("Ready");gtk_widget_set_halign(status_label,GTK_ALIGN_START);gtk_widget_set_margin_start(status_label,28);gtk_widget_set_margin_bottom(status_label,8);gtk_style_context_add_class(gtk_widget_get_style_context(status_label),"status");gtk_box_pack_start(GTK_BOX(main),status_label,FALSE,FALSE,0);
-    gtk_widget_show_all(window);
-    if(argc>1){   /* hde-settings <id>: mở thẳng một trang (network, bluetooth, windows, ...) */
-        GList*ch=gtk_container_get_children(GTK_CONTAINER(sidebar));
-        for(GList*l=ch;l;l=l->next){const char*id=g_object_get_data(G_OBJECT(l->data),"hde-id");
-            if(id&&!strcmp(id,argv[1])){gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(l->data),TRUE);break;}}
-        g_list_free(ch);
+    (void)d;
+    load_css();
+}
+
+static void open_page_arg(const char *id)
+{
+    GList *ch = gtk_container_get_children(GTK_CONTAINER(sidebar));
+    gboolean found = FALSE;
+    for (GList *l = ch; l; l = l->next) {
+        const char *pid = g_object_get_data(G_OBJECT(l->data), "hde-id");
+        if (pid && !strcmp(pid, id)) {
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(l->data), TRUE);
+            found = TRUE;
+            break;
+        }
     }
-    gtk_main();g_key_file_free(config);g_free(config_path);return 0;
+    g_list_free(ch);
+    if (!found) settings_status("Unknown page '%s'", id);
+}
+
+static void on_activate(GtkApplication *app, gpointer d)
+{
+    (void)d;
+    if (window) { gtk_window_present(GTK_WINDOW(window)); return; }
+    window = gtk_application_window_new(app);
+    gtk_window_set_title(GTK_WINDOW(window), APP_NAME);
+    gtk_window_set_default_size(GTK_WINDOW(window), 1020, 700);
+    gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
+    gtk_window_set_icon_name(GTK_WINDOW(window), "preferences-system");
+
+    GtkWidget *root = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_container_add(GTK_CONTAINER(window), root);
+    GtkWidget *sidebar_scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_widget_set_size_request(sidebar_scroll, 250, -1);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sidebar_scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    sidebar = make_sidebar();
+    gtk_container_add(GTK_CONTAINER(sidebar_scroll), sidebar);
+    gtk_box_pack_start(GTK_BOX(root), sidebar_scroll, FALSE, TRUE, 0);
+
+    GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_pack_start(GTK_BOX(root), main_box, TRUE, TRUE, 0);
+    GtkWidget *header = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_container_set_border_width(GTK_CONTAINER(header), 24);
+    page_title = gtk_label_new("");
+    gtk_widget_set_halign(page_title, GTK_ALIGN_START);
+    gtk_style_context_add_class(gtk_widget_get_style_context(page_title), "page-heading");
+    page_subtitle = gtk_label_new("");
+    gtk_widget_set_halign(page_subtitle, GTK_ALIGN_START);
+    gtk_style_context_add_class(gtk_widget_get_style_context(page_subtitle), "page-description");
+    gtk_box_pack_start(GTK_BOX(header), page_title, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(header), page_subtitle, FALSE, FALSE, 2);
+    gtk_box_pack_start(GTK_BOX(main_box), header, FALSE, FALSE, 0);
+
+    status_label = gtk_label_new("Ready");
+    content_stack = gtk_stack_new();
+    gtk_stack_set_transition_type(GTK_STACK(content_stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+    gtk_stack_set_transition_duration(GTK_STACK(content_stack), 160);
+    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_container_add(GTK_CONTAINER(scroll), content_stack);
+    gtk_box_pack_start(GTK_BOX(main_box), scroll, TRUE, TRUE, 0);
+    for (guint i = 0; i < G_N_ELEMENTS(items); i++)
+        gtk_stack_add_named(GTK_STACK(content_stack), make_page(items[i].id), items[i].id);
+
+    gtk_widget_set_halign(status_label, GTK_ALIGN_START);
+    gtk_widget_set_margin_start(status_label, 28);
+    gtk_widget_set_margin_bottom(status_label, 8);
+    gtk_label_set_ellipsize(GTK_LABEL(status_label), PANGO_ELLIPSIZE_END);
+    gtk_style_context_add_class(gtk_widget_get_style_context(status_label), "status");
+    gtk_box_pack_start(GTK_BOX(main_box), status_label, FALSE, FALSE, 0);
+
+    gtk_widget_show_all(window);
+    open_page_arg("display");
+    settings_status("Ready");
+}
+
+static int on_command_line(GApplication *app, GApplicationCommandLine *cl, gpointer d)
+{
+    (void)d;
+    int argc = 0;
+    char **argv = g_application_command_line_get_arguments(cl, &argc);
+    g_application_activate(app);
+    if (argc > 1 && argv[1][0] != '-') open_page_arg(argv[1]);
+    g_strfreev(argv);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "--apply")) {
+        /* chế độ không giao diện: hde-session gọi khi đăng nhập */
+        apply_keyboard_settings();
+        apply_power_settings();
+        apply_input_settings();
+        return 0;
+    }
+    if (argc > 2 && !strcmp(argv[1], "--style")) {
+        /* hde-settings --style dark|light|toggle : đổi Dark mode không cần mở cửa sổ */
+        gboolean dark;
+        if (!strcmp(argv[2], "dark")) dark = TRUE;
+        else if (!strcmp(argv[2], "light")) dark = FALSE;
+        else if (!strcmp(argv[2], "toggle")) dark = cfg_get_int("theme_index", 0) != 2;
+        else { fprintf(stderr, "hde-settings: --style expects dark, light or toggle\n"); return 2; }
+        appearance_apply_style(dark);
+        char *eff = cfg_get_string("gtk_theme_effective", "?");
+        printf("%s mode applied (GTK theme %s)\n", dark ? "Dark" : "Light", eff);
+        g_free(eff);
+        return 0;
+    }
+    if (argc > 1 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
+        printf("Usage: hde-settings [PAGE]   (display appearance input sound network bluetooth windows\n"
+               "                             notifications power keyboard users about)\n"
+               "       hde-settings --apply  re-apply login-time settings and exit\n"
+               "       hde-settings --style dark|light|toggle   switch Dark mode without opening the window\n");
+        return 0;
+    }
+    signal(SIGPIPE, SIG_IGN);
+    gtk_init(&argc, &argv);
+    hde_theme_apply_process();
+    load_css();
+    hde_theme_watch(on_theme_changed, NULL);
+
+    /* Một cửa sổ duy nhất: `hde-settings bluetooth` khi đã mở sẽ chuyển trang thay vì mở cửa sổ thứ hai. */
+    GtkApplication *app = gtk_application_new("org.hyggshi.Settings", G_APPLICATION_HANDLES_COMMAND_LINE);
+    g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
+    g_signal_connect(app, "command-line", G_CALLBACK(on_command_line), NULL);
+    int rc = g_application_run(G_APPLICATION(app), argc, argv);
+    g_object_unref(app);
+    return rc;
 }

@@ -1,7 +1,8 @@
 /* hde-status: khu vực trạng thái trên panel — Fcitx, mạng (Wi-Fi/Ethernet), Bluetooth, âm lượng, pin.
  *
- * - Mọi lệnh ngoài (nmcli, bluetoothctl, pactl, fcitx5-remote) chạy BẤT ĐỒNG BỘ và có timeout,
- *   nên panel không bao giờ bị treo (bluetoothctl sẽ đứng chờ nếu bluetoothd chưa chạy).
+ * - Mọi lệnh ngoài (nmcli, pactl/wpctl/amixer, fcitx5-remote) chạy BẤT ĐỒNG BỘ và có timeout,
+ *   nên panel không bao giờ bị treo.
+ * - Bluetooth đọc thẳng từ BlueZ qua D-Bus (không dùng bluetoothctl — nó đứng chờ khi bluetoothd chưa chạy).
  * - Mục nào không có phần cứng/dịch vụ tương ứng thì tự ẩn.
  * - Chuột trái: hành động chính · chuột phải: mở công cụ cấu hình · cuộn chuột trên âm lượng: ±5%.
  */
@@ -11,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "hde-status.h"
+#include "hde-osd.h"
+#include "hde-commands.h"
 
 #define POLL_SECONDS 5
 #define CMD_TIMEOUT_SECONDS 4
@@ -60,6 +63,16 @@ static void run_async(const char *const *argv, RunCb cb, gpointer data)
     g_subprocess_communicate_utf8_async(p, NULL, NULL, run_done, r);
 }
 
+/* Chạy một đoạn shell bất đồng bộ (không qua g_shell_parse -> không lo dấu nháy). */
+static void run_shell(const char *script)
+{
+    gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)script, NULL };
+    GError *err = NULL;
+    if (!g_spawn_async(NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                       NULL, NULL, NULL, &err))
+        g_clear_error(&err);
+}
+
 static void spawn_quiet(const char *cmd)
 {
     GError *err = NULL;
@@ -78,7 +91,7 @@ static void launch_first(const char *const *cmds)
 }
 
 /* hde-settings nằm cạnh hde-panel (bản vừa build) hoặc trong PATH. */
-static void open_settings(const char *page)
+void hde_open_settings(const char *page)
 {
     char *self = g_file_read_link("/proc/self/exe", NULL);
     char *path = NULL;
@@ -91,7 +104,7 @@ static void open_settings(const char *page)
     if (!path) path = g_find_program_in_path("hde-settings");
     if (path) {
         char *q = g_shell_quote(path);
-        char *cmd = g_strdup_printf("%s %s", q, page);
+        char *cmd = page ? g_strdup_printf("%s %s", q, page) : g_strdup(q);
         spawn_quiet(cmd);
         g_free(q); g_free(cmd);
     }
@@ -307,90 +320,150 @@ static void bt_apply(gboolean powered, int n_conn, const char *names)
     g_free(tip);
 }
 
-static void on_bt_conn(gboolean ok, const char *out, gpointer d)
-{
-    (void)d;
-    int n = 0;
-    GString *names = g_string_new(NULL);
-    if (ok && out) {
-        gchar **lines = g_strsplit(out, "\n", -1);
-        for (int i = 0; lines[i]; i++) {
-            if (!g_str_has_prefix(lines[i], "Device ")) continue;
-            n++;
-            const char *mac_end = strchr(lines[i] + 7, ' ');   /* "Device AA:BB:.. Name" */
-            g_string_append_printf(names, "%s• %s", names->len ? "\n" : "", mac_end ? mac_end + 1 : lines[i] + 7);
-        }
-        g_strfreev(lines);
-    }
-    bt_apply(TRUE, n, names->str);
-    g_string_free(names, TRUE);
-    it_bt.busy = FALSE;
-}
+static GDBusConnection *sysbus;
 
-static void on_bt_show(gboolean ok, const char *out, gpointer d)
+static void on_bt_objects(GObject *src, GAsyncResult *res, gpointer d)
 {
     (void)d;
-    if (!ok || !out || strstr(out, "No default controller") || !strstr(out, "Powered:")) {
-        gtk_widget_hide(it_bt.btn);          /* không có adapter / bluetoothd không chạy */
-        it_bt.busy = FALSE;
+    it_bt.busy = FALSE;
+    GError *e = NULL;
+    GVariant *r = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, &e);
+    if (!r) {                                   /* bluetoothd không chạy */
+        g_clear_error(&e);
+        gtk_widget_hide(it_bt.btn);
         return;
     }
-    if (!strstr(out, "Powered: yes")) { bt_apply(FALSE, 0, NULL); it_bt.busy = FALSE; return; }
-    const char *argv[] = { "bluetoothctl", "devices", "Connected", NULL };
-    run_async(argv, on_bt_conn, NULL);
+    GVariant *objs = g_variant_get_child_value(r, 0);
+    GVariantIter iter;
+    const char *path;
+    GVariant *ifaces;
+    gboolean adapter = FALSE, powered = FALSE;
+    int n = 0;
+    GString *names = g_string_new(NULL);
+    g_variant_iter_init(&iter, objs);
+    while (g_variant_iter_next(&iter, "{&o@a{sa{sv}}}", &path, &ifaces)) {
+        GVariant *ad = g_variant_lookup_value(ifaces, "org.bluez.Adapter1", G_VARIANT_TYPE_VARDICT);
+        if (ad) {
+            gboolean p = FALSE;
+            adapter = TRUE;
+            if (g_variant_lookup(ad, "Powered", "b", &p) && p) powered = TRUE;
+            g_variant_unref(ad);
+        }
+        GVariant *dev = g_variant_lookup_value(ifaces, "org.bluez.Device1", G_VARIANT_TYPE_VARDICT);
+        if (dev) {
+            gboolean c = FALSE;
+            if (g_variant_lookup(dev, "Connected", "b", &c) && c) {
+                const char *alias = NULL;
+                if (!g_variant_lookup(dev, "Alias", "&s", &alias)) g_variant_lookup(dev, "Address", "&s", &alias);
+                g_string_append_printf(names, "%s• %s", names->len ? "\n" : "", alias ? alias : "?");
+                n++;
+            }
+            g_variant_unref(dev);
+        }
+        g_variant_unref(ifaces);
+    }
+    if (!adapter) gtk_widget_hide(it_bt.btn);
+    else bt_apply(powered, n, names->str);
+    g_string_free(names, TRUE);
+    g_variant_unref(objs);
+    g_variant_unref(r);
 }
 
 static void poll_bt(void)
 {
-    if (it_bt.busy) return;
+    if (it_bt.busy || !sysbus) return;
     it_bt.busy = TRUE;
-    const char *argv[] = { "bluetoothctl", "show", NULL };
-    run_async(argv, on_bt_show, NULL);
+    g_dbus_connection_call(sysbus, "org.bluez", "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects",
+                           NULL, G_VARIANT_TYPE("(a{oa{sa{sv}}})"), G_DBUS_CALL_FLAGS_NO_AUTO_START, 3000, NULL,
+                           on_bt_objects, NULL);
 }
 
-/* ================= Âm lượng (pactl: PulseAudio và PipeWire-pulse) ================= */
+static void on_sysbus(GObject *src, GAsyncResult *res, gpointer d)
+{
+    (void)src; (void)d;
+    sysbus = g_bus_get_finish(res, NULL);
+    if (sysbus) poll_bt();
+}
+
+/* ================= Âm lượng (pactl / wpctl / amixer — xem HDE_SH_VOLUME_GET) ================= */
 static int vol_pct = -1;
+
+static const char *vol_icon(int pct, gboolean muted);
 
 static void vol_apply(gboolean muted)
 {
-    const char *icon = muted || vol_pct == 0 ? "audio-volume-muted-symbolic" :
-                       vol_pct < 33 ? "audio-volume-low-symbolic" :
-                       vol_pct < 66 ? "audio-volume-medium-symbolic" : "audio-volume-high-symbolic";
+    const char *icon = vol_icon(vol_pct, muted);
     char *txt = muted ? g_strdup("mute") : g_strdup_printf("%d%%", vol_pct);
     item_set(&it_vol, icon, txt, "Volume\nClick: mute · Scroll: ±5% · Right-click: mixer");
     g_free(txt);
 }
 
-static void on_vol_mute(gboolean ok, const char *out, gpointer d)
+static const char *vol_icon(int pct, gboolean muted)
 {
-    (void)d;
-    it_vol.busy = FALSE;
-    if (vol_pct >= 0) vol_apply(ok && out && strstr(out, "yes"));
+    return muted || pct == 0 ? "audio-volume-muted-symbolic" :
+           pct < 33 ? "audio-volume-low-symbolic" :
+           pct < 66 ? "audio-volume-medium-symbolic" : "audio-volume-high-symbolic";
+}
+
+/* out = "<phần trăm> <muted>" (xem HDE_SH_VOLUME_GET) */
+static gboolean parse_vol(gboolean ok, const char *out, int *pct, gboolean *muted)
+{
+    int v = -1, m = 0;
+    if (!ok || !out || sscanf(out, "%d %d", &v, &m) < 1 || v < 0) return FALSE;
+    *pct = v;
+    *muted = m != 0;
+    return TRUE;
 }
 
 static void on_vol(gboolean ok, const char *out, gpointer d)
 {
     (void)d;
-    vol_pct = -1;
-    if (ok && out) {
-        const char *p = strchr(out, '%');
-        if (p) {
-            const char *s = p;
-            while (s > out && g_ascii_isdigit(s[-1])) s--;
-            vol_pct = atoi(s);
-        }
-    }
-    if (vol_pct < 0) { gtk_widget_hide(it_vol.btn); it_vol.busy = FALSE; return; }
-    const char *argv[] = { "pactl", "get-sink-mute", "@DEFAULT_SINK@", NULL };
-    run_async(argv, on_vol_mute, NULL);
+    it_vol.busy = FALSE;
+    gboolean muted = FALSE;
+    if (!parse_vol(ok, out, &vol_pct, &muted)) { vol_pct = -1; gtk_widget_hide(it_vol.btn); return; }
+    vol_apply(muted);
 }
+
+static const char *const vol_get_argv[] = { "/bin/sh", "-c", HDE_SH_VOLUME_GET, NULL };
 
 static void poll_vol(void)
 {
     if (it_vol.busy) return;
     it_vol.busy = TRUE;
-    const char *argv[] = { "pactl", "get-sink-volume", "@DEFAULT_SINK@", NULL };
-    run_async(argv, on_vol, NULL);
+    run_async(vol_get_argv, on_vol, NULL);
+}
+
+static void on_osd_vol(gboolean ok, const char *out, gpointer d)
+{
+    (void)d;
+    int pct = 0;
+    gboolean muted = FALSE;
+    if (!parse_vol(ok, out, &pct, &muted)) {
+        hde_osd_show("audio-volume-muted-symbolic", -1, "No audio device");
+        return;
+    }
+    vol_pct = pct;
+    vol_apply(muted);
+    hde_osd_show(vol_icon(pct, muted), muted ? 0 : pct, muted ? "Muted" : NULL);
+}
+
+void hde_status_osd_volume(void)
+{
+    run_async(vol_get_argv, on_osd_vol, NULL);
+}
+
+static void on_osd_mic(gboolean ok, const char *out, gpointer d)
+{
+    (void)d;
+    gboolean muted = ok && out && atoi(out) > 0;
+    hde_osd_show(muted ? "microphone-sensitivity-muted-symbolic" : "audio-input-microphone-symbolic", -1,
+                 muted ? "Microphone off" : "Microphone on");
+}
+
+void hde_status_osd_mic(void)
+{
+    static const char *const argv[] = { "/bin/sh", "-c", HDE_SH_MIC_GET, NULL };
+    run_async(argv, on_osd_mic, NULL);
 }
 
 /* ================= Pin (sysfs) ================= */
@@ -436,6 +509,12 @@ static void refresh_all(void)
 static gboolean refresh_cb(gpointer d) { (void)d; refresh_all(); return G_SOURCE_CONTINUE; }
 static gboolean refresh_once(gpointer d) { (void)d; refresh_all(); return G_SOURCE_REMOVE; }
 
+void hde_status_refresh(void)
+{
+    refresh_all();
+    g_timeout_add(1500, refresh_once, NULL);
+}
+
 static gboolean on_press(GtkWidget *w, GdkEventButton *e, gpointer data)
 {
     (void)w;
@@ -453,15 +532,15 @@ static gboolean on_press(GtkWidget *w, GdkEventButton *e, gpointer data)
         }
     } else if (!strcmp(id, "net")) {
         if (right) { const char *c[] = { "nm-connection-editor", NULL }; launch_first(c); }
-        else open_settings("network");
+        else hde_open_settings("network");
     } else if (!strcmp(id, "bt")) {
         if (right) { const char *c[] = { "blueman-manager", "blueberry", NULL }; launch_first(c); }
-        else open_settings("bluetooth");
+        else hde_open_settings("bluetooth");
     } else if (!strcmp(id, "vol")) {
         if (right) { const char *c[] = { "pavucontrol", "pavucontrol-qt", NULL }; launch_first(c); }
-        else spawn_quiet("pactl set-sink-mute @DEFAULT_SINK@ toggle");
+        else run_shell(HDE_SH_VOLUME_MUTE);
     } else if (!strcmp(id, "bat")) {
-        open_settings("power");
+        hde_open_settings("power");
     }
     g_timeout_add(600, refresh_once, NULL);       /* cập nhật ngay sau khi bấm */
     return TRUE;
@@ -470,8 +549,8 @@ static gboolean on_press(GtkWidget *w, GdkEventButton *e, gpointer data)
 static gboolean on_scroll(GtkWidget *w, GdkEventScroll *e, gpointer data)
 {
     (void)w; (void)data;
-    if (e->direction == GDK_SCROLL_UP)        spawn_quiet("pactl set-sink-volume @DEFAULT_SINK@ +5%");
-    else if (e->direction == GDK_SCROLL_DOWN) spawn_quiet("pactl set-sink-volume @DEFAULT_SINK@ -5%");
+    if (e->direction == GDK_SCROLL_UP)        run_shell(HDE_SH_VOLUME_UP);
+    else if (e->direction == GDK_SCROLL_DOWN) run_shell(HDE_SH_VOLUME_DOWN);
     else return FALSE;
     g_timeout_add(300, refresh_once, NULL);
     return TRUE;
@@ -495,6 +574,7 @@ GtkWidget *hde_status_new(void)
     g_signal_connect(it_vol.btn,   "scroll-event",       G_CALLBACK(on_scroll), NULL);
     g_signal_connect(it_bat.btn,   "button-press-event", G_CALLBACK(on_press), "bat");
 
+    g_bus_get(G_BUS_TYPE_SYSTEM, NULL, on_sysbus, NULL);
     g_idle_add(refresh_once, NULL);
     g_timeout_add_seconds(POLL_SECONDS, refresh_cb, NULL);
     return box;

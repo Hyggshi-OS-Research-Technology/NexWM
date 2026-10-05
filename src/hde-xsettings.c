@@ -1,0 +1,306 @@
+/* hde-xsettings — trình quản lý XSETTINGS tối giản cho HDE.
+ *
+ * Giữ selection _XSETTINGS_S<n> và phát thuộc tính _XSETTINGS_SETTINGS theo đặc tả freedesktop
+ * (https://specifications.freedesktop.org/xsettings-spec/). Mọi ứng dụng GTK2/3/4 (và Qt dùng
+ * platform theme gtk) đọc các giá trị này và ĐỔI NGAY khi chúng thay đổi — nhờ vậy Dark mode, theme,
+ * icon, font chọn trong Hyggshi Settings áp dụng tức thì cho cả ứng dụng đang mở.
+ *
+ * Nguồn giá trị (tự nạp lại khi file đổi, hoặc khi nhận SIGHUP):
+ *   ~/.config/hde/settings.ini  [settings] theme_index, gtk_theme_effective, icon_theme_name, font,
+ *                                          scale, decoration_layout
+ *   ~/.config/gtk-3.0/settings.ini [Settings] gtk-theme-name, gtk-icon-theme-name, gtk-font-name,
+ *                                          gtk-cursor-theme-name, gtk-cursor-theme-size  (giá trị dự phòng)
+ *
+ * Dùng: hde-xsettings [--replace]   (hde-session tự chạy; thoát nếu đã có trình quản lý khác,
+ *       trừ khi có --replace)
+ */
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#include <X11/Xlib.h>
+#include <X11/Xatom.h>
+#include <glib.h>
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/select.h>
+#include <sys/stat.h>
+
+enum { XS_INT = 0, XS_STRING = 1 };
+
+typedef struct {
+    const char *name;
+    int type;
+    int ival;
+    char *sval;
+    guint32 last_serial;
+} XSetting;
+
+static Display *dpy;
+static Window root, mgr_win;
+static Atom sel_atom, settings_atom, manager_atom;
+static guint32 serial;
+static GPtrArray *current;     /* XSetting* */
+static volatile sig_atomic_t stop_flag, reload_flag;
+
+static void on_term(int s) { (void)s; stop_flag = 1; }
+static void on_hup(int s) { (void)s; reload_flag = 1; }
+
+static void setting_free(gpointer p)
+{
+    XSetting *s = p;
+    g_free(s->sval);
+    g_free(s);
+}
+
+static char *kf_string(GKeyFile *kf, const char *group, const char *key)
+{
+    char *v = kf ? g_key_file_get_string(kf, group, key, NULL) : NULL;
+    if (v) {
+        g_strstrip(v);
+        if (!*v) { g_free(v); v = NULL; }
+    }
+    return v;
+}
+
+static GKeyFile *load_kf(const char *a, const char *b)
+{
+    char *path = g_build_filename(g_get_user_config_dir(), a, b, NULL);
+    GKeyFile *kf = g_key_file_new();
+    if (!g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL)) {
+        g_key_file_free(kf);
+        kf = NULL;
+    }
+    g_free(path);
+    return kf;
+}
+
+static void add_string(GPtrArray *a, const char *name, char *value /* nhận quyền sở hữu */)
+{
+    if (!value) return;
+    XSetting *s = g_new0(XSetting, 1);
+    s->name = name;
+    s->type = XS_STRING;
+    s->sval = value;
+    g_ptr_array_add(a, s);
+}
+
+static void add_int(GPtrArray *a, const char *name, int value)
+{
+    XSetting *s = g_new0(XSetting, 1);
+    s->name = name;
+    s->type = XS_INT;
+    s->ival = value;
+    g_ptr_array_add(a, s);
+}
+
+static GPtrArray *read_settings(void)
+{
+    GPtrArray *a = g_ptr_array_new_with_free_func(setting_free);
+    GKeyFile *hde = load_kf("hde", "settings.ini");
+    GKeyFile *gtk = load_kf("gtk-3.0", "settings.ini");
+
+    int style = hde ? g_key_file_get_integer(hde, "settings", "theme_index", NULL) : 0;
+    char *theme = (style == 1 || style == 2) ? kf_string(hde, "settings", "gtk_theme_effective") : NULL;
+    if (!theme) theme = kf_string(gtk, "Settings", "gtk-theme-name");
+    if (!theme) theme = g_strdup("Adwaita");
+    add_string(a, "Net/ThemeName", theme);
+
+    char *icons = kf_string(hde, "settings", "icon_theme_name");
+    if (!icons) icons = kf_string(gtk, "Settings", "gtk-icon-theme-name");
+    add_string(a, "Net/IconThemeName", icons);
+
+    char *font = kf_string(hde, "settings", "font");
+    if (!font) font = kf_string(gtk, "Settings", "gtk-font-name");
+    add_string(a, "Gtk/FontName", font);
+
+    add_string(a, "Gtk/CursorThemeName", kf_string(gtk, "Settings", "gtk-cursor-theme-name"));
+    if (gtk && g_key_file_has_key(gtk, "Settings", "gtk-cursor-theme-size", NULL))
+        add_int(a, "Gtk/CursorThemeSize", g_key_file_get_integer(gtk, "Settings", "gtk-cursor-theme-size", NULL));
+
+    char *layout = kf_string(hde, "settings", "decoration_layout");
+    add_string(a, "Gtk/DecorationLayout", layout ? layout : g_strdup("menu:minimize,maximize,close"));
+    add_int(a, "Gtk/EnableAnimations", 1);
+
+    /* Settings > Display > Scale: 0=100% (không đặt, giữ Xft.dpi của người dùng), 1=125%, 2=150%, 3=200% */
+    int scale = hde ? g_key_file_get_integer(hde, "settings", "scale", NULL) : 0;
+    static const int dpi[] = { 0, 120, 144, 192 };
+    if (scale > 0 && scale < 4) add_int(a, "Xft/DPI", dpi[scale] * 1024);
+
+    if (hde) g_key_file_free(hde);
+    if (gtk) g_key_file_free(gtk);
+    return a;
+}
+
+static XSetting *find_setting(GPtrArray *a, const char *name)
+{
+    for (guint i = 0; a && i < a->len; i++) {
+        XSetting *s = a->pdata[i];
+        if (!strcmp(s->name, name)) return s;
+    }
+    return NULL;
+}
+
+static void put_card16(GByteArray *b, guint16 v) { g_byte_array_append(b, (guint8 *)&v, 2); }
+static void put_card32(GByteArray *b, guint32 v) { g_byte_array_append(b, (guint8 *)&v, 4); }
+static void put_pad(GByteArray *b, gsize n)
+{
+    static const guint8 zero[4] = { 0, 0, 0, 0 };
+    if (n % 4) g_byte_array_append(b, zero, 4 - n % 4);
+}
+
+static void publish(GPtrArray *next)
+{
+    serial++;
+    for (guint i = 0; i < next->len; i++) {           /* giữ last-change-serial cho giá trị không đổi */
+        XSetting *n = next->pdata[i];
+        XSetting *o = find_setting(current, n->name);
+        gboolean same = o && o->type == n->type &&
+                        (n->type == XS_INT ? o->ival == n->ival : g_strcmp0(o->sval, n->sval) == 0);
+        n->last_serial = same ? o->last_serial : serial;
+    }
+    GByteArray *b = g_byte_array_new();
+    union { guint32 i; guint8 c[4]; } probe = { 1 };
+    guint8 order = probe.c[0] == 1 ? LSBFirst : MSBFirst;     /* giá trị ghi theo thứ tự byte của máy */
+    guint8 hdr[4] = { order, 0, 0, 0 };
+    g_byte_array_append(b, hdr, 4);
+    put_card32(b, serial);
+    put_card32(b, next->len);
+    for (guint i = 0; i < next->len; i++) {
+        XSetting *s = next->pdata[i];
+        gsize nl = strlen(s->name);
+        guint8 t[2] = { (guint8)s->type, 0 };
+        g_byte_array_append(b, t, 2);
+        put_card16(b, (guint16)nl);
+        g_byte_array_append(b, (const guint8 *)s->name, nl);
+        put_pad(b, nl);
+        put_card32(b, s->last_serial);
+        if (s->type == XS_INT) {
+            put_card32(b, (guint32)s->ival);
+        } else {
+            gsize vl = strlen(s->sval);
+            put_card32(b, (guint32)vl);
+            g_byte_array_append(b, (const guint8 *)s->sval, vl);
+            put_pad(b, vl);
+        }
+    }
+    XChangeProperty(dpy, mgr_win, settings_atom, settings_atom, 8, PropModeReplace, b->data, (int)b->len);
+    XFlush(dpy);
+    g_byte_array_free(b, TRUE);
+    if (current) g_ptr_array_unref(current);
+    current = next;
+
+    XSetting *th = find_setting(current, "Net/ThemeName");
+    fprintf(stderr, "hde-xsettings: published serial %u (theme=%s)\n", serial, th ? th->sval : "?");
+}
+
+static Time server_time(void)
+{
+    Atom a = XInternAtom(dpy, "_HDE_XSETTINGS_TIMESTAMP", False);
+    XChangeProperty(dpy, mgr_win, a, XA_STRING, 8, PropModeAppend, (const unsigned char *)"", 0);
+    XEvent ev;
+    XWindowEvent(dpy, mgr_win, PropertyChangeMask, &ev);
+    return ev.xproperty.time;
+}
+
+/* "Chữ ký" của file: inode + kích thước + mtime tới nano-giây (đổi 2 lần trong cùng 1 giây vẫn nhận ra;
+ * g_file_set_contents ghi bằng rename nên inode cũng đổi). */
+static guint64 file_sig(const char *a, const char *b)
+{
+    char *path = g_build_filename(g_get_user_config_dir(), a, b, NULL);
+    struct stat st;
+    guint64 sig = 0;
+    if (stat(path, &st) == 0)
+        sig = ((guint64)st.st_ino * 1000003u) ^ ((guint64)st.st_size << 32) ^
+              ((guint64)st.st_mtim.tv_sec * 1000000000u + (guint64)st.st_mtim.tv_nsec);
+    g_free(path);
+    return sig;
+}
+
+int main(int argc, char **argv)
+{
+    gboolean replace = FALSE;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--replace")) replace = TRUE;
+        else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            printf("Usage: hde-xsettings [--replace]\n");
+            return 0;
+        }
+    }
+    dpy = XOpenDisplay(NULL);
+    if (!dpy) {
+        fprintf(stderr, "hde-xsettings: cannot open X display\n");
+        return 1;
+    }
+    int screen = DefaultScreen(dpy);
+    root = RootWindow(dpy, screen);
+    char selname[32];
+    g_snprintf(selname, sizeof selname, "_XSETTINGS_S%d", screen);
+    sel_atom = XInternAtom(dpy, selname, False);
+    settings_atom = XInternAtom(dpy, "_XSETTINGS_SETTINGS", False);
+    manager_atom = XInternAtom(dpy, "MANAGER", False);
+
+    if (!replace && XGetSelectionOwner(dpy, sel_atom) != None) {
+        fprintf(stderr, "hde-xsettings: another XSETTINGS manager is running (use --replace to take over)\n");
+        XCloseDisplay(dpy);
+        return 0;
+    }
+
+    XSetWindowAttributes attrs;
+    attrs.override_redirect = True;
+    attrs.event_mask = PropertyChangeMask | StructureNotifyMask;
+    mgr_win = XCreateWindow(dpy, root, -100, -100, 1, 1, 0, CopyFromParent, InputOnly, CopyFromParent,
+                            CWOverrideRedirect | CWEventMask, &attrs);
+    Time t = server_time();
+    XSetSelectionOwner(dpy, sel_atom, mgr_win, t);
+    if (XGetSelectionOwner(dpy, sel_atom) != mgr_win) {
+        fprintf(stderr, "hde-xsettings: failed to acquire %s\n", selname);
+        return 1;
+    }
+    publish(read_settings());
+
+    XClientMessageEvent xev;
+    memset(&xev, 0, sizeof xev);
+    xev.type = ClientMessage;
+    xev.window = root;
+    xev.message_type = manager_atom;
+    xev.format = 32;
+    xev.data.l[0] = (long)t;
+    xev.data.l[1] = (long)sel_atom;
+    xev.data.l[2] = (long)mgr_win;
+    XSendEvent(dpy, root, False, StructureNotifyMask, (XEvent *)&xev);
+    XFlush(dpy);
+
+    signal(SIGTERM, on_term);
+    signal(SIGINT, on_term);
+    signal(SIGHUP, on_hup);
+
+    guint64 m1 = file_sig("hde", "settings.ini"), m2 = file_sig("gtk-3.0", "settings.ini");
+    int fd = ConnectionNumber(dpy);
+    while (!stop_flag) {
+        while (XPending(dpy)) {
+            XEvent ev;
+            XNextEvent(dpy, &ev);
+            if (ev.type == SelectionClear && ev.xselectionclear.selection == sel_atom) {
+                fprintf(stderr, "hde-xsettings: another XSETTINGS manager took over; exiting\n");
+                stop_flag = 1;
+            }
+        }
+        if (stop_flag) break;
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+        struct timeval tv = { 1, 0 };
+        if (select(fd + 1, &fds, NULL, NULL, &tv) < 0 && errno != EINTR) break;
+        guint64 n1 = file_sig("hde", "settings.ini"), n2 = file_sig("gtk-3.0", "settings.ini");
+        if (reload_flag || n1 != m1 || n2 != m2) {
+            reload_flag = 0;
+            m1 = n1;
+            m2 = n2;
+            publish(read_settings());
+        }
+    }
+    XDestroyWindow(dpy, mgr_win);
+    XCloseDisplay(dpy);
+    return 0;
+}
