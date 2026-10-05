@@ -214,6 +214,8 @@ static void on_connect_done(gboolean ok, int status, const char *out, const char
     }
     gboolean need_pw = secrets_error(err) || (c->password && status == 1 && (!err || !*err));
     if (is_secured(c->security) && need_pw && !is_enterprise(c->security)) {
+        gtk_label_set_text(GTK_LABEL(wifi_state), "Waiting for the password…");
+        settings_status(c->password ? "Wrong password for “%s”" : "“%s” needs a password", c->ssid);
         char *msg = c->password ? g_strdup("Wrong password or the network refused the connection. Try again.")
                                 : NULL;
         char *pw = ask_password(c->ssid, c->security, msg);

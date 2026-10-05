@@ -90,7 +90,8 @@ if python3 -c "import dbusmock" >/dev/null 2>&1; then
         for i in $(seq 1 40); do gdbus introspect --system --dest org.bluez --object-path / >/dev/null 2>&1 && break; sleep 0.2; done
         bz AddAdapter "'hci0'" "'HDE test PC'"
         bz AddDevice "'hci0'" "'11:22:33:44:55:66'" "'Galaxy Buds2'"
-        bz PairDevice "'hci0'" "'11:22:33:44:55:66'"
+        # dbusmock < 0.28 (Ubuntu 22.04): PairDevice(adapter, address, class) — có thêm tham số Class
+        bz PairDevice "'hci0'" "'11:22:33:44:55:66'" || bz PairDevice "'hci0'" "'11:22:33:44:55:66'" 2360344
         bz ConnectDevice "'hci0'" "'11:22:33:44:55:66'"
         bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" "'MX Keys'"
         bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:02'" "'Pixel 8'"
@@ -227,7 +228,7 @@ else
 fi
 "$B/hde-settings" bluetooth; sleep 2.5; shot 07-settings-bluetooth
 if [ -n "$BLUEZ_MOCK" ]; then
-    bz PairDevice "'hci0'" "'AA:BB:CC:DD:EE:01'"; sleep 1.5
+    bz PairDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" || bz PairDevice "'hci0'" "'AA:BB:CC:DD:EE:01'" 9536; sleep 1.5
     shot 07b-bluetooth-live-update
     grep -v "^$" "$OUT/bluez-mock.log" | tail -n 6 | cut -c1-300 | sed 's/^/INFO: bluez-mock: /' >> "$OUT/results.txt"
     tr ',' '\n' < "$OUT/bluez-objects.txt" | grep -E "dev_11|Paired|Icon|Connected" | head -n 8 | cut -c1-200 | sed 's/^/INFO: bluez-objects: /' >> "$OUT/results.txt"
