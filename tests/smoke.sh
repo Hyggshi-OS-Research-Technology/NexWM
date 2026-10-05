@@ -240,7 +240,9 @@ if [ -n "$BLUEZ_MOCK" ]; then
     if bprop AA_BB_CC_DD_EE_02 Paired | grep -q true; then
         pass "Settings pairs a Bluetooth device (Device1.Pair)"
         if bprop AA_BB_CC_DD_EE_02 Trusted | grep -q true; then pass "paired device is marked trusted (auto-reconnect)"; else fail "paired device is marked trusted"; fi
-        if bprop AA_BB_CC_DD_EE_02 Connected | grep -q true; then pass "Settings connects the device after pairing"; else fail "Settings connects the device after pairing"; fi
+        # Device1.Connect của dbusmock chỉ phát PropertiesChanged, không đổi giá trị Get -> kiểm tra lời gọi trong log mock
+        if grep -Eq "^[0-9.]+ Connect( |$)" "$OUT/bluez-mock.log"; then pass "Settings connects the device after pairing (Device1.Connect)"
+        else fail "Settings connects the device after pairing (Device1.Connect)"; fi
     else
         fail "Settings pairs a Bluetooth device (Pair button at 1078,556 — see shot 07c)"
         grep "hde-settings: bt device" "$OUT/settings.log" | tail -n 3 | cut -c1-400 | sed 's/^/INFO: /' >> "$OUT/results.txt"
