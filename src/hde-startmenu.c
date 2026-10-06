@@ -1597,7 +1597,14 @@ static void place_window(int *ox, int *oy)
         gdk_window_get_origin(pw, &px, &py);
         ph = gdk_window_get_height(pw);
     }
-    panel_top = pw && py < mon.y + mon.height / 2;
+    if (hde_wl_is_layer(GTK_WINDOW(win))) {
+        /* Wayland: every surface has its own coordinates (origin 0,0): ask the panel's settings instead */
+        int t = 0, b = 0;
+        hde_panel_reserved(&t, &b);
+        panel_top = t > 0;
+        py = panel_top ? mon.y : mon.y + mon.height - b;
+        ph = panel_top ? t : b;
+    } else panel_top = pw && py < mon.y + mon.height / 2;
     if (anchor_w && gtk_widget_get_visible(anchor_w) && gtk_widget_get_realized(anchor_w)) {
         GtkAllocation a;
         gtk_widget_get_allocation(anchor_w, &a);

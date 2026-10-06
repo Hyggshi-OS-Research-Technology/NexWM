@@ -45,7 +45,7 @@ info() { echo "INFO: $*" | tee -a "$OUT/results.txt"; }
 check() { desc=$1; shift; if "$@" >/dev/null 2>&1; then pass "$desc"; else fail "$desc"; fi; }
 LOG="$XDG_CACHE_HOME/hde/session.log"
 INI="$XDG_CONFIG_HOME/hde/settings.ini"
-shot() { grim "$OUT/shot-$1.png" 2>/dev/null || info "grim could not take shot $1"; }
+shot() { grim "$OUT/shot-wl-$1.png" 2>/dev/null || info "grim could not take shot $1"; }   # wl-: not mixed up with make check's
 wait_log() { i=0; while [ "$i" -lt "${2:-60}" ]; do grep -q "$1" "$LOG" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 nlog() { nlog_n=$(grep -c "$1" "$LOG" 2>/dev/null); echo "${nlog_n:-0}"; }
 wait_more() { i=0; while [ "$i" -lt "${3:-60}" ]; do [ "$(nlog "$1")" -gt "$2" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
@@ -92,10 +92,10 @@ check "the panel is a layer-shell surface at the bottom" grep -q "hde-panel: sta
 check "the taskbar uses wlr-foreign-toplevel-management" grep -q "hde-panel: taskbar: Wayland (wlr-foreign-toplevel-management v[0-9])" "$LOG"
 check "the desktop is on the background layer" grep -q "hde-desktop: Wayland: desktop on the background layer" "$LOG"
 shot 01-session
-if [ -f "$OUT/shot-01-session.png" ]; then
-    sz=$(identify -format "%wx%h" "$OUT/shot-01-session.png" 2>/dev/null); W=${sz%x*}; H=${sz#*x}
+if [ -f "$OUT/shot-wl-01-session.png" ]; then
+    sz=$(identify -format "%wx%h" "$OUT/shot-wl-01-session.png" 2>/dev/null); W=${sz%x*}; H=${sz#*x}
     info "screen $sz"
-    pb=$(pixel "$OUT/shot-01-session.png" "$((W / 2))" "$((H - 4))"); pd=$(pixel "$OUT/shot-01-session.png" "$((W / 2))" "$((H / 2))")
+    pb=$(pixel "$OUT/shot-wl-01-session.png" "$((W / 2))" "$((H - 4))"); pd=$(pixel "$OUT/shot-wl-01-session.png" "$((W / 2))" "$((H / 2))")
     case "$pb" in "0 0 0"|"") fail "the panel is drawn at the bottom of the screen (pixel $pb)" ;; *) pass "the panel is drawn at the bottom of the screen (pixel $pb)" ;; esac
     case "$pd" in "0 0 0"|"") fail "the desktop is drawn behind everything (pixel $pd)" ;; *) pass "the desktop is drawn behind everything (pixel $pd)" ;; esac
 fi
@@ -105,8 +105,11 @@ m0=$(nlog "start menu: shown")
 "$B/hde-panel" --menu
 if wait_more "start menu: shown" "$m0" 50; then pass "hde-panel --menu (D-Bus) opens the Start menu"; else fail "hde-panel --menu (D-Bus) opens the Start menu"; fi
 check "... a layer-shell surface with the keyboard" grep -q "start menu: shown (modern) .*keyboard (layer shell)" "$LOG"
+my=$(sed -n 's/.*start menu: shown (modern) at [0-9]*,\([0-9]*\) [0-9]*x\([0-9]*\).*/\1 \2/p' "$LOG" | tail -n 1)
+if [ -n "$my" ] && [ "${my% *}" -gt 60 ]; then pass "... right above the panel at the bottom (y ${my% *}, ${my#* } high)"
+else fail "... right above the panel at the bottom (${my:-no position})"; fi
 sleep 1; shot 02-start-menu
-wtype "sett"; sleep 1.5
+wtype -s 400 -d 60 "sett"; sleep 1.5      # -s: a new virtual keyboard's keymap reaches the app first
 if grep -q "start menu: search 'sett': [1-9][0-9]* result(s), best: Hyggshi Settings" "$LOG"; then pass "typing in the menu searches (sett -> Hyggshi Settings)"
 else fail "typing in the menu searches ($(grep 'start menu: search' "$LOG" | tail -n 1))"; fi
 shot 03-start-menu-search
@@ -191,12 +194,24 @@ printf '[settings]\n' > "$INI"; sleep 2
 
 # ---------- 7. logout ----------
 "$B/hde-session" logout >/dev/null 2>&1
-i=0; while running labwc && [ $i -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
-check "logging out stops the session and labwc" sh -c "! pgrep -x labwc && ! pgrep -x hde-panel"
+# labwc is this shell's child ($START: hde-start -> exec hde-session -> exec labwc): reap it once it exited (a zombie
+# still matches pgrep)
+i=0
+while [ $i -lt 75 ]; do
+    st=$(awk '{print $3}' "/proc/$START/stat" 2>/dev/null)
+    if [ -z "$st" ] || [ "$st" = Z ]; then break; fi
+    sleep 0.2; i=$((i + 1))
+done
+st=$(awk '{print $3}' "/proc/$START/stat" 2>/dev/null)
+if [ -z "$st" ] || [ "$st" = Z ]; then wait "$START" 2>/dev/null; fi
+if ! pgrep -x labwc >/dev/null 2>&1 && ! pgrep -x hde-panel >/dev/null 2>&1; then pass "logging out stops the session and labwc"
+else
+    fail "logging out stops the session and labwc (still running: $(pgrep -a 'labwc|hde-' 2>/dev/null | tr '\n' ';'))"
+    tail -n 15 "$LOG" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+fi
 check "... as the log says" grep -q "hde-session: stopping the Wayland compositor" "$LOG"
 cp "$LOG" "$OUT/session.log" 2>/dev/null
 grep -E "(Gtk|GLib|Gdk)-(CRITICAL|WARNING)" "$LOG" | sort -u | head -n 8 | sed 's/^/INFO: warning: /' >> "$OUT/results.txt"
 grep -E "^hde-(panel|session|desktop): .*(taskbar|layer|Wayland)" "$LOG" | head -n 8 | sed 's/^/INFO: /' >> "$OUT/results.txt"
-wait "$START" 2>/dev/null
 [ "$FAILS" -gt 100 ] && FAILS=100
 exit "$FAILS"
