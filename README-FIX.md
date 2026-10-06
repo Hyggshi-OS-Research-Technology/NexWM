@@ -366,7 +366,8 @@ classic direction scroll up does.
   - only one screen connected: the window says so (connect HDMI / DisplayPort / USB-C / VGA first).
   - **Plugging in a screen opens the window** (`display_connect=ask`; or `extend`, `duplicate`, `second`, `nothing` —
     *Settings → Display → When a screen is plugged in*). **Unplugging the screen in use turns the computer's screen back
-    on**, and an unplugged screen never stays part of the desktop (`hde-xsettings`, HDE's display service).
+    on**, and an unplugged screen never stays part of the desktop (`hde-xsettings`, HDE's display service). A projector
+    forced on by hand while it reports "disconnected" (VGA without EDID, `xrandr --output VGA-1 --auto`) is left alone.
   - The choice is remembered for those screens and comes back at the next login.
   - The panel moves to the primary screen and the desktop covers the new size after every change; each screen gets the
     whole wallpaper.

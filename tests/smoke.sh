@@ -726,6 +726,9 @@ if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; th
     sed -i 's/^wm=.*/wm=openbox/' "$SETTINGS_INI"
     "$B/hde-session" wm >/dev/null 2>&1; sleep 7
     check "live WM switch: Openbox is running" pgrep -x openbox
+    "$B/hde-settings" --about > "$OUT/about-openbox.txt" 2>&1
+    echo "INFO: memory with Openbox: $(sed -n 's/^Desktop memory now: //p' "$OUT/about-openbox.txt"); $(grep -E '^  (openbox|hde-panel|hde-desktop) ' "$OUT/about-openbox.txt" | tr -s ' ' | tr '\n' ';')" \
+        | tee -a "$OUT/results.txt"
     check "live WM switch: Metacity has stopped" sh -c "! pgrep -x metacity"
     check "panel survives the WM switch" running hde-panel
     if [ -f "$XDG_CONFIG_HOME/openbox/rc.xml" ]; then
