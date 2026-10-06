@@ -60,6 +60,7 @@ int display_project_main(int argc, char **argv);   /* hde-settings --project: th
 int display_cli_displays(void);                    /* --displays */
 int display_cli_mode(const char *id);              /* --display-mode pc|duplicate|extend|second */
 int display_cli_brightness(const char *arg);       /* --brightness [+N|-N|N] */
+int display_cli_night_light(const char *arg);      /* --night-light [on|off|toggle] */
 int about_cli(void);                               /* --about */
 int about_window_main(void);                       /* --about-window: the "About HDE" window (after gtk_init) */
 int wayland_config_cli(int argc, char **argv);     /* --wayland-config [DIR] [--reload]: labwc's configuration */

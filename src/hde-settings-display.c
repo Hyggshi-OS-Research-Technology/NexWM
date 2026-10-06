@@ -845,6 +845,41 @@ int display_cli_brightness(const char *arg)
     return rc;
 }
 
+/* hde-settings --night-light [on|off|toggle]: the Night Light tile of the Control Center */
+int display_cli_night_light(const char *arg)
+{
+    gboolean cur = cfg_get_bool("night_light", FALSE), on = cur;
+    if (arg) {
+        if (!strcmp(arg, "on")) on = TRUE;
+        else if (!strcmp(arg, "off")) on = FALSE;
+        else if (!strcmp(arg, "toggle")) on = !cur;
+        else { fprintf(stderr, "hde-settings: --night-light expects on, off or toggle\n"); return 2; }
+        cfg_set_bool("night_light", on);
+    }
+    int k = CLAMP(cfg_get_int("night_light_temperature", 4000), 1500, 6000);
+    Display *d = g_getenv("WAYLAND_DISPLAY") && *g_getenv("WAYLAND_DISPLAY") ? NULL : cli_display();
+    if (!d) {
+        printf("Night Light: %s (needs an X11 session: it uses the gamma ramps of the screens)\n", on ? "on" : "off");
+        return arg && on ? 1 : 0;
+    }
+    int rc = 0;
+    if (arg) {
+        hde_gamma_set_night_kelvin(d, on ? k : 0);
+        int n = hde_gamma_apply(d, 0);
+        if (on && n == 0) {
+            printf("Night Light: on, but the screen's driver offers no gamma ramps\n");
+            rc = 1;
+        }
+    }
+    if (!rc) {
+        if (on) printf("Night Light: on, %d K\n", k);
+        else printf("Night Light: off\n");
+    }
+    fprintf(stderr, "hde-settings: night light %s (%d K)\n", on ? "on" : "off", on ? k : 0);
+    XCloseDisplay(d);
+    return rc;
+}
+
 /* ================================================================= the Display page */
 static GtkWidget *dp_tiles[HDE_PROJECT_N], *dp_screens, *dp_layout_note, *dp_bright, *dp_bright_row;
 static guint dp_bright_timer;

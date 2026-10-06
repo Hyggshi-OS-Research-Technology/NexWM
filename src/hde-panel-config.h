@@ -13,13 +13,19 @@
  *   menu_show_sidebar / _places / _favorites / _recent / _descriptions = true|false   menu_hover_switch=true
  *   menu_icon_size=32 (24|32|48)           menu_size=normal|compact|large
  *   menu_favorites=firefox-esr.desktop;... (missing: a sensible default list, see hde_menu_default_favorites)
- *   menu_button_label=Menu                 menu_button_icon=menu|os|hde|none|<icon name>
+ *   menu_button_label=Menu                 menu_button_icon=os|menu|hde|none|<icon name>|<image file>
+ *                                          (os: the logo of the system, the default; menu: the ☰ sign)
+ *   cc_wifi / cc_bluetooth / cc_airplane / cc_dnd / cc_dark / cc_night_light / cc_power_mode / cc_brightness /
+ *   cc_volume / cc_notifications = true    what the Control Center shows (src/hde-control.h)
+ *   cc_status_click=true                   clicking the network / Bluetooth / volume icons opens the Control Center
+ *                                          (false: the old actions — settings page, mute)
  */
 #ifndef HDE_PANEL_CONFIG_H
 #define HDE_PANEL_CONFIG_H
 
 #include <glib.h>
 
+#define HDE_MENU_ICON_DEFAULT "os"
 #define HDE_PANEL_SIZE_DEFAULT 34
 #define HDE_PANEL_SIZE_MIN 24
 #define HDE_PANEL_SIZE_MAX 64
@@ -36,7 +42,8 @@ typedef struct {
     int taskbar_group;              /* 0 never, 1 when space runs out, 2 always */
     gboolean clock_24h, clock_date, clock_seconds;
     char *menu_label;               /* text of the Start button ("" = icon only) */
-    char *menu_icon;                /* "menu" (the ☰ sign), "os" (logo of the system), "hde", "none", or an icon name */
+    char *menu_icon;                /* "os" (logo of the system), "menu" (the ☰ sign), "hde", "none", an icon name or the
+                                       path of an image file */
     char **launchers;               /* pinned apps (desktop file ids), never NULL */
     char **applets;                 /* extension ids, never NULL */
 
@@ -80,6 +87,17 @@ void     hde_cfg_list_remove(const char *key, const char *id);
 void     hde_cfg_list_move(const char *key, const char *id, int delta);
 void     hde_cfg_set_string(const char *key, const char *value);   /* NULL removes the key */
 void     hde_cfg_set_bool(const char *key, gboolean value);
+gboolean hde_cfg_get_bool(const char *key, gboolean def);
+int      hde_cfg_get_int(const char *key, int def);
+char    *hde_cfg_get_string(const char *key, const char *def);     /* g_free; NULL if missing and def is NULL */
+
+/* What the Control Center shows (Settings > Panel > Control Center). */
+typedef struct {
+    gboolean wifi, bluetooth, airplane, dnd, dark, night, power_mode;     /* quick toggles */
+    gboolean brightness, volume, notifications;
+    gboolean status_click;          /* the status icons open it */
+} HdeCcPrefs;
+void     hde_cc_prefs_load(HdeCcPrefs *p);
 
 /* Default favorites of the Start menu: web browser, files, terminal, settings, software center, text editor (the
  * ones installed). Returns desktop file ids (g_strfreev). Needs GIO (it is in libgio, always there with GTK). */

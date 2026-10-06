@@ -11,7 +11,7 @@
  *  Ctrl + the same keys          the same, copied to the clipboard only (no file)
  *  Super+L  lock screen          Super+E  file manager            Super+D  show desktop
  *  Super+R, Alt+F2  Run dialog   Super+S  app search              Ctrl+Alt+T  terminal
- *  Ctrl+Alt+Delete  Session / Power dialog
+ *  Super+A  Control Center       Super+N  notifications           Ctrl+Alt+Delete  Session / Power dialog
  *
  * The Super key is read through XInput2 raw events (no grab), so the Super+<key> bindings of the WM and
  * of applications keep working; the menu only opens when Super is pressed and released with no other key/button.
@@ -25,7 +25,8 @@
  * bindings of the labwc compositor run in the "HDE (Wayland)" session (written by hde-settings --wayland-config).
  * NAME: volume-up volume-down volume-mute mic-mute brightness-up brightness-down screenshot screenshot-area
  * screenshot-window clipboard clipboard-area clipboard-window project play next previous stop lock files terminal
- * desktop run search power menu. The panel is told on D-Bus there (org.hyggshi.HDE.Panel, through gdbus).
+ * desktop run search power menu control-center notifications battery. The panel is told on D-Bus there
+ * (org.hyggshi.HDE.Panel, through gdbus).
  *
  * hde-session starts hde-hotkeys BEFORE the window manager (and waits for HDE_READY_FD), so these keys belong
  * to HDE even when the WM's own config binds them too (e.g. Openbox rc.xml: Print -> scrot, W-e -> kfmclient,
@@ -326,7 +327,7 @@ enum {
     A_SHOT_FULL, A_SHOT_AREA, A_SHOT_WIN, A_CLIP_FULL, A_CLIP_AREA, A_CLIP_WIN,
     A_VOL_MUTE, A_VOL_DOWN, A_VOL_UP, A_MIC_MUTE, A_BRIGHT_UP, A_BRIGHT_DOWN,
     A_PLAY, A_NEXT, A_PREV, A_STOP,
-    A_LOCK, A_FILES, A_TERMINAL, A_DESKTOP, A_RUN, A_SEARCH, A_POWER, A_PROJECT
+    A_LOCK, A_FILES, A_TERMINAL, A_DESKTOP, A_RUN, A_SEARCH, A_POWER, A_PROJECT, A_CONTROL, A_NOTIFY, A_BATTERY
 };
 enum { G_ALWAYS, G_FKEYS, G_FKEYS_DISPLAY, G_MEDIA, G_SHORTCUTS };
 
@@ -367,6 +368,8 @@ static const Binding bindings[] = {
     { XK_r, Mod4Mask, A_RUN, G_SHORTCUTS, "Super+R" },
     { XK_s, Mod4Mask, A_SEARCH, G_SHORTCUTS, "Super+S" },
     { XK_p, Mod4Mask, A_PROJECT, G_SHORTCUTS, "Super+P" },                /* also what many laptops' Fn key sends */
+    { XK_a, Mod4Mask, A_CONTROL, G_SHORTCUTS, "Super+A" },                /* the Control Center, like Windows 11 */
+    { XK_n, Mod4Mask, A_NOTIFY, G_SHORTCUTS, "Super+N" },
     { XK_F2, Mod1Mask, A_RUN, G_SHORTCUTS, "Alt+F2" },
     { XK_t, ControlMask | Mod1Mask, A_TERMINAL, G_SHORTCUTS, "Ctrl+Alt+T" },
     { XK_Delete, ControlMask | Mod1Mask, A_POWER, G_SHORTCUTS, "Ctrl+Alt+Delete" },
@@ -547,6 +550,9 @@ static void do_action(int act, Time t)
     case A_RUN: panel_cmd(HDE_CMD_RUN, t); break;
     case A_SEARCH: panel_cmd(HDE_CMD_SEARCH, t); break;
     case A_POWER: panel_cmd(HDE_CMD_POWER, t); break;
+    case A_CONTROL: panel_cmd(HDE_CMD_CONTROL_CENTER, t); break;
+    case A_NOTIFY: panel_cmd(HDE_CMD_NOTIFICATIONS, t); break;
+    case A_BATTERY: panel_cmd(HDE_CMD_BATTERY, t); break;
     default: break;
     }
 }
@@ -829,7 +835,8 @@ static int run_action(const char *name)
         { "clipboard-area", A_CLIP_AREA }, { "clipboard-window", A_CLIP_WIN }, { "project", A_PROJECT },
         { "play", A_PLAY }, { "next", A_NEXT }, { "previous", A_PREV }, { "stop", A_STOP }, { "lock", A_LOCK },
         { "files", A_FILES }, { "terminal", A_TERMINAL }, { "desktop", A_DESKTOP }, { "run", A_RUN },
-        { "search", A_SEARCH }, { "power", A_POWER },
+        { "search", A_SEARCH }, { "power", A_POWER }, { "control-center", A_CONTROL }, { "notifications", A_NOTIFY },
+        { "battery", A_BATTERY },
     };
     debug_on = getenv("HDE_DEBUG") != NULL;
     load_config();

@@ -44,7 +44,7 @@ GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE -DHDE_DATADIR=\"$(PREFIX)/sh
 HDE_HEADERS=$(wildcard src/*.h)
 PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-notify.c src/hde-search.c src/hde-theme.c \
           src/hde-input.c src/hde-startmenu.c src/hde-applets.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c \
-          src/hde-wl.c $(WLTASK_SRC)
+          src/hde-wl.c src/hde-run.c src/hde-flyout.c src/hde-control.c src/hde-battery.c src/hde-power.c $(WLTASK_SRC)
 DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c src/hde-panel-config.c src/hde-wl.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
@@ -100,6 +100,9 @@ $(BUILD)/randr-plan-test: tests/randr-plan-test.c src/hde-randr.c src/hde-randr.
 # The SVG path reader that draws the distribution logos of data/logos (tests/svgpath-test.c): run by `make check`
 $(BUILD)/svgpath-test: tests/svgpath-test.c src/hde-svgpath.c src/hde-svgpath.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+# The batteries of src/hde-power.c with fake /sys/class/power_supply trees (tests/power-test.c): run by `make check`
+$(BUILD)/power-test: tests/power-test.c src/hde-power.c src/hde-power.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(GLIBX_CFLAGS) -o $@ $(filter %.c,$^) $(GLIBX_LIBS) -lm
 $(BUILD):
 	mkdir -p $(BUILD)
 $(VERSION_H): FORCE | $(BUILD)
@@ -115,7 +118,7 @@ backend/x11/x11_backend.o: src/hde-commands.h
 backend/wayland/wayland_backend.o: src/hde-commands.h
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
-check: all $(BUILD)/randr-plan-test $(BUILD)/svgpath-test
+check: all $(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test
 	BUILD=$(BUILD) sh tests/smoke.sh
 
 clean:

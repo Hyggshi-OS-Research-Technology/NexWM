@@ -4,8 +4,14 @@
  * bottom or top of the screen, height, transparency, which items are shown, pinned apps, extensions, the clock, the
  * Start button and the Start menu layout (modern = Linux Mint style, kickoff = KDE style, classic drop-down).
  *
+ * The network, Bluetooth and volume icons and the bell open the Control Center (src/hde-control.c: quick toggles,
+ * Wi-Fi and Bluetooth lists, brightness, volume and the apps' sound, notifications); the battery icon opens the
+ * battery panel (src/hde-battery.c). Right-click the panel or the Start button: a menu with icons (Panel Settings,
+ * Start Menu Settings, position, size, items, the Start button's icon and layout, Control Center, Task Manager, ...).
+ *
  * Controlled from other processes:
- *   hde-panel --menu | --search | --run | --power | --osd-volume | --refresh
+ *   hde-panel --menu | --search | --run | --power | --osd-volume | --refresh | --control-center[=PAGE] |
+ *             --notifications | --battery
  * through an X ClientMessage on X11 (hde-ipc.h, used by hde-hotkeys for the Super key and the OSDs) and on D-Bus
  * everywhere (org.hyggshi.HDE.Panel; the Wayland session's key bindings use it).
  * On Wayland (the "HDE (Wayland)" session) the panel is a layer-shell surface and the taskbar uses
@@ -33,6 +39,10 @@
 #include "hde-applets.h"
 #include "hde-osinfo.h"
 #include "hde-wl.h"
+#include "hde-control.h"
+#include "hde-battery.h"
+#include "hde-flyout.h"
+#include "hde-run.h"
 #ifdef HAVE_WAYLAND_TASKBAR
 #include "hde-wltaskbar.h"
 #endif
@@ -470,6 +480,8 @@ static void toggle_menu(guint32 time)
     DBG("toggle menu: search_visible=%d menu_mapped=%d", hde_search_visible(),
         classic_menu() ? app_menu && gtk_widget_get_mapped(app_menu) : hde_startmenu_visible());
     if (hde_search_visible()) { hde_search_hide(); return; }
+    hde_control_hide();
+    hde_battery_hide();
     /* Wayland: a GtkMenu needs a real click to pop up (an input serial); the Super key comes as a command, so the
      * classic layout opens the modern menu there */
     if (!classic_menu() || hde_is_wayland()) {
@@ -487,6 +499,8 @@ static void toggle_menu(guint32 time)
 static void on_menu_clicked(GtkButton *btn, gpointer data)
 {
     (void)btn; (void)data;
+    hde_control_hide();
+    hde_battery_hide();
     if (!classic_menu()) {
         hde_startmenu_toggle(menu_btn, panel_win, gtk_get_current_event_time());
         return;
@@ -650,6 +664,42 @@ static void on_show_desktop(GtkButton *btn, gpointer data)
     wnck_screen_toggle_showing_desktop(scr, !wnck_screen_get_showing_desktop(scr));
 }
 
+/* ---------- Control Center and battery panel (one pop-up at a time) ---------- */
+static GtkWidget *status_anchor(void)
+{
+    if (status_area && gtk_widget_get_visible(status_area)) return status_area;
+    if (notify_btn && gtk_widget_get_visible(notify_btn)) return notify_btn;
+    return clock_btn && gtk_widget_get_visible(clock_btn) ? clock_btn : NULL;
+}
+
+static void close_popups(void)
+{
+    if (hde_startmenu_visible()) hde_startmenu_hide();
+    if (cal_win && gtk_widget_get_visible(cal_win)) gtk_widget_hide(cal_win);
+}
+
+/* toggle: a second click (or Super+A) closes it; else it switches to the page */
+static void open_cc_page(GtkWidget *anchor, int page, gboolean toggle)
+{
+    if (toggle && hde_control_visible()) { hde_control_hide(); return; }
+    close_popups();
+    hde_battery_hide();
+    hde_control_show(anchor ? anchor : status_anchor(), panel_win, page);
+}
+
+static void open_cc(GtkWidget *anchor, int page) { open_cc_page(anchor, page, TRUE); }
+
+static void open_battery(GtkWidget *anchor)
+{
+    if (hde_battery_visible()) { hde_battery_hide(); return; }
+    close_popups();
+    hde_control_hide();
+    hde_battery_show(anchor ? anchor : status_anchor(), panel_win);
+}
+
+static void cc_show_battery(void) { open_battery(NULL); }
+static void bell_clicked(GtkWidget *bell, gpointer d) { (void)d; open_cc(bell, HDE_CC_NOTIFICATIONS); }
+
 /* ---------- command channel: X ClientMessage (hde-ipc.h) and D-Bus ---------- */
 typedef struct { long cmd, arg; guint32 time; } PanelCmd;
 
@@ -674,6 +724,14 @@ static gboolean run_panel_cmd(gpointer p)
         break;
     case HDE_CMD_REFRESH: hde_status_refresh(); break;
     case HDE_CMD_SHOW_DESKTOP: on_show_desktop(NULL, NULL); break;
+    case HDE_CMD_CONTROL_CENTER:
+        open_cc_page(NULL, (int)CLAMP(c->arg, 0, HDE_CC_NOTIFICATIONS), c->arg <= 0);
+        break;
+    case HDE_CMD_NOTIFICATIONS:                 /* Super+N: again on the main page closes it */
+        open_cc_page(notify_btn && gtk_widget_get_visible(notify_btn) ? notify_btn : NULL, HDE_CC_NOTIFICATIONS,
+                     hde_control_page() == HDE_CC_MAIN);
+        break;
+    case HDE_CMD_BATTERY: open_battery(NULL); break;
     default: break;
     }
     g_free(c);
@@ -873,9 +931,23 @@ static void on_screens_changed(GdkScreen *s, gpointer d)
 
 /* clicking the panel closes the Start menu (on Wayland the menu does not hold the pointer; on X11 it does, and
  * such clicks reach the menu instead) — except the Start button itself, which toggles it */
+static gboolean press_inside(GtkWidget *w, double x, double y)
+{
+    if (!w || !gtk_widget_get_visible(w)) return FALSE;
+    int bx = -1, by = -1;
+    if (!gtk_widget_translate_coordinates(panel_win, w, (int)x, (int)y, &bx, &by)) return FALSE;
+    return bx >= 0 && by >= 0 && bx < gtk_widget_get_allocated_width(w) && by < gtk_widget_get_allocated_height(w);
+}
+
 static void on_panel_pressed(GtkGestureMultiPress *g, int n, double x, double y, gpointer d)
 {
     (void)g; (void)n; (void)d;
+    /* the status icons and the bell toggle the Control Center / battery panel themselves */
+    if ((hde_control_visible() || hde_battery_visible()) && !press_inside(status_area, x, y) &&
+        !press_inside(notify_btn, x, y)) {
+        hde_control_hide();
+        hde_battery_hide();
+    }
     if (!hde_startmenu_visible()) return;
     int bx = -1, by = -1;
     GtkAllocation a;
@@ -960,6 +1032,9 @@ static void load_css(void)
     char *menu_css = hde_startmenu_css(dark, ti.accent);
     g_string_append(s, menu_css);
     g_free(menu_css);
+    char *cc_css = hde_control_css(dark, ti.accent);
+    g_string_append(s, cc_css);
+    g_free(cc_css);
     if (!panel_css) {
         panel_css = gtk_css_provider_new();
         gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(panel_css),
@@ -1006,6 +1081,24 @@ static void update_menu_button(void)
     } else if (!g_strcmp0(icon, "hde")) {
         s = hde_hde_logo_surface(px, scale, "#ffffff");
         how = g_strdup("HDE logo");
+    } else if (icon && (icon[0] == '/' || icon[0] == '~')) {
+        /* a picture chosen in Settings > Start Menu (PNG, SVG, JPEG, ...) */
+        char *path = icon[0] == '~' ? g_build_filename(g_get_home_dir(), icon + 1, NULL) : g_strdup(icon);
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, px * scale, px * scale, TRUE, NULL);
+        if (pb) {
+            s = gdk_cairo_surface_create_from_pixbuf(pb, scale, NULL);
+            g_object_unref(pb);
+            how = g_strdup_printf("picture %s", path);
+        } else how = g_strdup_printf("picture %s (cannot be read: the menu sign instead)", path);
+        g_free(path);
+        if (!s) {
+            gtk_image_set_from_icon_name(GTK_IMAGE(menu_btn_img), "open-menu-symbolic", GTK_ICON_SIZE_LARGE_TOOLBAR);
+            gtk_image_set_pixel_size(GTK_IMAGE(menu_btn_img), px);
+            gtk_widget_show(menu_btn_img);
+            DBG("start button: %s, %s", label, how);
+            g_free(how);
+            return;
+        }
     }
     if (s) {
         gtk_image_set_from_surface(GTK_IMAGE(menu_btn_img), s);
@@ -1018,6 +1111,243 @@ static void update_menu_button(void)
     gtk_widget_show(menu_btn_img);
     DBG("start button: %s, %s", label, how ? how : icon);
     g_free(how);
+}
+
+/* ---------- right-click menus of the panel and of the Start button (with icons) ---------- */
+static void pm_settings(GtkMenuItem *i, gpointer page) { (void)i; hde_open_settings(page); }
+static void pm_cc(GtkMenuItem *i, gpointer d) { (void)i; (void)d; open_cc_page(NULL, HDE_CC_MAIN, FALSE); }
+static void pm_open_menu(GtkMenuItem *i, gpointer d) { (void)i; (void)d; toggle_menu(gtk_get_current_event_time()); }
+static void pm_power(GtkMenuItem *i, gpointer d) { (void)i; (void)d; show_power_dialog(NULL, NULL); }
+
+static void pm_about(GtkMenuItem *i, gpointer d)
+{
+    (void)i; (void)d;
+    const char *args[] = { "--about-window", NULL };
+    hde_run_settings(args, 3600, NULL, NULL);
+}
+
+static const char *const task_managers[] = { "gnome-system-monitor", "mate-system-monitor", "xfce4-taskmanager",
+                                             "plasma-systemmonitor", "ksysguard", "lxtask", "qps", NULL };
+
+static void pm_task_manager(GtkMenuItem *i, gpointer d) { (void)i; (void)d; hde_launch_first(task_managers); }
+
+/* radio item: key=value when it becomes the active one */
+static void pm_radio(GtkCheckMenuItem *i, gpointer d)
+{
+    (void)d;
+    if (!gtk_check_menu_item_get_active(i)) return;
+    const char *key = g_object_get_data(G_OBJECT(i), "hde-key"), *value = g_object_get_data(G_OBJECT(i), "hde-value");
+    if (key && value) {
+        DBG("menu: %s=%s", key, value);
+        hde_cfg_set_string(key, value);
+    }
+}
+
+static void pm_check(GtkCheckMenuItem *i, gpointer key)
+{
+    DBG("menu: %s=%s", (const char *)key, gtk_check_menu_item_get_active(i) ? "true" : "false");
+    hde_cfg_set_bool(key, gtk_check_menu_item_get_active(i));
+}
+
+static GtkWidget *pm_item(GtkWidget *m, const char *icon, const char *label, GCallback cb, gpointer data)
+{
+    GtkWidget *it = hde_menu_item(icon, label);
+    g_signal_connect(it, "activate", cb, data);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), it);
+    return it;
+}
+
+static GtkWidget *pm_radio_item(GtkWidget *m, GtkWidget *group, GtkWidget *image, const char *label, const char *key,
+                                const char *value, gboolean active)
+{
+    GtkWidget *it = hde_menu_radio_item(group, image, label, active);
+    g_object_set_data_full(G_OBJECT(it), "hde-key", g_strdup(key), g_free);
+    g_object_set_data_full(G_OBJECT(it), "hde-value", g_strdup(value), g_free);
+    g_signal_connect(it, "toggled", G_CALLBACK(pm_radio), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), it);
+    return it;
+}
+
+static void pm_check_item(GtkWidget *m, const char *label, const char *key, gboolean active)
+{
+    GtkWidget *it = hde_menu_check_item(label, active);
+    g_signal_connect(it, "toggled", G_CALLBACK(pm_check), (gpointer)key);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), it);
+}
+
+static void pm_log(GtkWidget *m, const char *what)
+{
+    if (!debug_on) return;
+    GString *s = g_string_new(NULL);
+    GList *items = gtk_container_get_children(GTK_CONTAINER(m));
+    for (GList *l = items; l; l = l->next) {
+        GtkWidget *c = gtk_bin_get_child(GTK_BIN(l->data));
+        GList *parts = c && GTK_IS_BOX(c) ? gtk_container_get_children(GTK_CONTAINER(c)) : NULL;
+        for (GList *p = parts; p; p = p->next)
+            if (GTK_IS_LABEL(p->data)) g_string_append_printf(s, "%s%s", s->len ? " | " : "", gtk_label_get_text(p->data));
+        g_list_free(parts);
+    }
+    g_list_free(items);
+    DBG("%s: %s", what, s->str);
+    g_string_free(s, TRUE);
+}
+
+/* the Start button's look: the logo of the system, the HDE logo, the ☰ sign, an icon, nothing */
+static void add_button_icon_items(GtkWidget *sub)
+{
+    HdeOsInfo os;
+    hde_os_info_load(&os);
+    int scale = gtk_widget_get_scale_factor(menu_btn);
+    cairo_surface_t *ls = hde_os_logo_surface(&os, 16, scale, hde_theme_shell_dark(), NULL);
+    GtkWidget *logo = gtk_image_new_from_surface(ls);
+    cairo_surface_destroy(ls);
+    cairo_surface_t *hs = hde_hde_logo_surface(16, scale, NULL);
+    GtkWidget *hlogo = gtk_image_new_from_surface(hs);
+    cairo_surface_destroy(hs);
+    char *os_label = g_strdup_printf("_Logo of %s", os.name ? os.name : "the system");
+    const char *cur = pcfg.menu_icon ? pcfg.menu_icon : "os";
+    static const struct { const char *value, *icon, *label; } icons[] = {
+        { "menu", "open-menu-symbolic", "☰ _Menu sign" },
+        { "view-app-grid-symbolic", "view-app-grid-symbolic|view-grid-symbolic", "_App grid" },
+        { "start-here", "start-here|start-here-symbolic|distributor-logo", "_Start here (icon theme)" },
+        { "none", NULL, "_No icon (only the label)" },
+    };
+    GtkWidget *g = pm_radio_item(sub, NULL, logo, os_label, "menu_button_icon", "os", !strcmp(cur, "os"));
+    g = pm_radio_item(sub, g, hlogo, "_HDE logo", "menu_button_icon", "hde", !strcmp(cur, "hde"));
+    gboolean known = !strcmp(cur, "os") || !strcmp(cur, "hde");
+    for (guint i = 0; i < G_N_ELEMENTS(icons); i++) {
+        gboolean on = !strcmp(cur, icons[i].value);
+        known = known || on;
+        g = pm_radio_item(sub, g, icons[i].icon ? hde_menu_icon(icons[i].icon) : NULL, icons[i].label, "menu_button_icon",
+                          icons[i].value, on);
+    }
+    if (!known) {
+        char *l = g_strdup_printf("Your choice (%s)", cur);
+        pm_radio_item(sub, g, hde_menu_icon("image-x-generic-symbolic"), l, "menu_button_icon", cur, TRUE);
+        g_free(l);
+    }
+    gtk_menu_shell_append(GTK_MENU_SHELL(sub), gtk_separator_menu_item_new());
+    pm_item(sub, "folder-pictures-symbolic|image-x-generic-symbolic", "_Other icon or picture…", G_CALLBACK(pm_settings),
+            (gpointer)"startmenu");
+    g_free(os_label);
+    hde_os_info_clear(&os);
+}
+
+static void start_button_menu(GdkEventButton *e)
+{
+    GtkWidget *m = gtk_menu_new();
+    pm_item(m, "start-here-symbolic|view-app-grid-symbolic|open-menu-symbolic", "_Open the Start menu",
+            G_CALLBACK(pm_open_menu), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
+    GtkWidget *style = hde_menu_submenu(m, "view-list-symbolic|view-grid-symbolic", "Menu _layout");
+    GtkWidget *g = pm_radio_item(style, NULL, NULL, "Modern (like Linux Mint)", "menu_style", "modern",
+                                 pcfg.menu_style == HDE_MENU_MODERN);
+    g = pm_radio_item(style, g, NULL, "Kickoff (like KDE Plasma)", "menu_style", "kickoff", pcfg.menu_style == HDE_MENU_KICKOFF);
+    pm_radio_item(style, g, NULL, "Classic drop-down", "menu_style", "classic", pcfg.menu_style == HDE_MENU_CLASSIC);
+    add_button_icon_items(hde_menu_submenu(m, "image-x-generic-symbolic|insert-image-symbolic", "Button _icon"));
+    GtkWidget *lab = hde_menu_submenu(m, "insert-text-symbolic|format-text-bold-symbolic", "Button l_abel");
+    const char *cur = pcfg.menu_label ? pcfg.menu_label : "";
+    static const char *const labels[] = { "Menu", "Start", "Applications", "" };
+    gboolean known = FALSE;
+    g = NULL;
+    for (guint i = 0; i < G_N_ELEMENTS(labels); i++) {
+        gboolean on = !strcmp(cur, labels[i]);
+        known = known || on;
+        g = pm_radio_item(lab, g, NULL, *labels[i] ? labels[i] : "(none: only the icon)", "menu_button_label", labels[i], on);
+    }
+    if (!known) pm_radio_item(lab, g, NULL, cur, "menu_button_label", cur, TRUE);
+    gtk_menu_shell_append(GTK_MENU_SHELL(lab), gtk_separator_menu_item_new());
+    pm_item(lab, "document-edit-symbolic|edit-symbolic", "Other text…", G_CALLBACK(pm_settings), (gpointer)"startmenu");
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
+    pm_item(m, "preferences-desktop-symbolic|preferences-system-symbolic", "_Start Menu Settings…", G_CALLBACK(pm_settings),
+            (gpointer)"startmenu");
+    pm_item(m, "preferences-desktop-display-symbolic|view-continuous-symbolic|preferences-system-symbolic",
+            "_Panel Settings…", G_CALLBACK(pm_settings), (gpointer)"panel");
+    pm_log(m, "start button menu");
+    hde_menu_popup(m, menu_btn, (GdkEvent *)e);
+}
+
+static gboolean on_menu_btn_press(GtkWidget *w, GdkEventButton *e, gpointer d)
+{
+    (void)w; (void)d;
+    if (e->type != GDK_BUTTON_PRESS || e->button != 3) return FALSE;
+    close_popups();
+    hde_control_hide();
+    hde_battery_hide();
+    start_button_menu(e);
+    return TRUE;
+}
+
+static void panel_menu(GdkEventButton *e)
+{
+    GtkWidget *m = gtk_menu_new();
+    pm_item(m, "view-grid-symbolic|view-app-grid-symbolic|preferences-system-symbolic", "_Control Center",
+            G_CALLBACK(pm_cc), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
+    pm_item(m, "preferences-desktop-display-symbolic|view-continuous-symbolic|preferences-system-symbolic",
+            "_Panel Settings…", G_CALLBACK(pm_settings), (gpointer)"panel");
+    pm_item(m, "start-here-symbolic|view-app-grid-symbolic|open-menu-symbolic", "_Start Menu Settings…",
+            G_CALLBACK(pm_settings), (gpointer)"startmenu");
+    GtkWidget *pos = hde_menu_submenu(m, "view-dual-symbolic|object-flip-vertical-symbolic|go-bottom-symbolic", "P_osition");
+    GtkWidget *g = pm_radio_item(pos, NULL, hde_menu_icon("go-bottom-symbolic"), "_Bottom", "panel_position", "bottom", !pcfg.top);
+    pm_radio_item(pos, g, hde_menu_icon("go-top-symbolic"), "_Top", "panel_position", "top", pcfg.top);
+    GtkWidget *size = hde_menu_submenu(m, "zoom-fit-best-symbolic|view-fullscreen-symbolic", "Si_ze");
+    static const struct { int px; const char *label; } sizes[] = {
+        { 28, "Small (28 px)" }, { 34, "Medium (34 px)" }, { 44, "Large (44 px)" }, { 56, "Extra large (56 px)" } };
+    gboolean known = FALSE;
+    g = NULL;
+    for (guint i = 0; i < G_N_ELEMENTS(sizes); i++) {
+        char v[8];
+        g_snprintf(v, sizeof v, "%d", sizes[i].px);
+        gboolean on = pcfg.size == sizes[i].px;
+        known = known || on;
+        g = pm_radio_item(size, g, NULL, sizes[i].label, "panel_size", v, on);
+    }
+    if (!known) {
+        char v[8], l[32];
+        g_snprintf(v, sizeof v, "%d", pcfg.size);
+        g_snprintf(l, sizeof l, "Yours (%d px)", pcfg.size);
+        pm_radio_item(size, g, NULL, l, "panel_size", v, TRUE);
+    }
+    GtkWidget *items = hde_menu_submenu(m, "view-list-symbolic|format-justify-fill-symbolic", "Show on the panel");
+    pm_check_item(items, "Start button", "panel_show_menu", pcfg.show_menu);
+    pm_check_item(items, "Show Desktop button", "panel_show_desktop", pcfg.show_desktop);
+    pm_check_item(items, "Run button", "panel_show_run", pcfg.show_run);
+    pm_check_item(items, "Pinned apps", "panel_show_launchers", pcfg.show_launchers);
+    pm_check_item(items, "Taskbar", "panel_show_taskbar", pcfg.show_taskbar);
+    pm_check_item(items, "Window titles on the taskbar", "panel_taskbar_labels", pcfg.taskbar_labels);
+    if (hde_is_x11()) pm_check_item(items, "Workspaces", "panel_show_workspaces", pcfg.show_workspaces);
+    pm_check_item(items, "System tray", "panel_show_tray", pcfg.show_tray);
+    pm_check_item(items, "Status icons (network, sound, battery)", "panel_show_status", pcfg.show_status);
+    pm_check_item(items, "Notifications (the bell)", "panel_show_notifications", pcfg.show_notifications);
+    pm_check_item(items, "Clock", "panel_show_clock", pcfg.show_clock);
+    pm_check_item(items, "Date under the time", "clock_show_date", pcfg.clock_date);
+    pm_check_item(items, "Seconds", "clock_show_seconds", pcfg.clock_seconds);
+    pm_item(m, "list-add-symbolic", "Add an _extension (CPU, memory, a command)…", G_CALLBACK(pm_settings), (gpointer)"panel");
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
+    for (int i = 0; task_managers[i]; i++)
+        if (hde_have(task_managers[i])) {
+            pm_item(m, "utilities-system-monitor-symbolic|utilities-system-monitor", "_Task Manager",
+                    G_CALLBACK(pm_task_manager), NULL);
+            break;
+        }
+    pm_item(m, "emblem-system-symbolic|preferences-system-symbolic", "Setti_ngs", G_CALLBACK(pm_settings), NULL);
+    pm_item(m, "help-about-symbolic|dialog-information-symbolic", "_About HDE", G_CALLBACK(pm_about), NULL);
+    pm_item(m, "system-shutdown-symbolic", "Power _Off / Log Out…", G_CALLBACK(pm_power), NULL);
+    pm_log(m, "panel menu");
+    hde_menu_popup(m, panel_win, (GdkEvent *)e);
+}
+
+/* right-click on the panel where nothing has its own menu (empty space, the clock, the bell) */
+static gboolean on_panel_button(GtkWidget *w, GdkEventButton *e, gpointer d)
+{
+    (void)w; (void)d;
+    if (e->type != GDK_BUTTON_PRESS || e->button != 3) return FALSE;
+    close_popups();
+    hde_control_hide();
+    hde_battery_hide();
+    panel_menu(e);
+    return TRUE;
 }
 
 /* ---------- taskbar ---------- */
@@ -1169,7 +1499,11 @@ static void usage(void)
            "       hde-panel --show-desktop  show the desktop / bring the windows back\n"
            "       hde-panel --osd-volume    show the volume OSD\n"
            "       hde-panel --osd-brightness N   show the brightness OSD at N %%\n"
-           "       hde-panel --refresh       refresh the status area\n");
+           "       hde-panel --refresh       refresh the status area\n"
+           "       hde-panel --control-center[=PAGE]   open / close the Control Center (Super+A); PAGE: wifi,\n"
+           "                                 bluetooth, sound or notifications\n"
+           "       hde-panel --notifications the Control Center at its notifications (Super+N)\n"
+           "       hde-panel --battery       open / close the battery panel\n");
 }
 
 int main(int argc, char **argv)
@@ -1178,10 +1512,17 @@ int main(int argc, char **argv)
         { "--menu", HDE_CMD_MENU }, { "--search", HDE_CMD_SEARCH }, { "--run", HDE_CMD_RUN },
         { "--power", HDE_CMD_POWER }, { "--osd-volume", HDE_CMD_OSD_VOLUME }, { "--osd-mic", HDE_CMD_OSD_MIC },
         { "--refresh", HDE_CMD_REFRESH }, { "--show-desktop", HDE_CMD_SHOW_DESKTOP },
+        { "--notifications", HDE_CMD_NOTIFICATIONS }, { "--battery", HDE_CMD_BATTERY },
     };
     for (int i = 1; i < argc; i++) {
         for (guint k = 0; k < G_N_ELEMENTS(cli); k++)
             if (!strcmp(argv[i], cli[k].opt)) return send_cli_command(cli[k].cmd, 0);
+        if (g_str_has_prefix(argv[i], "--control-center")) {
+            const char *page = argv[i][16] == '=' ? argv[i] + 17 : i + 1 < argc && argv[i + 1][0] != '-' ? argv[i + 1] : NULL;
+            int p = hde_control_page_from_name(page);
+            if (p < 0) { fprintf(stderr, "hde-panel: unknown page '%s' (wifi, bluetooth, sound, notifications)\n", page); return 2; }
+            return send_cli_command(HDE_CMD_CONTROL_CENTER, p);
+        }
         if (!strcmp(argv[i], "--osd-brightness")) return send_cli_command(HDE_CMD_OSD_BRIGHTNESS, i + 1 < argc ? atol(argv[i + 1]) : 0);
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(); return 0; }
     }
@@ -1201,6 +1542,12 @@ int main(int argc, char **argv)
     hde_notify_init();
     const HdeMenuActions acts = { menu_power, hde_open_settings };
     hde_startmenu_init(&acts, debug_on);
+    const HdeControlActions cc_acts = { menu_power, hde_open_settings, cc_show_battery };
+    hde_control_init(&cc_acts, debug_on);
+    hde_battery_init(hde_open_settings, debug_on);
+    const HdeStatusActions st_acts = { open_cc, open_battery };
+    hde_status_set_actions(&st_acts);
+    hde_notify_set_bell_action(bell_clicked, NULL);
     g_bus_own_name(G_BUS_TYPE_SESSION, PANEL_DBUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, on_bus_acquired, on_name_acquired,
                    NULL, NULL, NULL);
 
@@ -1236,6 +1583,8 @@ int main(int argc, char **argv)
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(press), GTK_PHASE_CAPTURE);
     g_signal_connect(press, "pressed", G_CALLBACK(on_panel_pressed), NULL);
     g_object_set_data_full(G_OBJECT(win), "hde-press", press, g_object_unref);
+    gtk_widget_add_events(win, GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(win, "button-press-event", G_CALLBACK(on_panel_button), NULL);
 
     GtkWidget *box = panel_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_container_set_border_width(GTK_CONTAINER(box), 3);
@@ -1249,8 +1598,9 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(mb), menu_btn_lbl, FALSE, FALSE, 0);
     gtk_container_add(GTK_CONTAINER(menu_btn), mb);
     gtk_style_context_add_class(gtk_widget_get_style_context(menu_btn), "menu-btn");
-    gtk_widget_set_tooltip_text(menu_btn, "Start menu (Super)");
+    gtk_widget_set_tooltip_text(menu_btn, "Start menu (Super) · Right-click: layout, icon, settings");
     g_signal_connect(menu_btn, "clicked", G_CALLBACK(on_menu_clicked), NULL);
+    g_signal_connect(menu_btn, "button-press-event", G_CALLBACK(on_menu_btn_press), NULL);
     gtk_box_pack_start(GTK_BOX(box), menu_btn, FALSE, FALSE, 0);
 
     desk_btn = gtk_button_new_from_icon_name("user-desktop-symbolic", GTK_ICON_SIZE_BUTTON);

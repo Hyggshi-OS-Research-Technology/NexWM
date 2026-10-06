@@ -27,7 +27,10 @@ enum {
     HDE_CMD_OSD_BRIGHTNESS = 6,  /* brightness OSD, argument = percent */
     HDE_CMD_OSD_MIC = 7,         /* microphone OSD (the panel reads the state itself) */
     HDE_CMD_REFRESH = 8,         /* refresh the status area now */
-    HDE_CMD_SHOW_DESKTOP = 9     /* show the desktop / bring the windows back (Wayland: no _NET_SHOWING_DESKTOP) */
+    HDE_CMD_SHOW_DESKTOP = 9,    /* show the desktop / bring the windows back (Wayland: no _NET_SHOWING_DESKTOP) */
+    HDE_CMD_CONTROL_CENTER = 10, /* open / close the Control Center (Super+A), argument = page (hde-control.h) */
+    HDE_CMD_BATTERY = 11,        /* open / close the battery panel */
+    HDE_CMD_NOTIFICATIONS = 12   /* the Control Center at its notifications (Super+N) */
 };
 
 static int hde_ipc_ignore_x_error(Display *d, XErrorEvent *e) { (void)d; (void)e; return 0; }

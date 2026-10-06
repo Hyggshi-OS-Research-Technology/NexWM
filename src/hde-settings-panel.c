@@ -590,6 +590,16 @@ static void on_settings_file_changed(gpointer d)
     if (preview_area) gtk_widget_queue_draw(preview_area);
 }
 
+static void on_open_cc(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    GError *e = NULL;
+    if (!g_spawn_command_line_async("hde-panel --control-center", &e)) {
+        settings_status("Could not open the Control Center: %s", e->message);
+        g_clear_error(&e);
+    }
+}
+
 GtkWidget *page_panel_new(void)
 {
     GtkWidget *box = page_base();
@@ -629,9 +639,31 @@ GtkWidget *page_panel_new(void)
     switch_row(card, "panel_show_workspaces", TRUE, "Workspaces", "Small pictures of the workspaces (X11)");
     switch_row(card, "panel_show_tray", TRUE, "System tray", "Icons of running apps (chat, updates, cloud storage, …)");
     switch_row(card, "panel_show_status", TRUE, "Status icons", "Network, Bluetooth, volume and battery");
-    switch_row(card, "panel_show_notifications", TRUE, "Notifications", "The bell with the latest notifications and Do Not Disturb");
+    switch_row(card, "panel_show_notifications", TRUE, "Notifications", "The bell: the notifications in the Control Center");
     switch_row(card, "panel_show_clock", TRUE, "Clock", "Click it for the calendar");
     gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Control Center"), FALSE, FALSE, 0);
+    card = card_new();
+    switch_row(card, "cc_status_click", TRUE, "Open it from the status icons",
+               "Clicking the network, Bluetooth or volume icon or the bell opens the Control Center (Super+A). Off: "
+               "network settings / mute, as before. The battery icon opens the battery panel.");
+    switch_row(card, "cc_wifi", TRUE, "Wi-Fi", "Quick toggle, with the list of networks behind its arrow");
+    switch_row(card, "cc_bluetooth", TRUE, "Bluetooth", "Quick toggle, with the paired devices behind its arrow");
+    switch_row(card, "cc_airplane", TRUE, "Airplane mode", "Wi-Fi, mobile broadband and Bluetooth off at once");
+    switch_row(card, "cc_dnd", TRUE, "Do Not Disturb", "Hides notification popups");
+    switch_row(card, "cc_dark", TRUE, "Dark mode", NULL);
+    switch_row(card, "cc_night_light", TRUE, "Night Light", "Warmer colours in the evening (X11)");
+    switch_row(card, "cc_power_mode", TRUE, "Power mode", "Power Saver / Balanced / Performance (needs power-profiles-daemon)");
+    switch_row(card, "cc_brightness", TRUE, "Brightness slider", "The screen's backlight, or software dimming where there is none");
+    switch_row(card, "cc_volume", TRUE, "Volume slider", "With output devices, the microphone and the volume of each app");
+    switch_row(card, "cc_notifications", TRUE, "Notifications", "The latest notifications under the sliders");
+    gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
+    GtkWidget *occ = gtk_button_new_with_mnemonic("Open the _Control Center");
+    gtk_widget_set_halign(occ, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(occ, 8);
+    g_signal_connect(occ, "clicked", G_CALLBACK(on_open_cc), NULL);
+    gtk_box_pack_start(GTK_BOX(box), occ, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Clock"), FALSE, FALSE, 0);
     card = card_new();
@@ -819,11 +851,297 @@ static GtkWidget *style_card(int style, const char *title, const char *desc, con
     return b;
 }
 
+/* ---------------------------------------------------------------- the Start button: icon chooser and preview */
+static GtkWidget *sb_btns[8], *sb_custom_btn, *sb_preview_img, *sb_preview_lbl, *sb_custom_note;
+static GtkCssProvider *sb_css;
+
+typedef struct { const char *id, *icon, *tip; } SbChoice;
+static const SbChoice sb_choices[] = {
+    { "os", NULL, NULL },                                    /* "Logo of <system>" */
+    { "hde", NULL, "HDE logo" },
+    { "menu", "open-menu-symbolic", "☰ the menu sign" },
+    { "view-app-grid-symbolic", "view-app-grid-symbolic|view-grid-symbolic", "App grid" },
+    { "start-here", "start-here|start-here-symbolic|distributor-logo", "“Start here” of the icon theme" },
+    { "none", NULL, "No icon: only the label" },
+};
+#define N_SB G_N_ELEMENTS(sb_choices)
+
+static const char *sb_pick(const char *spec)
+{
+    static char buf[128];
+    char **names = g_strsplit(spec, "|", -1);
+    const char *pick = names[0];
+    for (int i = 0; names[i]; i++)
+        if (gtk_icon_theme_has_icon(gtk_icon_theme_get_default(), names[i])) { pick = names[i]; break; }
+    g_strlcpy(buf, pick ? pick : "image-missing", sizeof buf);
+    g_strfreev(names);
+    return buf;
+}
+
+/* an image of a choice: on_accent = drawn as on the panel's accent-coloured button */
+static GtkWidget *sb_image(const char *id, int px, gboolean on_accent, int scale)
+{
+    gboolean dark = on_accent || cfg_get_int("theme_index", 0) == 2;
+    cairo_surface_t *srf = NULL;
+    if (!strcmp(id, "os")) {
+        HdeOsInfo os;
+        hde_os_info_load(&os);
+        srf = hde_os_logo_surface(&os, px, scale, dark, NULL);
+        hde_os_info_clear(&os);
+    } else if (!strcmp(id, "hde")) {
+        srf = hde_hde_logo_surface(px, scale, on_accent ? "#ffffff" : NULL);
+    } else if (!strcmp(id, "none")) {
+        GtkWidget *l = gtk_label_new("Aa");
+        return l;
+    } else if (id[0] == '/' || id[0] == '~') {
+        char *path = id[0] == '~' ? g_build_filename(g_get_home_dir(), id + 1, NULL) : g_strdup(id);
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, px * scale, px * scale, TRUE, NULL);
+        g_free(path);
+        if (pb) {
+            srf = gdk_cairo_surface_create_from_pixbuf(pb, scale, NULL);
+            g_object_unref(pb);
+        }
+    }
+    if (srf) {
+        GtkWidget *img = gtk_image_new_from_surface(srf);
+        cairo_surface_destroy(srf);
+        return img;
+    }
+    const SbChoice *c = NULL;
+    for (guint i = 0; i < N_SB; i++) if (!strcmp(sb_choices[i].id, id)) c = &sb_choices[i];
+    GtkWidget *img = gtk_image_new_from_icon_name(sb_pick(c && c->icon ? c->icon : id), GTK_ICON_SIZE_LARGE_TOOLBAR);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), px);
+    return img;
+}
+
+static void sb_update(void)
+{
+    char *cur = cfg_get_string("menu_button_icon", HDE_MENU_ICON_DEFAULT);
+    char *label = cfg_get_string("menu_button_label", "Menu");
+    gboolean preset = FALSE;
+    for (guint i = 0; i < N_SB; i++) {
+        gboolean on = !strcmp(cur, sb_choices[i].id);
+        preset = preset || on;
+        GtkStyleContext *c = gtk_widget_get_style_context(sb_btns[i]);
+        if (on) gtk_style_context_add_class(c, "sb-selected"); else gtk_style_context_remove_class(c, "sb-selected");
+    }
+    GtkStyleContext *cc = gtk_widget_get_style_context(sb_custom_btn);
+    if (!preset) gtk_style_context_add_class(cc, "sb-selected"); else gtk_style_context_remove_class(cc, "sb-selected");
+    if (sb_custom_note) {
+        char *t = preset ? g_strdup("") : g_strdup_printf("Now: %s", cur);
+        gtk_label_set_text(GTK_LABEL(sb_custom_note), t);
+        gtk_widget_set_visible(sb_custom_note, !preset);
+        g_free(t);
+    }
+    /* the preview: like update_menu_button() in hde-panel.c */
+    if (sb_preview_img) {
+        GtkWidget *parent = gtk_widget_get_parent(sb_preview_img);
+        gtk_widget_destroy(sb_preview_img);
+        sb_preview_img = NULL;
+        if (strcmp(cur, "menu") != 0 && strcmp(cur, "none") != 0) {
+            sb_preview_img = sb_image(cur, 20, TRUE, gtk_widget_get_scale_factor(parent));
+            gtk_box_pack_start(GTK_BOX(parent), sb_preview_img, FALSE, FALSE, 0);
+            gtk_box_reorder_child(GTK_BOX(parent), sb_preview_img, 0);
+            gtk_widget_show(sb_preview_img);
+        } else {
+            sb_preview_img = gtk_image_new();             /* keeps the place for the next update */
+            gtk_box_pack_start(GTK_BOX(parent), sb_preview_img, FALSE, FALSE, 0);
+            gtk_box_reorder_child(GTK_BOX(parent), sb_preview_img, 0);
+        }
+        char *t = !strcmp(cur, "menu") ? (*label ? g_strdup_printf(" ☰  %s ", label) : g_strdup(" ☰ ")) : g_strdup(label);
+        gtk_label_set_text(GTK_LABEL(sb_preview_lbl), t);
+        gtk_widget_set_visible(sb_preview_lbl, *t != '\0');
+        g_free(t);
+    }
+    g_free(cur);
+    g_free(label);
+}
+
+static void sb_set(const char *id, const char *what)
+{
+    cfg_set_string("menu_button_icon", id);
+    settings_status("Start button: %s", what);
+    sb_update();
+}
+
+static void on_sb_choice(GtkButton *b, gpointer d)
+{
+    (void)b;
+    const SbChoice *c = d;
+    sb_set(c->id, c->tip ? c->tip : "logo of the system");
+}
+
+static void on_sb_picture(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    GtkWidget *dlg = gtk_file_chooser_dialog_new("Choose a picture for the Start button", GTK_WINDOW(settings_window()),
+                                                 GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel", GTK_RESPONSE_CANCEL,
+                                                 "_Use this picture", GTK_RESPONSE_ACCEPT, NULL);
+    GtkFileFilter *f = gtk_file_filter_new();
+    gtk_file_filter_set_name(f, "Pictures (PNG, SVG, JPEG, ...)");
+    gtk_file_filter_add_pixbuf_formats(f);
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), f);
+    char *pics = g_build_filename(g_get_home_dir(), "Pictures", NULL);
+    if (g_file_test(pics, G_FILE_TEST_IS_DIR)) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), pics);
+    else if (g_file_test("/usr/share/pixmaps", G_FILE_TEST_IS_DIR))
+        gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), "/usr/share/pixmaps");
+    g_free(pics);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+        char *path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+        GdkPixbuf *pb = path ? gdk_pixbuf_new_from_file_at_scale(path, 24, 24, TRUE, NULL) : NULL;
+        if (pb) {
+            g_object_unref(pb);
+            sb_set(path, path);
+        } else settings_status("That file is not a picture HDE can read");
+        g_free(path);
+    }
+    gtk_widget_destroy(dlg);
+}
+
+static void on_sb_name_changed(GtkEditable *e, gpointer img)
+{
+    const char *n = gtk_entry_get_text(GTK_ENTRY(e));
+    gboolean ok = *n && gtk_icon_theme_has_icon(gtk_icon_theme_get_default(), n);
+    gtk_image_set_from_icon_name(GTK_IMAGE(img), ok ? n : "image-missing", GTK_ICON_SIZE_DND);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), 32);
+}
+
+static void on_sb_icon_name(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    GtkWidget *dlg = gtk_dialog_new_with_buttons("Start button icon", GTK_WINDOW(settings_window()), GTK_DIALOG_MODAL,
+                                                 "_Cancel", GTK_RESPONSE_CANCEL, "_Use this icon", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+    GtkWidget *area = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(area), 12);
+    gtk_box_set_spacing(GTK_BOX(area), 8);
+    GtkWidget *l = gtk_label_new("The name of an icon of your icon theme, e.g. start-here, distributor-logo, "
+                                 "debian-logo, ubuntu-logo-icon, view-app-grid-symbolic, applications-other:");
+    gtk_label_set_line_wrap(GTK_LABEL(l), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(l), 50);
+    gtk_label_set_xalign(GTK_LABEL(l), 0);
+    gtk_box_pack_start(GTK_BOX(area), l, FALSE, FALSE, 0);
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget *img = gtk_image_new_from_icon_name("image-missing", GTK_ICON_SIZE_DND);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), 32);
+    GtkWidget *e = gtk_entry_new();
+    gtk_entry_set_activates_default(GTK_ENTRY(e), TRUE);
+    gtk_widget_set_hexpand(e, TRUE);
+    g_signal_connect(e, "changed", G_CALLBACK(on_sb_name_changed), img);
+    char *cur = cfg_get_string("menu_button_icon", HDE_MENU_ICON_DEFAULT);
+    gboolean preset = cur[0] == '/' || cur[0] == '~';
+    for (guint i = 0; i < N_SB; i++) preset = preset || !strcmp(cur, sb_choices[i].id);
+    gtk_entry_set_text(GTK_ENTRY(e), preset ? "start-here" : cur);
+    g_free(cur);
+    gtk_box_pack_start(GTK_BOX(row), img, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(row), e, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(area), row, FALSE, FALSE, 0);
+    gtk_widget_show_all(dlg);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+        char *n = g_strstrip(g_strdup(gtk_entry_get_text(GTK_ENTRY(e))));
+        if (*n) sb_set(n, n);
+        g_free(n);
+    }
+    gtk_widget_destroy(dlg);
+}
+
+static void on_sb_custom(GtkButton *b, gpointer d)
+{
+    (void)d;
+    GtkWidget *m = gtk_menu_new();
+    GtkWidget *a = gtk_menu_item_new_with_mnemonic("A _picture (PNG, SVG, JPEG)…");
+    GtkWidget *c = gtk_menu_item_new_with_mnemonic("An _icon of the icon theme…");
+    g_signal_connect(a, "activate", G_CALLBACK(on_sb_picture), NULL);
+    g_signal_connect(c, "activate", G_CALLBACK(on_sb_icon_name), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), a);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), c);
+    gtk_widget_show_all(m);
+    gtk_menu_attach_to_widget(GTK_MENU(m), GTK_WIDGET(b), NULL);
+    gtk_menu_popup_at_widget(GTK_MENU(m), GTK_WIDGET(b), GDK_GRAVITY_SOUTH_WEST, GDK_GRAVITY_NORTH_WEST, NULL);
+}
+
+static GtkWidget *sb_icon_row(GtkWidget *page)
+{
+    int scale = gtk_widget_get_scale_factor(page);
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *grid = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    HdeOsInfo os;
+    hde_os_info_load(&os);
+    char *os_tip = g_strdup_printf("Logo of %s (the default)", os.name ? os.name : "the system");
+    hde_os_info_clear(&os);
+    for (guint i = 0; i < N_SB; i++) {
+        GtkWidget *b = gtk_button_new();
+        gtk_container_add(GTK_CONTAINER(b), sb_image(sb_choices[i].id, 24, FALSE, scale));
+        gtk_widget_set_tooltip_text(b, sb_choices[i].tip ? sb_choices[i].tip : os_tip);
+        gtk_style_context_add_class(gtk_widget_get_style_context(b), "sb-choice");
+        g_signal_connect(b, "clicked", G_CALLBACK(on_sb_choice), (gpointer)&sb_choices[i]);
+        char *dbg = g_strdup_printf("start-button-icon-%s", sb_choices[i].id);
+        debug_geometry_watch(b, dbg);
+        g_free(dbg);
+        sb_btns[i] = b;
+        gtk_box_pack_start(GTK_BOX(grid), b, FALSE, FALSE, 0);
+    }
+    g_free(os_tip);
+    sb_custom_btn = gtk_button_new();
+    GtkWidget *cb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *ci = gtk_image_new_from_icon_name(sb_pick("folder-pictures-symbolic|image-x-generic-symbolic"),
+                                                 GTK_ICON_SIZE_LARGE_TOOLBAR);
+    gtk_image_set_pixel_size(GTK_IMAGE(ci), 24);
+    gtk_box_pack_start(GTK_BOX(cb), ci, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(cb), gtk_label_new("Other…"), FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(sb_custom_btn), cb);
+    gtk_widget_set_tooltip_text(sb_custom_btn, "A picture of your own, or any icon of the icon theme");
+    gtk_style_context_add_class(gtk_widget_get_style_context(sb_custom_btn), "sb-choice");
+    g_signal_connect(sb_custom_btn, "clicked", G_CALLBACK(on_sb_custom), NULL);
+    gtk_box_pack_start(GTK_BOX(grid), sb_custom_btn, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(v), grid, FALSE, FALSE, 0);
+    sb_custom_note = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(sb_custom_note), 0);
+    gtk_label_set_ellipsize(GTK_LABEL(sb_custom_note), PANGO_ELLIPSIZE_MIDDLE);
+    gtk_widget_set_no_show_all(sb_custom_note, TRUE);
+    gtk_box_pack_start(GTK_BOX(v), sb_custom_note, FALSE, FALSE, 0);
+    if (!sb_css) {
+        HdeThemeInfo ti;
+        hde_theme_info_load(&ti);
+        char *css = g_strdup_printf(".sb-choice { min-width: 40px; min-height: 40px; padding: 4px; border-radius: 8px; }"
+                                    ".sb-choice.sb-selected { box-shadow: inset 0 0 0 2px %s; background: alpha(%s, 0.18); }"
+                                    ".sb-preview { background: %s; border-radius: 4px; padding: 4px 10px; }"
+                                    ".sb-preview label { color: #ffffff; font-weight: bold; }", ti.accent, ti.accent, ti.accent);
+        sb_css = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(sb_css, css, -1, NULL);
+        gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(sb_css),
+                                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_free(css);
+        hde_theme_info_clear(&ti);
+    }
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    GtkWidget *t = gtk_label_new("Icon");
+    gtk_label_set_xalign(GTK_LABEL(t), 0);
+    gtk_style_context_add_class(gtk_widget_get_style_context(t), "row-title");
+    gtk_box_pack_start(GTK_BOX(row), t, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(row), v, FALSE, FALSE, 0);
+    gtk_container_set_border_width(GTK_CONTAINER(row), 10);
+    return row;
+}
+
+static GtkWidget *sb_preview_new(void)
+{
+    GtkWidget *b = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_style_context_add_class(gtk_widget_get_style_context(b), "sb-preview");
+    gtk_widget_set_valign(b, GTK_ALIGN_CENTER);
+    sb_preview_img = gtk_image_new();
+    sb_preview_lbl = gtk_label_new("");
+    gtk_box_pack_start(GTK_BOX(b), sb_preview_img, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(b), sb_preview_lbl, FALSE, FALSE, 0);
+    return b;
+}
+
 static gboolean label_commit(gpointer e)
 {
     label_timer = 0;
     cfg_set_string("menu_button_label", gtk_entry_get_text(GTK_ENTRY(e)));
     settings_status("Start button label saved");
+    sb_update();
     return G_SOURCE_REMOVE;
 }
 
@@ -894,22 +1212,10 @@ GtkWidget *page_startmenu_new(void)
     gtk_widget_set_valign(entry, GTK_ALIGN_CENTER);
     g_signal_connect(entry, "changed", G_CALLBACK(on_label_changed), NULL);
     gtk_container_add(GTK_CONTAINER(card), row_box("Label", "Empty: only the icon", entry));
-    HdeOsInfo os;
-    hde_os_info_load(&os);
-    static char os_label[160];
-    g_snprintf(os_label, sizeof os_label, "Logo of %s", os.name);
-    static const char *const bicon_ids[] = { "menu", "os", "hde", "none", NULL };
-    static const char *bicon_labels[] = { "☰ Menu sign", NULL, "HDE logo", "No icon", NULL };
-    bicon_labels[1] = os_label;
-    static const ComboKey bicon = { "menu_button_icon", bicon_ids };
-    GtkWidget *irow = combo_row(card, &bicon, bicon_labels, "menu", "Icon", NULL);
-    cairo_surface_t *s = hde_os_logo_surface(&os, 24, gtk_widget_get_scale_factor(box), cfg_get_int("theme_index", 0) == 2, NULL);
-    GtkWidget *logo = gtk_image_new_from_surface(s);
-    cairo_surface_destroy(s);
-    gtk_box_pack_end(GTK_BOX(irow), logo, FALSE, FALSE, 0);
-    gtk_box_reorder_child(GTK_BOX(irow), logo, 1);
-    hde_os_info_clear(&os);
+    gtk_container_add(GTK_CONTAINER(card), sb_icon_row(box));
+    gtk_container_add(GTK_CONTAINER(card), row_box("How it looks", "On the panel, in your accent colour", sb_preview_new()));
     gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
+    sb_update();
 
     gtk_box_pack_start(GTK_BOX(box), section("Favorites"), FALSE, FALSE, 0);
     favorites_card = card_new();

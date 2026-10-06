@@ -448,3 +448,64 @@ the Start button with the system's logo, the menu opening below the panel, a thi
 window for Hyggshi OS (its logo, based on Debian 13), Debian, Linux Mint (based on Ubuntu 24.04) and an unknown system
 (badge); `svgpath-test` draws every bundled logo; `hde-hotkeys --action` and `hde-settings --wayland-config`.
 `tests/wayland-test.sh` (CI job *wayland*, Debian 13): the whole Wayland session in a headless labwc — see README.
+
+## Control Center, battery panel, right-click menus with icons, the Start button's icon (fix 13)
+
+- **Control Center** (`src/hde-control.c`): clicking the **network, Bluetooth or volume icon** or the notification
+  bell, `Super+A` (`Super+N`: at the notifications) or `hde-panel --control-center[=PAGE]` opens one panel next to
+  the status area:
+  - **quick toggles** (two per row): Wi-Fi, Bluetooth, Airplane mode, Do Not Disturb, Dark mode, Night Light (X11,
+    `hde-settings --night-light`), Power mode (power-profiles-daemon); a tile is coloured when it is on;
+  - the arrow of **Wi-Fi** slides in the network list (NetworkManager): the network in use, saved ones, signal,
+    security; a saved or open network connects at once, a **new secured one asks for its password in the list**
+    (given to `nmcli --ask` on its standard input, never on the command line; a wrong password asks again and leaves
+    no broken profile), Disconnect, Scan again, Network settings for hidden / enterprise networks;
+  - the arrow of **Bluetooth**: the paired devices with Connect / Disconnect and their battery (BlueZ over D-Bus),
+    the power switch, *Pair a new device…* (Settings);
+  - **light and sound, each on its own row**: the screen brightness (`hde-settings --brightness`: the backlight
+    through sysfs / logind, or software dimming), the volume with mute; its arrow opens the **Sound** page: the
+    output devices (choosing one also moves the apps that play), the microphone (level, mute), the input devices and
+    **the volume of each app** (pactl), *Advanced mixer…* (pavucontrol when installed);
+  - the latest **notifications** with their icons (`src/hde-notify.c` now shares its history): click one to open it
+    in its app, × removes it, *Clear all*; the bell's counter is reset;
+  - the footer: the battery (opens the battery panel), screenshot, customize (*Settings → Panel*), settings, lock,
+    power off.
+  On X11 it is a popup that holds the pointer and keyboard like a menu (`src/hde-flyout.c`; a click outside or Esc
+  closes it, Esc on a sub-page goes back), on Wayland a layer-shell surface with the keyboard. *Settings → Panel →
+  Control Center* chooses the tiles and sections, and whether the icons open it (`cc_status_click=false`: network
+  settings / mute as before).
+- **Battery panel** (`src/hde-battery.c`, `src/hde-power.c`): clicking the battery icon shows the charge, whether it
+  charges and the time left (to full, up to the firmware's charge limit), a chart of the charge (UPower's history, or
+  what the panel saw since login), the draw in watts, energy, **health** (full charge now / when new), cycles,
+  voltage, temperature, model and technology, each battery when there are two, the batteries of wireless devices
+  (kernel and BlueZ), and the **power mode** buttons. The numbers come straight from `/sys/class/power_supply`
+  (µWh or µAh, power or current × voltage): no upower needed. The battery icon's tooltip tells the time left too.
+- **Right-click menus with icons** (`src/hde-flyout.c`: icons always shown, whatever `gtk-menu-images` says):
+  - on the panel: Control Center, **Panel Settings…**, **Start Menu Settings…**, Position (bottom / top), Size,
+    *Show on the panel* (every item, date, seconds), Add an extension…, Task Manager (when installed), Settings,
+    About HDE, Power Off / Log Out…;
+  - on the Start button: Open the Start menu, Menu layout (Modern / Kickoff / Classic), **Button icon** (the logo of
+    the system, the HDE logo, ☰, an app grid, "start here" of the icon theme, none, other…), Button label, Start Menu
+    Settings…, Panel Settings…;
+  - on the network, Bluetooth, volume and battery icons: their page of the Control Center, their settings page, the
+    tools that are installed (connection editor, Blueman, pavucontrol), mute / microphone.
+- **The Start button shows the logo of the system by default** (`menu_button_icon=os`, it was the ☰ sign).
+  *Settings → Start Menu → Start button* has an icon chooser (logo of the system, HDE logo, ☰, app grid, start-here,
+  none, **Other…**: a picture of your own — PNG, SVG, JPEG — or any icon name, with a preview) and a preview of the
+  button in the accent colour.
+- **"I cannot find the Start menu / panel customization"**: it is in *Settings → Start Menu* and *Settings → Panel*,
+  and now also one right-click away on the panel and on the Start button. If *Settings → About* shows an old build
+  (the commit under *Build*), the programs that run are old copies: `make clean && make && sudo make install`, then log
+  out and back in.
+
+### Tests
+
+`make check`: the Control Center opened from the volume icon (Wi-Fi, Bluetooth, Do Not Disturb, Dark mode and Night
+Light tiles, the brightness slider dimming the screen, the volume slider, 2 notifications), the Do Not Disturb tile,
+the Wi-Fi page with a password typed in the list (on nmcli's stdin, not on the command line), the Bluetooth page, the
+Sound page (a second output device made the default, an app with its own volume), *Clear all*, Esc, `Super+A`; the
+battery panel from the battery icon with a fake battery (82%, 5.2 W, 9 h 09 min left, health 91%, 123 cycles) and
+the power mode switched to Power Saver (simulated power-profiles-daemon); the right-click menus of the panel, the
+Start button (choosing the HDE logo changes the button) and the volume icon; `power-test` (µWh / µAh batteries,
+charge limit, two batteries, a mouse, no battery). `tests/wayland-test.sh`: the Control Center and the battery panel
+as layer-shell surfaces, Esc, `Super+A` through labwc.

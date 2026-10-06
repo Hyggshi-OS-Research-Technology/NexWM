@@ -50,10 +50,16 @@ static guint32 next_id = 1;
 static GList *notifs;            /* newest first; includes the history */
 static guint unread;
 static GtkWidget *bell_btn, *bell_img, *bell_count;
+static void (*listener)(gpointer);
+static gpointer listener_data;
+static void (*bell_action)(GtkWidget *, gpointer);
+static gpointer bell_action_data;
+static guint changed_idle;
 
 static void notif_close(Notif *n, guint reason);
 static void relayout(void);
 static void bell_update(void);
+static void notify_changed(void);
 
 /* ---------------- configuration ---------------- */
 static gboolean cfg_bool(const char *key, gboolean def)
@@ -131,7 +137,7 @@ static void notif_close(Notif *n, guint reason)
         notif_free(n);
     }
     if (had_popup) relayout();
-    bell_update();
+    notify_changed();
 }
 
 static gboolean on_expire(gpointer d)
@@ -228,27 +234,27 @@ static GdkPixbuf *pixbuf_from_hint(GVariant *v)
     return pb;
 }
 
-static GdkPixbuf *pixbuf_from_path(const char *icon)
+static GdkPixbuf *pixbuf_from_path(const char *icon, int size)
 {
     if (!icon || !*icon) return NULL;
     char *path = NULL;
     if (g_str_has_prefix(icon, "file://")) path = g_filename_from_uri(icon, NULL, NULL);
     else if (icon[0] == '/') path = g_strdup(icon);
-    GdkPixbuf *pb = path ? gdk_pixbuf_new_from_file_at_scale(path, ICON_SIZE, ICON_SIZE, TRUE, NULL) : NULL;
+    GdkPixbuf *pb = path ? gdk_pixbuf_new_from_file_at_scale(path, size, size, TRUE, NULL) : NULL;
     g_free(path);
     return pb;
 }
 
-static GtkWidget *notif_icon(Notif *n)
+static GtkWidget *notif_icon_sized(Notif *n, int size)
 {
     GdkPixbuf *pb = NULL;
     if (n->image) {
         int w = gdk_pixbuf_get_width(n->image), h = gdk_pixbuf_get_height(n->image);
-        double s = (double)ICON_SIZE / MAX(w, h);
+        double s = (double)size / MAX(w, h);
         pb = s < 1.0 ? gdk_pixbuf_scale_simple(n->image, MAX(1, (int)(w * s)), MAX(1, (int)(h * s)), GDK_INTERP_BILINEAR)
                      : g_object_ref(n->image);
     }
-    if (!pb) pb = pixbuf_from_path(n->app_icon);
+    if (!pb) pb = pixbuf_from_path(n->app_icon, size);
     if (pb) {
         GtkWidget *img = gtk_image_new_from_pixbuf(pb);
         g_object_unref(pb);
@@ -268,9 +274,11 @@ static GtkWidget *notif_icon(Notif *n)
     }
     if (!img) img = gtk_image_new_from_icon_name(n->urgency == 2 ? "dialog-warning" : "dialog-information",
                                                  GTK_ICON_SIZE_DIALOG);
-    gtk_image_set_pixel_size(GTK_IMAGE(img), ICON_SIZE);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), size);
     return img;
 }
+
+static GtkWidget *notif_icon(Notif *n) { return notif_icon_sized(n, ICON_SIZE); }
 
 /* ---------------- popup ---------------- */
 static void on_action_clicked(GtkButton *b, gpointer d)
@@ -516,7 +524,7 @@ static guint32 do_notify(const char *app_name, guint32 replaces_id, const char *
     }
     const char *ip = NULL;
     if (!n->image && (g_variant_lookup(hints, "image-path", "&s", &ip) || g_variant_lookup(hints, "image_path", "&s", &ip))) {
-        n->image = pixbuf_from_path(ip);
+        n->image = pixbuf_from_path(ip, ICON_SIZE);
         if (!n->image && ip && *ip && ip[0] != '/' && !g_str_has_prefix(ip, "file://")) {
             g_free(n->app_icon);
             n->app_icon = g_strdup(ip);                      /* image-path may also be an icon name */
@@ -540,7 +548,7 @@ static guint32 do_notify(const char *app_name, guint32 replaces_id, const char *
     if (n->timeout_ms > 0) n->timer = g_timeout_add(n->timeout_ms, on_expire, n);
     if (!replaces_id) unread++;
     trim_history();
-    bell_update();
+    notify_changed();
     if (g_getenv("HDE_DEBUG"))
         g_printerr("hde-notify: notification %u from %s: %s%s\n", n->id, n->app_name ? n->app_name : "",
                    n->summary ? n->summary : "", n->image ? " [image]" : "");
@@ -668,8 +676,9 @@ static void bell_update(void)
     g_snprintf(buf, sizeof buf, "%u", MIN(unread, 99u));
     gtk_label_set_text(GTK_LABEL(bell_count), buf);
     gtk_widget_set_visible(bell_count, unread > 0);
-    char *tip = g_strdup_printf("%s%s\nClick: notification history", unread ? buf : "No",
-                                unread == 1 ? " new notification" : " new notifications");
+    char *tip = g_strdup_printf("%s%s\nClick: %s", unread ? buf : "No",
+                                unread == 1 ? " new notification" : " new notifications",
+                                bell_action ? "notifications in the Control Center" : "notification history");
     if (dnd) {
         char *t2 = g_strconcat(tip, "\nDo Not Disturb is on", NULL);
         g_free(tip);
@@ -677,6 +686,116 @@ static void bell_update(void)
     }
     gtk_widget_set_tooltip_text(bell_btn, tip);
     g_free(tip);
+}
+
+static gboolean changed_cb(gpointer d)
+{
+    (void)d;
+    changed_idle = 0;
+    if (listener) listener(listener_data);
+    return G_SOURCE_REMOVE;
+}
+
+/* the history or the unread count changed: the bell now, the Control Center from the main loop (it may rebuild the
+ * very card whose button is being clicked) */
+static void notify_changed(void)
+{
+    bell_update();
+    if (listener && !changed_idle) changed_idle = g_idle_add(changed_cb, NULL);
+}
+
+/* ---------------- the history, for the Control Center ---------------- */
+void hde_notify_set_listener(void (*changed)(gpointer), gpointer data)
+{
+    listener = changed;
+    listener_data = data;
+}
+
+void hde_notify_set_bell_action(void (*clicked)(GtkWidget *, gpointer), gpointer data)
+{
+    bell_action = clicked;
+    bell_action_data = data;
+    if (bell_btn) bell_update();
+}
+
+guint hde_notify_foreach(HdeNotifFunc f, gpointer data, guint max)
+{
+    guint count = 0;
+    for (GList *l = notifs; l && count < max; l = l->next, count++) {
+        Notif *n = l->data;
+        char *plain = body_plain(n->body);
+        HdeNotifInfo info = { n->id, n->app_name && *n->app_name ? n->app_name : "Notification",
+                              n->summary ? n->summary : "", plain, n->time_us, n->urgency, n->open,
+                              n->open && has_action(n, "default") };
+        f(&info, data);
+        g_free(plain);
+    }
+    return count;
+}
+
+guint hde_notify_count(void) { return g_list_length(notifs); }
+guint hde_notify_unread(void) { return unread; }
+
+void hde_notify_mark_read(void)
+{
+    if (!unread) return;
+    unread = 0;
+    notify_changed();
+}
+
+GtkWidget *hde_notify_icon(guint32 id, int size)
+{
+    Notif *n = find_notif(id);
+    if (n) return notif_icon_sized(n, size);
+    GtkWidget *img = gtk_image_new_from_icon_name("dialog-information", GTK_ICON_SIZE_DND);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), size);
+    return img;
+}
+
+void hde_notify_remove(guint32 id)
+{
+    Notif *n = find_notif(id);
+    if (!n) return;
+    gboolean transient = n->transient;
+    if (n->open) notif_close(n, CLOSE_DISMISSED);        /* frees it if it is transient */
+    if (!transient && g_list_find(notifs, n)) {
+        notifs = g_list_remove(notifs, n);
+        notif_free(n);
+    }
+    notify_changed();
+}
+
+void hde_notify_activate(guint32 id)
+{
+    Notif *n = find_notif(id);
+    if (!n) return;
+    if (n->open && has_action(n, "default")) emit("ActionInvoked", g_variant_new("(us)", n->id, "default"));
+    if (n->desktop_entry && !(n->open && has_action(n, "default"))) {
+        /* nothing to tell the app: at least bring it up */
+        char *did = g_str_has_suffix(n->desktop_entry, ".desktop") ? g_strdup(n->desktop_entry)
+                                                                     : g_strconcat(n->desktop_entry, ".desktop", NULL);
+        GDesktopAppInfo *app = g_desktop_app_info_new(did);
+        if (app) {
+            g_app_info_launch(G_APP_INFO(app), NULL, NULL, NULL);
+            g_object_unref(app);
+        }
+        g_free(did);
+    }
+    hde_notify_remove(id);
+}
+
+void hde_notify_clear(void)
+{
+    GList *copy = g_list_copy(notifs);
+    for (GList *l = copy; l; l = l->next) {
+        Notif *n = l->data;
+        if (g_list_find(notifs, n) && n->open) notif_close(n, CLOSE_DISMISSED);
+    }
+    g_list_free(copy);
+    g_list_free_full(notifs, (GDestroyNotify)notif_free);
+    notifs = NULL;
+    unread = 0;
+    notify_changed();
 }
 
 static gboolean destroy_idle(gpointer w)
@@ -709,16 +828,7 @@ static void on_dnd_toggled(GtkCheckMenuItem *it, gpointer d)
 static void on_clear_all(GtkMenuItem *it, gpointer d)
 {
     (void)it; (void)d;
-    GList *copy = g_list_copy(notifs);
-    for (GList *l = copy; l; l = l->next) {
-        Notif *n = l->data;
-        if (n->open) notif_close(n, CLOSE_DISMISSED);
-    }
-    g_list_free(copy);
-    g_list_free_full(notifs, (GDestroyNotify)notif_free);
-    notifs = NULL;
-    unread = 0;
-    bell_update();
+    hde_notify_clear();
 }
 
 static void on_notif_settings(GtkMenuItem *it, gpointer d)
@@ -730,8 +840,9 @@ static void on_notif_settings(GtkMenuItem *it, gpointer d)
 static void on_bell_clicked(GtkButton *b, gpointer d)
 {
     (void)d;
+    if (bell_action) { bell_action(GTK_WIDGET(b), bell_action_data); return; }
     unread = 0;
-    bell_update();
+    notify_changed();
     GtkWidget *menu = gtk_menu_new();
     gtk_style_context_add_class(gtk_widget_get_style_context(menu), "hde-notify-menu");
     GtkWidget *hdr = gtk_menu_item_new_with_label("");

@@ -137,6 +137,8 @@ static char *rc_xml(void)
         BIND("W-r", "%s --run", panel);
         BIND("A-F2", "%s --run", panel);
         BIND("W-s", "%s --search", panel);
+        BIND("W-a", "%s --control-center", panel);
+        BIND("W-n", "%s --notifications", panel);
         BIND("W-p", "%s --action project", hot);
         BIND("C-A-t", "%s --action terminal", hot);
         BIND("C-A-Delete", "%s --power", panel);

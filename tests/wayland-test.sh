@@ -3,7 +3,8 @@
 # pixman renderer: no screen or GPU needed) with HDE inside, then checks the panel and the desktop as layer-shell
 # surfaces, the Start menu (D-Bus command, the Super key and Ctrl+Esc through labwc's key bindings, typing), the
 # taskbar (a real window), Show Desktop, the volume key, notifications, Settings and About on Wayland, PrtSc with grim,
-# the panel moved to the top, labwc's configuration following settings.ini, and logging out (labwc stops).
+# the Control Center and the battery panel (layer-shell pop-ups, Super+A), the panel moved to the top, labwc's
+# configuration following settings.ini, and logging out (labwc stops).
 #
 #   BUILD=build sh tests/wayland-test.sh
 # Needs: labwc grim wtype dbus-run-session (dbus) zenity notify-send imagemagick; HDE built with libgtk-layer-shell-dev.
@@ -25,6 +26,14 @@ if [ -z "${HDE_WL_INNER:-}" ]; then
     sed "s|@PREFIX@/bin/hde-settings|$B/hde-settings|" "$HERE/../data/hyggshi-settings.desktop" \
         > "$OUT/home/.local/share/applications/hyggshi-settings.desktop"
     echo "notes" > "$OUT/home/Desktop/notes.txt"
+    # a laptop battery (HDE_POWER_SUPPLY_DIR replaces /sys/class/power_supply)
+    mkdir -p "$OUT/power_supply/BAT0" "$OUT/power_supply/AC"
+    printf 'Mains\n' > "$OUT/power_supply/AC/type"; printf '1\n' > "$OUT/power_supply/AC/online"
+    for kv in type=Battery status=Charging capacity=64 energy_now=37000000 energy_full=58000000 \
+              energy_full_design=63700000 power_now=21000000 technology=Li-ion; do
+        printf '%s\n' "${kv#*=}" > "$OUT/power_supply/BAT0/${kv%%=*}"
+    done
+    export HDE_POWER_SUPPLY_DIR="$OUT/power_supply"
     export HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.config" XDG_CACHE_HOME="$OUT/home/.cache"
     export XDG_DATA_HOME="$OUT/home/.local/share" XDG_RUNTIME_DIR="$OUT/run" LANG=C.UTF-8 NO_AT_BRIDGE=1
     export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1
@@ -188,6 +197,28 @@ kill "$SET" 2>/dev/null
 "$B/hde-settings" --about-window > "$OUT/about-window.log" 2>&1 &
 AW=$!
 sleep 2.5; shot 11-about-window; kill "$AW" 2>/dev/null
+
+# ---------- 5b. the Control Center and the battery panel: layer-shell pop-ups with the keyboard ----------
+c0=$(nlog "control center: shown")
+"$B/hde-panel" --control-center
+if wait_more "control center: shown" "$c0" 50; then pass "hde-panel --control-center (D-Bus) opens the Control Center"
+else fail "hde-panel --control-center (D-Bus) opens the Control Center"; fi
+check "... a layer-shell surface that takes the keyboard" grep -q "control center: shown (main) at .*layer shell, keyboard exclusive" "$LOG"
+sleep 1; shot 13-control-center
+h0=$(nlog "control center: hidden"); wtype -s 400 -k Escape
+if wait_more "control center: hidden" "$h0" 30; then pass "Esc closes the Control Center"; else fail "Esc closes the Control Center"; fi
+c0=$(nlog "control center: shown")
+wtype -s 400 -M logo -k a -m logo
+if wait_more "control center: shown" "$c0" 40; then pass "Super+A (labwc key binding) opens the Control Center"
+else fail "Super+A (labwc key binding) opens the Control Center"; fi
+h0=$(nlog "control center: hidden"); wtype -s 400 -k Escape; wait_more "control center: hidden" "$h0" 30
+b0=$(nlog "battery: shown")
+"$B/hde-panel" --battery
+if wait_more "battery: shown" "$b0" 50; then pass "hde-panel --battery opens the battery panel"; else fail "hde-panel --battery opens the battery panel"; fi
+check "... with the charge, the time to full and the health" grep -q "hde-panel: battery: BAT0 64% Charging, 21.0 W, 1 h 00 min to full, health 91%" "$LOG"
+sleep 1; shot 14-battery-panel
+h0=$(nlog "battery: hidden"); wtype -s 400 -k Escape
+if wait_more "battery: hidden" "$h0" 30; then pass "Esc closes the battery panel"; else fail "Esc closes the battery panel"; fi
 
 # ---------- 6. settings follow live: panel at the top, labwc reloads its configuration ----------
 printf '[settings]\npanel_position=top\n' > "$INI"

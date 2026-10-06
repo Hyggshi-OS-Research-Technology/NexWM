@@ -8,6 +8,7 @@
  *                             touchpad, until a direction is chosen; run by hde-session)
  *   hde-settings --project    the Project window of F8 / Super+P (PC screen only, Duplicate, Extend, Second screen only)
  *   hde-settings --display-mode pc|duplicate|extend|second    --displays    --brightness [+N|-N|N]
+ *   hde-settings --night-light [on|off|toggle]
  *   hde-settings --about      this computer, the system and the memory HDE uses, as text
  *   hde-settings --about-window   the "About HDE" window (logo of the system, HDE version, credits)
  *   hde-settings --wayland-config [DIR] [--reload]   the labwc configuration of the "HDE (Wayland)" session
@@ -1139,6 +1140,10 @@ int main(int argc, char **argv)
         const char *v = argv[1][12] == '=' ? argv[1] + 13 : argc > 2 ? argv[2] : NULL;
         return display_cli_brightness(v);
     }
+    if (argc > 1 && (!strcmp(argv[1], "--night-light") || g_str_has_prefix(argv[1], "--night-light="))) {
+        const char *v = argv[1][13] == '=' ? argv[1] + 14 : argc > 2 ? argv[2] : NULL;
+        return display_cli_night_light(v);
+    }
     if (argc > 1 && !strcmp(argv[1], "--project")) {
         /* F8 / Super+P / the display key (hde-hotkeys), or a screen just plugged in (hde-xsettings) */
         signal(SIGPIPE, SIG_IGN);
@@ -1193,6 +1198,7 @@ int main(int argc, char **argv)
                "       hde-settings --display-mode pc|duplicate|extend|second   the same without a window\n"
                "       hde-settings --displays         the screens, the layout in use and the brightness method\n"
                "       hde-settings --brightness [+N|-N|N]   show or change the screen brightness\n"
+               "       hde-settings --night-light [on|off|toggle]   show or switch Night Light (X11)\n"
                "       hde-settings --about            this computer, the system and the memory HDE uses\n"
                "       hde-settings --about-window     the About HDE window\n"
                "       hde-settings --wayland-config [DIR] [--reload]   write labwc's configuration (Wayland session)\n"

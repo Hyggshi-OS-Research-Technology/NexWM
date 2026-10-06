@@ -1,11 +1,15 @@
 /* hde-status: the status area of the panel — Fcitx, network (Wi-Fi/Ethernet), Bluetooth, volume, battery.
  *
- * - Every external command (nmcli, pactl/wpctl/amixer, fcitx5-remote) runs ASYNCHRONOUSLY with a timeout,
- *   so the panel never freezes.
+ * - Every external command (nmcli, pactl/wpctl/amixer, fcitx5-remote) runs ASYNCHRONOUSLY with a timeout
+ *   (src/hde-run.c), so the panel never freezes.
  * - Bluetooth is read straight from BlueZ over D-Bus (not bluetoothctl — it hangs while bluetoothd is not running).
+ * - The battery comes from the kernel (src/hde-power.c): charge, charging or not, the time left.
  * - Items without the matching hardware/service hide themselves.
- * - Left click: main action · right click: open the configuration tool · scrolling on the volume: ±5%, in the
- *   direction the fingers (or the wheel) move: up = louder, also with natural scrolling.
+ * - Left click: network, Bluetooth and volume open the Control Center (at their own page from the right-click menu),
+ *   the battery opens the battery panel; cc_status_click=false gives the old actions back (settings page, mute).
+ *   Right click: a menu with icons (the page of the Control Center, the settings page, the tools that are installed).
+ *   Scrolling on the volume: ±5%, in the direction the fingers (or the wheel) move: up = louder, also with natural
+ *   scrolling.
  */
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
@@ -17,109 +21,21 @@
 #include "hde-osd.h"
 #include "hde-commands.h"
 #include "hde-input.h"
+#include "hde-power.h"
+#include "hde-flyout.h"
+#include "hde-panel-config.h"
 
 #define POLL_SECONDS 5
-#define CMD_TIMEOUT_SECONDS 4
 
-/* ---------- asynchronous commands ---------- */
-typedef void (*RunCb)(gboolean ok, const char *out, gpointer data);
-typedef struct { RunCb cb; gpointer data; GSubprocess *proc; guint timer; } Run;
-
-static gboolean have(const char *bin)
-{
-    char *p = g_find_program_in_path(bin);
-    g_free(p);
-    return p != NULL;
-}
-
-static gboolean run_timeout(gpointer p)
-{
-    Run *r = p;
-    r->timer = 0;
-    g_subprocess_force_exit(r->proc);
-    return G_SOURCE_REMOVE;
-}
-
-static void run_done(GObject *src, GAsyncResult *res, gpointer data)
-{
-    Run *r = data;
-    char *out = NULL;
-    GSubprocess *p = G_SUBPROCESS(src);
-    gboolean ok = g_subprocess_communicate_utf8_finish(p, res, &out, NULL, NULL) &&
-                  g_subprocess_get_if_exited(p) && g_subprocess_get_exit_status(p) == 0;
-    if (r->timer) g_source_remove(r->timer);
-    r->cb(ok, out, r->data);
-    g_free(out);
-    g_object_unref(r->proc);
-    g_free(r);
-}
-
-static void run_async(const char *const *argv, RunCb cb, gpointer data)
-{
-    if (!have(argv[0])) { cb(FALSE, NULL, data); return; }
-    GError *err = NULL;
-    GSubprocess *p = g_subprocess_newv(argv, G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE, &err);
-    if (!p) { g_clear_error(&err); cb(FALSE, NULL, data); return; }
-    Run *r = g_new0(Run, 1);
-    r->cb = cb; r->data = data; r->proc = p;
-    r->timer = g_timeout_add_seconds(CMD_TIMEOUT_SECONDS, run_timeout, r);
-    g_subprocess_communicate_utf8_async(p, NULL, NULL, run_done, r);
-}
-
-/* Run a shell snippet asynchronously (no g_shell_parse -> no quoting worries). */
-static void run_shell(const char *script)
-{
-    gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)script, NULL };
-    GError *err = NULL;
-    if (!g_spawn_async(NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                       NULL, NULL, NULL, &err))
-        g_clear_error(&err);
-}
-
-static void spawn_quiet(const char *cmd)
-{
-    GError *err = NULL;
-    if (!g_spawn_command_line_async(cmd, &err)) g_clear_error(&err);
-}
-
-/* Run the first application found in the list. */
-static void launch_first(const char *const *cmds)
-{
-    for (int i = 0; cmds[i]; i++) {
-        char **w = g_strsplit(cmds[i], " ", 2);
-        gboolean ok = w[0] && have(w[0]);
-        g_strfreev(w);
-        if (ok) { spawn_quiet(cmds[i]); return; }
-    }
-}
-
-/* hde-settings lives next to hde-panel (fresh build) or in PATH. */
-void hde_open_settings(const char *page)
-{
-    char *self = g_file_read_link("/proc/self/exe", NULL);
-    char *path = NULL;
-    if (self) {
-        char *dir = g_path_get_dirname(self);
-        char *p = g_build_filename(dir, "hde-settings", NULL);
-        if (g_file_test(p, G_FILE_TEST_IS_EXECUTABLE)) path = p; else g_free(p);
-        g_free(dir);
-    }
-    if (!path) path = g_find_program_in_path("hde-settings");
-    if (path) {
-        char *q = g_shell_quote(path);
-        char *cmd = page ? g_strdup_printf("%s %s", q, page) : g_strdup(q);
-        spawn_quiet(cmd);
-        g_free(q); g_free(cmd);
-    }
-    g_free(path); g_free(self);
-}
+static HdeStatusActions acts;
 
 /* ---------- widgets for each item ---------- */
-typedef struct { GtkWidget *btn, *img, *lbl; gboolean busy; } Item;
+typedef struct { GtkWidget *btn, *img, *lbl; gboolean busy; const char *name; } Item;
 static Item it_fcitx, it_net, it_bt, it_vol, it_bat;
 
-static void item_init(Item *it, GtkWidget *box, gboolean with_label)
+static void item_init(Item *it, GtkWidget *box, gboolean with_label, const char *name)
 {
+    it->name = name;
     it->btn = gtk_button_new();
     gtk_button_set_relief(GTK_BUTTON(it->btn), GTK_RELIEF_NONE);
     gtk_style_context_add_class(gtk_widget_get_style_context(it->btn), "status-btn");
@@ -151,6 +67,9 @@ static void item_set(Item *it, const char *icon, const char *text, const char *t
     gtk_widget_show(it->btn);
 }
 
+/* what a left click does, for the tooltips */
+static gboolean cc_click(void) { return acts.control_center && hde_cfg_get_bool("cc_status_click", TRUE); }
+
 /* ================= Fcitx ================= */
 static const char *fcitx_bin;   /* fcitx5-remote or fcitx-remote */
 
@@ -173,9 +92,9 @@ static char *fcitx_label(const char *name)
     return s;
 }
 
-static void on_fcitx(gboolean ok, const char *out, gpointer d)
+static void on_fcitx(gboolean ok, const char *out, const char *err, gpointer d)
 {
-    (void)d;
+    (void)d; (void)err;
     it_fcitx.busy = FALSE;
     char *name = out ? g_strstrip(g_strdup(out)) : NULL;
     if (!ok || !name || !*name) { gtk_widget_hide(it_fcitx.btn); g_free(name); return; }
@@ -190,7 +109,7 @@ static void poll_fcitx(void)
     if (!fcitx_bin || it_fcitx.busy) return;
     it_fcitx.busy = TRUE;
     const char *argv[] = { fcitx_bin, "-n", NULL };
-    run_async(argv, on_fcitx, NULL);
+    hde_run(argv, NULL, 4, on_fcitx, NULL);
 }
 
 /* ================= Network ================= */
@@ -221,15 +140,16 @@ static void net_apply(NetState *s, int signal)
         g_string_append(tip, "Network: not connected");
     }
     if (s->eth_on) g_string_append_printf(tip, "%sEthernet: %s", tip->len ? "\n" : "", s->eth && *s->eth ? s->eth : "connected");
-    g_string_append(tip, "\nClick: network settings");
+    g_string_append(tip, cc_click() ? "\nClick: Control Center · Right-click: more" : "\nClick: network settings");
     item_set(&it_net, icon, NULL, tip->str);
     g_string_free(tip, TRUE);
 }
 
 static void net_state_free(NetState *s) { g_free(s->wifi); g_free(s->eth); g_free(s); }
 
-static void on_net_signal(gboolean ok, const char *out, gpointer d)
+static void on_net_signal(gboolean ok, const char *out, const char *err, gpointer d)
 {
+    (void)err;
     NetState *s = d;
     int sig = -1;
     if (ok && out) {
@@ -269,9 +189,9 @@ static void net_sysfs(NetState *s)
     g_dir_close(d);
 }
 
-static void on_net_dev(gboolean ok, const char *out, gpointer d)
+static void on_net_dev(gboolean ok, const char *out, const char *err, gpointer d)
 {
-    (void)d;
+    (void)d; (void)err;
     NetState *s = g_new0(NetState, 1);
     if (!ok || !out) {
         net_sysfs(s);
@@ -296,7 +216,7 @@ static void on_net_dev(gboolean ok, const char *out, gpointer d)
     }
     if (s->wifi_on && ok) {      /* signal strength of the network in use (no rescan) */
         const char *argv[] = { "nmcli", "-t", "-f", "IN-USE,SIGNAL", "dev", "wifi", "list", "--rescan", "no", NULL };
-        run_async(argv, on_net_signal, s);
+        hde_run(argv, NULL, 4, on_net_signal, s);
         return;
     }
     net_apply(s, -1);
@@ -309,21 +229,24 @@ static void poll_net(void)
     if (it_net.busy) return;
     it_net.busy = TRUE;
     const char *argv[] = { "nmcli", "-t", "-f", "TYPE,STATE,CONNECTION", "device", NULL };
-    run_async(argv, on_net_dev, NULL);
+    hde_run(argv, NULL, 4, on_net_dev, NULL);
 }
 
 /* ================= Bluetooth ================= */
 static void bt_apply(gboolean powered, int n_conn, const char *names)
 {
-    if (!powered) { item_set(&it_bt, "bluetooth-disabled-symbolic", NULL, "Bluetooth: off\nClick: Bluetooth settings"); return; }
-    char *tip = n_conn > 0
-        ? g_strdup_printf("Bluetooth: %d connected\n%s\nClick: Bluetooth settings", n_conn, names ? names : "")
-        : g_strdup("Bluetooth: on\nClick: Bluetooth settings");
+    const char *click = cc_click() ? "Click: Control Center · Right-click: more" : "Click: Bluetooth settings";
+    if (!powered) {
+        char *tip = g_strdup_printf("Bluetooth: off\n%s", click);
+        item_set(&it_bt, "bluetooth-disabled-symbolic", NULL, tip);
+        g_free(tip);
+        return;
+    }
+    char *tip = n_conn > 0 ? g_strdup_printf("Bluetooth: %d connected\n%s\n%s", n_conn, names ? names : "", click)
+                           : g_strdup_printf("Bluetooth: on\n%s", click);
     item_set(&it_bt, n_conn > 0 ? "bluetooth-active-symbolic" : "bluetooth-symbolic", NULL, tip);
     g_free(tip);
 }
-
-static GDBusConnection *sysbus;
 
 static void on_bt_objects(GObject *src, GAsyncResult *res, gpointer d)
 {
@@ -374,6 +297,7 @@ static void on_bt_objects(GObject *src, GAsyncResult *res, gpointer d)
 
 static void poll_bt(void)
 {
+    GDBusConnection *sysbus = hde_system_bus();
     if (it_bt.busy || !sysbus) return;
     it_bt.busy = TRUE;
     g_dbus_connection_call(sysbus, "org.bluez", "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects",
@@ -381,31 +305,25 @@ static void poll_bt(void)
                            on_bt_objects, NULL);
 }
 
-static void on_sysbus(GObject *src, GAsyncResult *res, gpointer d)
-{
-    (void)src; (void)d;
-    sysbus = g_bus_get_finish(res, NULL);
-    if (sysbus) poll_bt();
-}
-
 /* ================= Volume (pactl / wpctl / amixer — see HDE_SH_VOLUME_GET) ================= */
 static int vol_pct = -1;
-
-static const char *vol_icon(int pct, gboolean muted);
-
-static void vol_apply(gboolean muted)
-{
-    const char *icon = vol_icon(vol_pct, muted);
-    char *txt = muted ? g_strdup("mute") : g_strdup_printf("%d%%", vol_pct);
-    item_set(&it_vol, icon, txt, "Volume\nClick: mute · Scroll: ±5% · Right-click: mixer");
-    g_free(txt);
-}
+static gboolean vol_muted;
 
 static const char *vol_icon(int pct, gboolean muted)
 {
     return muted || pct == 0 ? "audio-volume-muted-symbolic" :
            pct < 33 ? "audio-volume-low-symbolic" :
            pct < 66 ? "audio-volume-medium-symbolic" : "audio-volume-high-symbolic";
+}
+
+static void vol_apply(gboolean muted)
+{
+    vol_muted = muted;
+    const char *icon = vol_icon(vol_pct, muted);
+    char *txt = muted ? g_strdup("mute") : g_strdup_printf("%d%%", vol_pct);
+    item_set(&it_vol, icon, txt, cc_click() ? "Volume\nClick: Control Center · Scroll: ±5% · Right-click: more"
+                                            : "Volume\nClick: mute · Scroll: ±5% · Right-click: more");
+    g_free(txt);
 }
 
 /* out = "<percent> <muted>" (see HDE_SH_VOLUME_GET) */
@@ -418,27 +336,25 @@ static gboolean parse_vol(gboolean ok, const char *out, int *pct, gboolean *mute
     return TRUE;
 }
 
-static void on_vol(gboolean ok, const char *out, gpointer d)
+static void on_vol(gboolean ok, const char *out, const char *err, gpointer d)
 {
-    (void)d;
+    (void)d; (void)err;
     it_vol.busy = FALSE;
     gboolean muted = FALSE;
     if (!parse_vol(ok, out, &vol_pct, &muted)) { vol_pct = -1; gtk_widget_hide(it_vol.btn); return; }
     vol_apply(muted);
 }
 
-static const char *const vol_get_argv[] = { "/bin/sh", "-c", HDE_SH_VOLUME_GET, NULL };
-
 static void poll_vol(void)
 {
     if (it_vol.busy) return;
     it_vol.busy = TRUE;
-    run_async(vol_get_argv, on_vol, NULL);
+    hde_run_sh(HDE_SH_VOLUME_GET, 4, on_vol, NULL);
 }
 
-static void on_osd_vol(gboolean ok, const char *out, gpointer d)
+static void on_osd_vol(gboolean ok, const char *out, const char *err, gpointer d)
 {
-    (void)d;
+    (void)d; (void)err;
     int pct = 0;
     gboolean muted = FALSE;
     if (!parse_vol(ok, out, &pct, &muted)) {
@@ -452,12 +368,12 @@ static void on_osd_vol(gboolean ok, const char *out, gpointer d)
 
 void hde_status_osd_volume(void)
 {
-    run_async(vol_get_argv, on_osd_vol, NULL);
+    hde_run_sh(HDE_SH_VOLUME_GET, 4, on_osd_vol, NULL);
 }
 
-static void on_osd_mic(gboolean ok, const char *out, gpointer d)
+static void on_osd_mic(gboolean ok, const char *out, const char *err, gpointer d)
 {
-    (void)d;
+    (void)d; (void)err;
     gboolean muted = ok && out && atoi(out) > 0;
     hde_osd_show(muted ? "microphone-sensitivity-muted-symbolic" : "audio-input-microphone-symbolic", -1,
                  muted ? "Microphone off" : "Microphone on");
@@ -465,42 +381,23 @@ static void on_osd_mic(gboolean ok, const char *out, gpointer d)
 
 void hde_status_osd_mic(void)
 {
-    static const char *const argv[] = { "/bin/sh", "-c", HDE_SH_MIC_GET, NULL };
-    run_async(argv, on_osd_mic, NULL);
+    hde_run_sh(HDE_SH_MIC_GET, 4, on_osd_mic, NULL);
 }
 
-/* ================= Pin (sysfs) ================= */
+/* ================= Battery (the kernel's numbers, src/hde-power.c) ================= */
 static void poll_bat(void)
 {
-    GDir *d = g_dir_open("/sys/class/power_supply", 0, NULL);
-    const char *n;
-    gboolean found = FALSE;
-    while (d && (n = g_dir_read_name(d))) {
-        if (!g_str_has_prefix(n, "BAT")) continue;
-        char *cp = g_strdup_printf("/sys/class/power_supply/%s/capacity", n);
-        char *sp = g_strdup_printf("/sys/class/power_supply/%s/status", n);
-        char *cap = NULL, *st = NULL;
-        if (g_file_get_contents(cp, &cap, NULL, NULL)) {
-            g_file_get_contents(sp, &st, NULL, NULL);
-            int c = CLAMP(atoi(cap), 0, 100);
-            if (st) g_strstrip(st);
-            gboolean charging = st && !strcmp(st, "Charging");
-            gboolean full = st && !strcmp(st, "Full");
-            int lvl = (c + 5) / 10 * 10;
-            char *icon = full ? g_strdup("battery-level-100-charged-symbolic")
-                       : charging ? g_strdup_printf("battery-level-%d-charging-symbolic", lvl)
-                                  : g_strdup_printf("battery-level-%d-symbolic", lvl);
-            char *txt = g_strdup_printf("%d%%", c);
-            char *tip = g_strdup_printf("Battery: %d%% (%s)\nClick: power settings", c, st ? st : "unknown");
-            item_set(&it_bat, icon, txt, tip);
-            g_free(icon); g_free(txt); g_free(tip);
-            found = TRUE;
-        }
-        g_free(cp); g_free(sp); g_free(cap); g_free(st);
-        if (found) break;
-    }
-    if (d) g_dir_close(d);
-    if (!found) gtk_widget_hide(it_bat.btn);
+    HdePower p;
+    hde_power_read(&p);
+    if (p.percent < 0) { gtk_widget_hide(it_bat.btn); return; }
+    char *icon = hde_power_icon_name(p.percent, p.state);
+    char *txt = g_strdup_printf("%d%%", p.percent);
+    char *t = hde_power_time_text(p.minutes);
+    char *tip = g_strdup_printf("Battery: %d%% · %s%s%s%s\nClick: battery details and power mode", p.percent,
+                                hde_bat_state_text(p.state, p.ac), p.minutes >= 0 ? " · " : "", t,
+                                p.minutes < 0 ? "" : p.state == HDE_BAT_CHARGING ? " until full" : " left");
+    item_set(&it_bat, icon, txt, tip);
+    g_free(icon); g_free(txt); g_free(t); g_free(tip);
 }
 
 /* ================= interaction ================= */
@@ -518,32 +415,119 @@ void hde_status_refresh(void)
     g_timeout_add(1500, refresh_once, NULL);
 }
 
+void hde_status_set_actions(const HdeStatusActions *a) { acts = *a; }
+
+/* ---- right-click menus ---- */
+static void menu_cc(GtkMenuItem *i, gpointer d)
+{
+    (void)i;
+    GtkWidget *anchor = g_object_get_data(G_OBJECT(i), "hde-anchor");
+    if (acts.control_center) acts.control_center(anchor, GPOINTER_TO_INT(d));
+}
+
+static void menu_settings(GtkMenuItem *i, gpointer page) { (void)i; hde_open_settings(page); }
+static void menu_run(GtkMenuItem *i, gpointer cmd) { (void)i; hde_launch_first((const char *const[]){ cmd, NULL }); }
+static void menu_mute(GtkMenuItem *i, gpointer d) { (void)i; (void)d; hde_spawn(HDE_SH_VOLUME_MUTE); g_timeout_add(500, refresh_once, NULL); }
+static void menu_mic(GtkMenuItem *i, gpointer d) { (void)i; (void)d; hde_spawn(HDE_SH_MIC_MUTE); }
+
+static void menu_battery(GtkMenuItem *i, gpointer d)
+{
+    (void)d;
+    if (acts.battery) acts.battery(g_object_get_data(G_OBJECT(i), "hde-anchor"));
+}
+
+static void add_item(GtkWidget *m, GtkWidget *anchor, const char *icon, const char *label, GCallback cb, gpointer data)
+{
+    GtkWidget *it = hde_menu_item(icon, label);
+    g_object_set_data(G_OBJECT(it), "hde-anchor", anchor);
+    g_signal_connect(it, "activate", cb, data);
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), it);
+}
+
+static void add_tool(GtkWidget *m, const char *icon, const char *label, const char *cmd)
+{
+    char **w = g_strsplit(cmd, " ", 2);
+    gboolean ok = hde_have(w[0]);
+    g_strfreev(w);
+    if (ok) add_item(m, NULL, icon, label, G_CALLBACK(menu_run), (gpointer)cmd);
+}
+
+static void item_menu(const char *id, GtkWidget *anchor, GdkEventButton *e)
+{
+    GtkWidget *m = gtk_menu_new();
+    if (!strcmp(id, "net")) {
+        add_item(m, anchor, "network-wireless-symbolic", "_Wi-Fi networks", G_CALLBACK(menu_cc), GINT_TO_POINTER(1));
+        add_item(m, anchor, "preferences-system-network-symbolic|network-workgroup-symbolic", "_Network settings…",
+                 G_CALLBACK(menu_settings), (gpointer)"network");
+        add_tool(m, "network-wired-symbolic", "_Edit connections (VPN, proxies)…", "nm-connection-editor");
+    } else if (!strcmp(id, "bt")) {
+        add_item(m, anchor, "bluetooth-symbolic", "_Bluetooth devices", G_CALLBACK(menu_cc), GINT_TO_POINTER(2));
+        add_item(m, anchor, "list-add-symbolic", "_Pair a new device…", G_CALLBACK(menu_settings), (gpointer)"bluetooth");
+        add_tool(m, "bluetooth-active-symbolic", "Blue_man…", "blueman-manager");
+    } else if (!strcmp(id, "vol")) {
+        add_item(m, anchor, vol_muted ? "audio-volume-high-symbolic" : "audio-volume-muted-symbolic",
+                 vol_muted ? "_Unmute" : "_Mute", G_CALLBACK(menu_mute), NULL);
+        add_item(m, anchor, "audio-input-microphone-symbolic", "Microphone _on / off", G_CALLBACK(menu_mic), NULL);
+        add_item(m, anchor, "audio-speakers-symbolic", "_Sound: devices and apps", G_CALLBACK(menu_cc), GINT_TO_POINTER(3));
+        add_item(m, anchor, "preferences-desktop-sound-symbolic|audio-card-symbolic", "Sound _settings…",
+                 G_CALLBACK(menu_settings), (gpointer)"sound");
+        add_tool(m, "multimedia-volume-control-symbolic|audio-card-symbolic", "_Volume mixer (pavucontrol)…", "pavucontrol");
+    } else if (!strcmp(id, "bat")) {
+        add_item(m, anchor, "battery-good-symbolic|battery-symbolic", "_Battery details", G_CALLBACK(menu_battery), NULL);
+        add_item(m, anchor, "preferences-system-power-symbolic|battery-symbolic", "_Power settings…",
+                 G_CALLBACK(menu_settings), (gpointer)"power");
+    }
+    gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
+    add_item(m, anchor, "view-grid-symbolic|view-app-grid-symbolic|preferences-system-symbolic", "_Control Center",
+             G_CALLBACK(menu_cc), GINT_TO_POINTER(0));
+    if (g_getenv("HDE_DEBUG")) {
+        GList *items = gtk_container_get_children(GTK_CONTAINER(m));
+        GString *s = g_string_new(NULL);
+        for (GList *l = items; l; l = l->next) {
+            GtkWidget *child = gtk_bin_get_child(GTK_BIN(l->data));
+            GList *parts = child && GTK_IS_BOX(child) ? gtk_container_get_children(GTK_CONTAINER(child)) : NULL;
+            for (GList *p = parts; p; p = p->next)
+                if (GTK_IS_LABEL(p->data)) g_string_append_printf(s, "%s%s", s->len ? " | " : "", gtk_label_get_text(p->data));
+            g_list_free(parts);
+        }
+        g_list_free(items);
+        fprintf(stderr, "hde-panel: status menu %s: %s\n", id, s->str);
+        g_string_free(s, TRUE);
+    }
+    hde_menu_popup(m, anchor, (GdkEvent *)e);
+}
+
 static gboolean on_press(GtkWidget *w, GdkEventButton *e, gpointer data)
 {
-    (void)w;
     const char *id = data;
+    if (e->type != GDK_BUTTON_PRESS) return TRUE;
     gboolean right = e->button == 3;
 
     if (!strcmp(id, "fcitx")) {
         if (right) {
             const char *c[] = { "fcitx5-configtool", "fcitx-configtool", NULL };
-            launch_first(c);
+            hde_launch_first(c);
         } else if (fcitx_bin) {
             char *cmd = g_strdup_printf("%s -t", fcitx_bin);
-            spawn_quiet(cmd);
+            hde_spawn(cmd);
             g_free(cmd);
         }
-    } else if (!strcmp(id, "net")) {
-        if (right) { const char *c[] = { "nm-connection-editor", NULL }; launch_first(c); }
-        else hde_open_settings("network");
-    } else if (!strcmp(id, "bt")) {
-        if (right) { const char *c[] = { "blueman-manager", "blueberry", NULL }; launch_first(c); }
-        else hde_open_settings("bluetooth");
-    } else if (!strcmp(id, "vol")) {
-        if (right) { const char *c[] = { "pavucontrol", "pavucontrol-qt", NULL }; launch_first(c); }
-        else run_shell(HDE_SH_VOLUME_MUTE);
+    } else if (right) {
+        item_menu(id, w, e);
+        return TRUE;
     } else if (!strcmp(id, "bat")) {
-        hde_open_settings("power");
+        if (acts.battery) acts.battery(w);
+        else hde_open_settings("power");
+        return TRUE;
+    } else if (cc_click()) {
+        acts.control_center(w, 0);              /* the main page: Wi-Fi, Bluetooth, sound and notifications */
+        return TRUE;
+    } else if (!strcmp(id, "net")) {
+        hde_open_settings("network");
+    } else if (!strcmp(id, "bt")) {
+        hde_open_settings("bluetooth");
+    } else if (!strcmp(id, "vol")) {
+        hde_spawn(HDE_SH_VOLUME_MUTE);
     }
     g_timeout_add(600, refresh_once, NULL);       /* refresh right after the click */
     return TRUE;
@@ -588,56 +572,62 @@ static gboolean on_scroll(GtkWidget *w, GdkEventScroll *e, gpointer data)
     if (getenv("HDE_DEBUG"))
         fprintf(stderr, "hde-panel: volume: scroll %s from device %d (natural scrolling %s): volume %s\n",
                 e->direction == GDK_SCROLL_UP ? "up" : "down", id, natural ? "on" : "off", up ? "up" : "down");
-    run_shell(up ? HDE_SH_VOLUME_UP : HDE_SH_VOLUME_DOWN);
+    hde_spawn(up ? HDE_SH_VOLUME_UP : HDE_SH_VOLUME_DOWN);
     g_timeout_add(300, refresh_once, NULL);
     return TRUE;
 }
 
-/* HDE_DEBUG: screen position of the volume icon, for the GUI tests */
-static guint vol_geom_timer;
+/* HDE_DEBUG: screen position of the status icons, for the GUI tests ("hde-panel: widget volume at X,Y WxH") */
+static guint geom_timer;
 
-static gboolean log_volume_geometry(gpointer d)
+static gboolean log_geometry(gpointer d)
 {
     (void)d;
-    vol_geom_timer = 0;
-    GtkWidget *w = it_vol.btn, *top = w ? gtk_widget_get_toplevel(w) : NULL;
-    GdkWindow *gw = top ? gtk_widget_get_window(top) : NULL;
-    int ox = 0, oy = 0, x = 0, y = 0;
-    if (gw && gtk_widget_get_mapped(w) && gtk_widget_translate_coordinates(w, top, 0, 0, &x, &y)) {
-        gdk_window_get_origin(gw, &ox, &oy);
-        fprintf(stderr, "hde-panel: widget volume at %d,%d %dx%d\n", ox + x, oy + y, gtk_widget_get_allocated_width(w),
-                gtk_widget_get_allocated_height(w));
+    geom_timer = 0;
+    Item *items[] = { &it_net, &it_bt, &it_vol, &it_bat };
+    for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
+        GtkWidget *w = items[i]->btn, *top = w ? gtk_widget_get_toplevel(w) : NULL;
+        GdkWindow *gw = top ? gtk_widget_get_window(top) : NULL;
+        int ox = 0, oy = 0, x = 0, y = 0;
+        if (gw && gtk_widget_get_mapped(w) && gtk_widget_translate_coordinates(w, top, 0, 0, &x, &y)) {
+            gdk_window_get_origin(gw, &ox, &oy);
+            fprintf(stderr, "hde-panel: widget %s at %d,%d %dx%d\n", items[i]->name, ox + x, oy + y,
+                    gtk_widget_get_allocated_width(w), gtk_widget_get_allocated_height(w));
+        }
     }
     return G_SOURCE_REMOVE;
 }
 
-static void on_volume_allocate(GtkWidget *w, GdkRectangle *a, gpointer d)
+static void on_item_allocate(GtkWidget *w, GdkRectangle *a, gpointer d)
 {
     (void)w; (void)a; (void)d;
-    if (vol_geom_timer) g_source_remove(vol_geom_timer);
-    vol_geom_timer = g_timeout_add(500, log_volume_geometry, NULL);
+    if (geom_timer) g_source_remove(geom_timer);
+    geom_timer = g_timeout_add(500, log_geometry, NULL);
 }
 
 GtkWidget *hde_status_new(void)
 {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    fcitx_bin = have("fcitx5-remote") ? "fcitx5-remote" : have("fcitx-remote") ? "fcitx-remote" : NULL;
+    fcitx_bin = hde_have("fcitx5-remote") ? "fcitx5-remote" : hde_have("fcitx-remote") ? "fcitx-remote" : NULL;
 
-    item_init(&it_fcitx, box, TRUE);
-    item_init(&it_net,   box, FALSE);
-    item_init(&it_bt,    box, FALSE);
-    item_init(&it_vol,   box, TRUE);
-    item_init(&it_bat,   box, TRUE);
+    item_init(&it_fcitx, box, TRUE, "input-method");
+    item_init(&it_net,   box, FALSE, "network");
+    item_init(&it_bt,    box, FALSE, "bluetooth");
+    item_init(&it_vol,   box, TRUE, "volume");
+    item_init(&it_bat,   box, TRUE, "battery");
 
     g_signal_connect(it_fcitx.btn, "button-press-event", G_CALLBACK(on_press), "fcitx");
     g_signal_connect(it_net.btn,   "button-press-event", G_CALLBACK(on_press), "net");
     g_signal_connect(it_bt.btn,    "button-press-event", G_CALLBACK(on_press), "bt");
     g_signal_connect(it_vol.btn,   "button-press-event", G_CALLBACK(on_press), "vol");
     g_signal_connect(it_vol.btn,   "scroll-event",       G_CALLBACK(on_scroll), NULL);
-    if (getenv("HDE_DEBUG")) g_signal_connect(it_vol.btn, "size-allocate", G_CALLBACK(on_volume_allocate), NULL);
     g_signal_connect(it_bat.btn,   "button-press-event", G_CALLBACK(on_press), "bat");
+    if (getenv("HDE_DEBUG")) {
+        Item *items[] = { &it_net, &it_bt, &it_vol, &it_bat };
+        for (guint i = 0; i < G_N_ELEMENTS(items); i++)
+            g_signal_connect(items[i]->btn, "size-allocate", G_CALLBACK(on_item_allocate), NULL);
+    }
 
-    g_bus_get(G_BUS_TYPE_SYSTEM, NULL, on_sysbus, NULL);
     g_idle_add(refresh_once, NULL);
     g_timeout_add_seconds(POLL_SECONDS, refresh_cb, NULL);
     return box;

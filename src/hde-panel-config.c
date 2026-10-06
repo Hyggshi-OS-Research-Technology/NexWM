@@ -115,8 +115,8 @@ void hde_panel_config_load(HdePanelConfig *c)
     c->clock_date = kf_bool(kf, "clock_show_date", TRUE);
     c->clock_seconds = kf_bool(kf, "clock_show_seconds", FALSE);
     c->menu_label = kf_str(kf, "menu_button_label", "Menu");
-    c->menu_icon = kf_str(kf, "menu_button_icon", "menu");
-    if (!*c->menu_icon) { g_free(c->menu_icon); c->menu_icon = g_strdup("menu"); }
+    c->menu_icon = kf_str(kf, "menu_button_icon", HDE_MENU_ICON_DEFAULT);
+    if (!*c->menu_icon) { g_free(c->menu_icon); c->menu_icon = g_strdup(HDE_MENU_ICON_DEFAULT); }
     c->launchers = kf_list(kf, GROUP, "panel_launchers");
     c->applets = kf_list(kf, GROUP, "panel_applets");
 
@@ -192,6 +192,47 @@ void hde_cfg_set_string(const char *key, const char *value)
     if (value) g_key_file_set_string(kf, GROUP, key, value);
     else g_key_file_remove_key(kf, GROUP, key, NULL);
     ini_save(kf);
+    g_key_file_free(kf);
+}
+
+gboolean hde_cfg_get_bool(const char *key, gboolean def)
+{
+    GKeyFile *kf = ini_load();
+    gboolean v = kf_bool(kf, key, def);
+    g_key_file_free(kf);
+    return v;
+}
+
+int hde_cfg_get_int(const char *key, int def)
+{
+    GKeyFile *kf = ini_load();
+    int v = kf_int(kf, key, def);
+    g_key_file_free(kf);
+    return v;
+}
+
+char *hde_cfg_get_string(const char *key, const char *def)
+{
+    GKeyFile *kf = ini_load();
+    char *v = kf_str(kf, key, def);
+    g_key_file_free(kf);
+    return v;
+}
+
+void hde_cc_prefs_load(HdeCcPrefs *p)
+{
+    GKeyFile *kf = ini_load();
+    p->wifi = kf_bool(kf, "cc_wifi", TRUE);
+    p->bluetooth = kf_bool(kf, "cc_bluetooth", TRUE);
+    p->airplane = kf_bool(kf, "cc_airplane", TRUE);
+    p->dnd = kf_bool(kf, "cc_dnd", TRUE);
+    p->dark = kf_bool(kf, "cc_dark", TRUE);
+    p->night = kf_bool(kf, "cc_night_light", TRUE);
+    p->power_mode = kf_bool(kf, "cc_power_mode", TRUE);
+    p->brightness = kf_bool(kf, "cc_brightness", TRUE);
+    p->volume = kf_bool(kf, "cc_volume", TRUE);
+    p->notifications = kf_bool(kf, "cc_notifications", TRUE);
+    p->status_click = kf_bool(kf, "cc_status_click", TRUE);
     g_key_file_free(kf);
 }
 

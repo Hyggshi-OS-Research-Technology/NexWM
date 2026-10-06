@@ -3,7 +3,9 @@
 # (Super key, the Start menu in its three layouts — search, keyboard, favorites, pin to panel —, F1/F2/F3, F6/F7
 #  brightness, F8 Project window, notifications, PrtSc screenshots and the Screenshot window, desktop icon frame + icon
 #  menu, Wi-Fi list, About with the logo of the system / memory used, the About window for Hyggshi OS, Debian, Linux Mint,
-#  live Dark mode, panel at the top / height / items / extensions, WM switch without logout, restart after a crash).
+#  live Dark mode, panel at the top / height / items / extensions, the Control Center (quick toggles, brightness,
+#  volume, Wi-Fi password in the list, Bluetooth, output devices, notifications), the battery panel (a fake battery),
+#  the panel's right-click menus, WM switch without logout, restart after a crash).
 #  Several screens for real: tests/display-test.sh (Xorg). The Wayland session: tests/wayland-test.sh (labwc).
 #
 #   make check            (or: BUILD=build sh tests/smoke.sh)
@@ -101,6 +103,17 @@ esac
 EOF
     chmod +x "$OUT/fakebin/nmcli"
 
+    # a laptop battery for the battery icon and the battery panel (HDE_POWER_SUPPLY_DIR replaces /sys/class/power_supply)
+    PS="$OUT/power_supply"
+    mkdir -p "$PS/BAT0" "$PS/AC"
+    printf 'Mains\n' > "$PS/AC/type"; printf '0\n' > "$PS/AC/online"
+    for kv in type=Battery status=Discharging present=1 capacity=82 energy_now=47600000 energy_full=58000000 \
+              energy_full_design=63700000 power_now=5200000 voltage_now=12100000 cycle_count=123 technology=Li-ion \
+              manufacturer=SANYO model_name=45N1001; do
+        printf '%s\n' "${kv#*=}" > "$PS/BAT0/${kv%%=*}"
+    done
+    export HDE_POWER_SUPPLY_DIR="$PS"
+
     export HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.config" XDG_CACHE_HOME="$OUT/home/.cache"
     export XDG_DATA_HOME="$OUT/home/.local/share" XDG_RUNTIME_DIR="$OUT/run"
     export HDE_FAKE_NMCLI_LOG="$OUT/nmcli.log" PATH="$OUT/fakebin:$PATH" LANG=C.UTF-8 NO_AT_BRIDGE=1
@@ -136,6 +149,7 @@ fi
 
 # Fake BlueZ (python3-dbusmock) on a private "system bus": checks the Bluetooth device list
 BLUEZ_MOCK=""
+PPD_MOCK=""
 SYSBUS_PID=""
 bz() { m=$1; shift; gdbus call --system --dest org.bluez --object-path / --method "org.bluez.Mock.$m" "$@" >> "$OUT/bluez-mock.log" 2>&1; }
 if python3 -c "import dbusmock" >/dev/null 2>&1; then
@@ -155,6 +169,9 @@ if python3 -c "import dbusmock" >/dev/null 2>&1; then
         bz AddDevice "'hci0'" "'AA:BB:CC:DD:EE:02'" "'Pixel 8'"
         gdbus call --system --dest org.bluez --object-path / \
             --method org.freedesktop.DBus.ObjectManager.GetManagedObjects > "$OUT/bluez-objects.txt" 2>&1
+        # power-profiles-daemon for the power mode of the battery panel and the Control Center
+        python3 -m dbusmock --system --template power_profiles_daemon >> "$OUT/ppd-mock.log" 2>&1 &
+        PPD_MOCK=$!
         echo "INFO: dbusmock $(python3 -c 'import dbusmock; print(getattr(dbusmock, "__version__", "?"))' 2>&1)" >> "$OUT/results.txt"
     fi
 fi
@@ -199,6 +216,16 @@ if [ -x "$B/svgpath-test" ]; then
     else fail "the SVG path reader: $nbad failure(s): $(grep '^FAIL' "$OUT/svgpath-test.txt" | head -n 3 | tr '\n' ' ')"; fi
 else
     skip "svgpath-test not built (make build/svgpath-test)"
+fi
+
+# the batteries (src/hde-power.c) with fake /sys/class/power_supply trees, without an X server
+if [ -x "$B/power-test" ]; then
+    "$B/power-test" > "$OUT/power-test.txt" 2>&1
+    while IFS= read -r l; do
+        case "$l" in PASS:*) pass "${l#PASS: }" ;; FAIL:*) fail "${l#FAIL: }" ;; esac
+    done < "$OUT/power-test.txt"
+else
+    skip "power-test not built (make build/power-test)"
 fi
 
 # ---------- 2. Super key -> Start menu (the modern layout, like Linux Mint: the default) ----------
@@ -960,6 +987,180 @@ HDE_OS_RELEASE="$OUT/os-release-hyggshios" "$B/hde-settings" --about > "$OUT/abo
 check "hde-settings --about tells the base too (Based on: Debian 13 (trixie))" grep -q "^Based on: Debian 13 (trixie)" "$OUT/about-hyggshios.txt"
 grep -h "hde-settings: about" "$OUT"/about-*.log | sed 's/^/INFO: /' >> "$OUT/results.txt"
 
+# ---------- 6e. the Control Center, the battery panel, the panel's right-click menus ----------
+# pwidget NAME -> "CX CY X W": a widget of the panel or of its pop-ups (HDE_DEBUG: "hde-panel: widget NAME at X,Y WxH")
+pwidget() {
+    grep -F "hde-panel: widget $1 at " "$OUT/session.log" | tail -n 1 |
+        sed -n 's/^hde-panel: widget .* at \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p' |
+        awk '{ printf "%d %d %d %d\n", $1 + $3 / 2, $2 + $4 / 2, $1, $3 }'
+}
+# shellcheck disable=SC2046  # "X Y ..." -> arguments
+pclick() { set -- $(pwidget "$1"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
+cclog() { grep "hde-panel: control center: $1" "$OUT/session.log" | tail -n 1; }
+xdotool mousemove 640 400
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a "Smoke test" -i mail-unread "Two new messages" "For the Control Center test"
+    notify-send -a "Calendar" -i x-office-calendar "Meeting at 15:00" "Room 2, with the HDE team"
+fi
+wait_popups
+cc0=$(nlog "control center: shown")
+# shellcheck disable=SC2046
+set -- $(pwidget volume)
+if [ -n "${2:-}" ]; then xdotool mousemove "$1" "$2" click 1; how="clicking the volume icon"
+else "$B/hde-panel" --control-center; how="hde-panel --control-center"; fi
+sleep 2
+if [ "$(nlog "control center: shown")" -gt "$cc0" ]; then pass "$how opens the Control Center ($(cclog 'shown' | sed 's/.*shown //'))"
+else fail "$how opens the Control Center"; fi
+shot 18a-control-center
+check "... Wi-Fi tile: on, connected to Home WiFi (NetworkManager)" grep -q "control center: tile wifi: on (Home WiFi)" "$OUT/session.log"
+if [ -n "$BLUEZ_MOCK" ]; then
+    check "... Bluetooth tile: on, Galaxy Buds2 connected (BlueZ)" grep -q "control center: tile bluetooth: on (Galaxy Buds2)" "$OUT/session.log"
+fi
+check "... Do Not Disturb, Dark mode and Night Light tiles" sh -c "grep -q 'control center: tile dnd: off' '$OUT/session.log' &&
+    grep -q 'control center: tile dark: o' '$OUT/session.log' && grep -q 'control center: tile night: off' '$OUT/session.log'"
+check "... the brightness slider (software dimming in Xvfb)" grep -q "control center: brightness: software dimming: [0-9]*%" "$OUT/session.log"
+check "... it lists the notifications (the 2 new ones and the earlier ones)" \
+    grep -q "control center: notifications: \([2-9]\|[1-9][0-9]\) (" "$OUT/session.log"
+check "... the battery in its footer" grep -q "hde-panel: widget cc-battery at " "$OUT/session.log"
+grep "hde-panel: control center: tile" "$OUT/session.log" | sed 's/^/INFO: /' | sort -u | head -n 9 >> "$OUT/results.txt"
+pclick cc-tile-dnd; sleep 1
+check "the Do Not Disturb tile turns Do Not Disturb on (dnd=true)" grep -q "^dnd=true" "$SETTINGS_INI"
+pclick cc-tile-dnd; sleep 1
+check "... and off again" grep -q "^dnd=false" "$SETTINGS_INI"
+if pactl info >/dev/null 2>&1; then
+    check "the volume slider shows the volume" grep -q "control center: volume: [0-9]*%" "$OUT/session.log"
+    pactl set-sink-volume @DEFAULT_SINK@ 50%; sleep 3
+    # shellcheck disable=SC2046
+    set -- $(pwidget cc-volume-scale)
+    if [ -n "${4:-}" ]; then
+        xdotool mousemove "$(($3 + $4 * 30 / 100))" "$2" click 1; sleep 1.5
+        v=$(vol)
+        if [ "${v:-0}" -ge 20 ] && [ "${v:-0}" -le 40 ]; then pass "clicking the volume slider at 30% sets the volume (50% -> $v%)"
+        else fail "clicking the volume slider at 30% sets the volume (50% -> $v%)"; fi
+        pactl set-sink-volume @DEFAULT_SINK@ 50%
+    else fail "the volume slider is in the Control Center (no widget position logged)"; fi
+fi
+if [ "$(soft)" != "" ] || grep -q "control center: brightness: software" "$OUT/session.log"; then
+    # shellcheck disable=SC2046
+    set -- $(pwidget cc-brightness-scale)
+    if [ -n "${4:-}" ]; then
+        xdotool mousemove "$(($3 + $4 * 60 / 100))" "$2" click 1; sleep 2
+        b=$(soft)
+        if [ "${b:-0}" -ge 55 ] && [ "${b:-0}" -le 75 ]; then pass "the brightness slider dims the screen (software dimming: $b%)"
+        else fail "the brightness slider dims the screen (_HDE_BRIGHTNESS=$b)"; fi
+        xdotool mousemove "$(($3 + $4 - 1))" "$2" click 1; sleep 2
+        check "... and brightens it back to 100%" sh -c "[ \"\$(xprop -root _HDE_BRIGHTNESS | sed -n 's/.*= //p')\" = 100 ]"
+    else fail "the brightness slider is in the Control Center (no widget position logged)"; fi
+fi
+# the Wi-Fi list right in the Control Center, a password asked in the list
+"$B/hde-panel" --control-center=wifi; sleep 3
+w=$(cclog "wifi: [0-9]* network")
+case "$w" in
+    *"Home WiFi* 82% saved secured"*"Neighbor 5G 70% secured"*) pass "the Wi-Fi page lists the networks (saved ones first, one row per name)" ;;
+    *) fail "the Wi-Fi page lists the networks (${w:-nothing logged})" ;;
+esac
+shot 18b-cc-wifi
+p0=$(grep -c "PW-STDIN-LEN: 13" "$OUT/nmcli.log")
+pclick "cc-wifi-Neighbor 5G"; sleep 1.2
+shot 18c-cc-wifi-password
+xdotool type --delay 40 "correct-horse"; xdotool key Return; sleep 3
+p1=$(grep -c "PW-STDIN-LEN: 13" "$OUT/nmcli.log")
+if [ "$p1" -gt "$p0" ] && grep -q "control center: wifi: connected to Neighbor 5G" "$OUT/session.log"; then
+    pass "a new secured network asks for its password right in the list, then connects (password on nmcli's stdin)"
+else fail "a new secured network asks for its password in the list ($p0 -> $p1; $(cclog 'wifi: c'))"; fi
+if grep "^ARGS:" "$OUT/nmcli.log" | grep -q "correct-horse"; then fail "the Control Center must not put the password on the command line"
+else pass "... the password is never on the command line"; fi
+if [ -n "$BLUEZ_MOCK" ]; then
+    "$B/hde-panel" --control-center=bluetooth; sleep 2.5
+    check "the Bluetooth page lists the paired devices" grep -q "control center: bluetooth: on, [0-9]* paired device(s): .*Galaxy Buds2 (connected)" "$OUT/session.log"
+    shot 18d-cc-bluetooth
+fi
+if pactl info >/dev/null 2>&1; then
+    def0=$(pactl info | sed -n 's/^Default Sink: //p')
+    pactl load-module module-null-sink sink_name=hde_hdmi sink_properties=device.description=HDMI-Test >/dev/null 2>&1
+    pacat -p --raw --format=s16le --rate=8000 --channels=1 < /dev/zero > /dev/null 2>&1 &
+    PACAT=$!
+    sleep 1
+    "$B/hde-panel" --control-center=sound; sleep 3
+    check "the Sound page lists the output devices" grep -q "control center: sound: outputs: .*HDMI-Test" "$OUT/session.log"
+    check "... and the apps playing sound, each with its own volume" grep -q "control center: sound: outputs: .*apps: [^ ]* [0-9]*%" "$OUT/session.log"
+    shot 18e-cc-sound
+    pclick cc-sink-hde_hdmi; sleep 2
+    if [ "$(pactl info | sed -n 's/^Default Sink: //p')" = hde_hdmi ]; then pass "choosing an output device makes it the default one"
+    else fail "choosing an output device makes it the default one ($(pactl info | sed -n 's/^Default Sink: //p'))"; fi
+    [ -n "$def0" ] && pactl set-default-sink "$def0"
+    kill "$PACAT" 2>/dev/null
+    pactl unload-module module-null-sink 2>/dev/null
+fi
+"$B/hde-panel" --notifications; sleep 1.5
+shot 18f-cc-notifications
+pclick cc-notif-clear; sleep 1
+check "Clear all removes the notifications" grep -q "control center: notifications: cleared" "$OUT/session.log"
+h0=$(nlog "control center: hidden"); xdotool key Escape; sleep 0.8
+if [ "$(nlog "control center: hidden")" -gt "$h0" ]; then pass "Esc closes the Control Center"; else fail "Esc closes the Control Center"; fi
+c0=$(nlog "control center: shown"); xdotool key super+a; sleep 1.5
+if [ "$(nlog "control center: shown")" -gt "$c0" ]; then pass "Super+A opens the Control Center"; else fail "Super+A opens the Control Center"; fi
+xdotool key Escape; sleep 0.6
+
+# the battery panel (the fake battery of HDE_POWER_SUPPLY_DIR)
+check "the battery icon shows the laptop battery" grep -q "hde-panel: widget battery at " "$OUT/session.log"
+b0=$(nlog "battery: shown")
+pclick battery; sleep 2
+if [ "$(nlog "battery: shown")" -gt "$b0" ]; then pass "clicking the battery icon opens the battery panel"
+else
+    fail "clicking the battery icon opens the battery panel"
+    "$B/hde-panel" --battery; sleep 2
+fi
+if grep -q "hde-panel: battery: BAT0 82% Discharging, 5.2 W, 9 h 09 min left, health 91% (58.0 of 63.7 Wh), 123 cycles" "$OUT/session.log"; then
+    pass "the battery panel: charge, draw, time left, health, cycles ($(grep 'hde-panel: battery: BAT0' "$OUT/session.log" | tail -n 1 | sed 's/.*battery: //'))"
+else fail "the battery panel shows the details ($(grep 'hde-panel: battery: ' "$OUT/session.log" | tail -n 2 | tr '\n' ' '))"; fi
+if [ -n "$PPD_MOCK" ] && grep -q "hde-panel: battery: power mode balanced" "$OUT/session.log"; then
+    pass "... the power mode (power-profiles-daemon): Balanced"
+    pclick bat-mode-power-saver; sleep 1.5
+    pm=$(gdbus call --system --dest net.hadess.PowerProfiles --object-path /net/hadess/PowerProfiles \
+         --method org.freedesktop.DBus.Properties.Get net.hadess.PowerProfiles ActiveProfile 2>&1)
+    case "$pm" in *power-saver*) pass "... Power Saver switches the power mode" ;; *) fail "... Power Saver switches the power mode ($pm)" ;; esac
+elif [ -n "$PPD_MOCK" ]; then
+    fail "the battery panel shows the power mode ($(grep 'battery: power mode' "$OUT/session.log" | tail -n 1))"
+fi
+shot 18g-battery-panel
+xdotool key Escape; sleep 0.6
+
+# right-click menus with icons: the panel, the Start button, a status icon
+xdotool mousemove 760 783 click 3; sleep 1
+m=$(grep "hde-panel: panel menu: " "$OUT/session.log" | tail -n 1)
+case "$m" in
+    *"Control Center | Panel Settings… | Start Menu Settings… | Position | Size | Show on the panel"*) pass "right-click on the panel: Control Center, Panel Settings, Start Menu Settings, position, size, items" ;;
+    *) fail "right-click on the panel opens its menu (${m:-nothing logged})" ;;
+esac
+shot 18h-panel-menu
+xdotool key Escape; sleep 0.5
+xdotool mousemove 30 783 click 3; sleep 1
+m=$(grep "hde-panel: start button menu: " "$OUT/session.log" | tail -n 1)
+case "$m" in
+    *"Open the Start menu | Menu layout | Button icon | Button label | Start Menu Settings… | Panel Settings…"*) pass "right-click on the Start button: its layout, icon and label, Start Menu Settings" ;;
+    *) fail "right-click on the Start button opens its menu (${m:-nothing logged})" ;;
+esac
+xdotool key i; sleep 0.8
+shot 18i-start-button-icons
+xdotool key h; sleep 2
+if grep -q "^menu_button_icon=hde" "$SETTINGS_INI" && grep -q "hde-panel: start button: Menu, HDE logo" "$OUT/session.log"; then
+    pass "... choosing the HDE logo there changes the Start button at once"
+else fail "... choosing the HDE logo there changes the Start button ($(grep '^menu_button_icon' "$SETTINGS_INI"))"; fi
+shot 18j-start-button-hde-logo
+sed -i '/^menu_button_icon=/d' "$SETTINGS_INI"; sleep 2
+check "the default Start button shows the logo of the system" sh -c "grep 'hde-panel: start button: Menu, ' '$OUT/session.log' | tail -n 1 | grep -vq 'HDE logo'"
+# shellcheck disable=SC2046
+set -- $(pwidget volume)
+if [ -n "${2:-}" ]; then
+    xdotool mousemove "$1" "$2" click 3; sleep 1
+    check "right-click on the volume icon: mute, microphone, devices and apps, settings" \
+        grep -q "hde-panel: status menu vol: Mute | Microphone on / off | Sound: devices and apps | Sound settings…" "$OUT/session.log"
+    shot 18k-volume-menu
+    xdotool key Escape; sleep 0.5
+fi
+xdotool mousemove 640 400
+
 # ---------- 7. WM switch without logging out ----------
 if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; then
     sed -i 's/^wm=.*/wm=openbox/' "$SETTINGS_INI"
@@ -1036,6 +1237,7 @@ echo "INFO: $n GTK/GLib warning line(s) in the logs (see gtk-warnings.txt)" | te
 sort -u "$OUT/gtk-warnings.txt" | head -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
 pulseaudio -k >/dev/null 2>&1
 [ -n "$BLUEZ_MOCK" ] && kill "$BLUEZ_MOCK" 2>/dev/null
+[ -n "$PPD_MOCK" ] && kill "$PPD_MOCK" 2>/dev/null
 [ -n "$SYSBUS_PID" ] && kill "$SYSBUS_PID" 2>/dev/null
 [ "$FAILS" -gt 100 ] && FAILS=100
 exit "$FAILS"
