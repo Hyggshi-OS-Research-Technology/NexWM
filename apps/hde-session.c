@@ -182,8 +182,8 @@ typedef struct {
 
 enum { C_XSETTINGS, C_HOTKEYS, C_DESKTOP, C_PANEL, C_POLKIT, N_COMP };
 static Component comps[N_COMP] = {
-    [C_XSETTINGS] = { "hde-xsettings", "XSETTINGS daemon (live theme / Dark mode)", "", -1, 0, 5, 0, 0, 0, 0 },
-    [C_HOTKEYS]   = { "hde-hotkeys", "system hotkeys (Super, F1-F3, media keys)", "", -1, 0, 5, 0, 0, 0, 0 },
+    [C_XSETTINGS] = { "hde-xsettings", "XSETTINGS daemon (live theme / Dark mode, touchpad, screens)", "", -1, 0, 5, 0, 0, 0, 0 },
+    [C_HOTKEYS]   = { "hde-hotkeys", "system hotkeys (Super, F1-F3, F6-F8, PrtSc, media keys)", "", -1, 0, 5, 0, 0, 0, 0 },
     [C_DESKTOP]   = { "hde-desktop", "desktop", "", -1, 0, 5, 0, 0, 0, 0 },
     [C_PANEL]     = { "hde-panel", "panel", "", -1, 0, 5, 0, 0, 0, 0 },
     [C_POLKIT]    = { NULL, "polkit authentication agent", "", -1, 0, 1, 0, 0, 0, 0 },

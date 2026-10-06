@@ -340,3 +340,58 @@ unticking *It is a touchpad* in *Settings → Input → Devices* gives it the mo
 unplugged, the first-login window opens on the (virtual) CI machine and asks about the mouse. `make check` (Xvfb)
 scrolls over the panel's volume icon: with natural scrolling a swipe up (scroll down) turns the volume up, with the
 classic direction scroll up does.
+
+## F6 / F7 brightness, F8 Project (external screen / projector), the Screenshot window, a new About (fix 11)
+
+- **F6 / F7 = screen darker / brighter**, with the on-screen display, like F1–F3 for the sound (switch: *Settings →
+  Keyboard & Shortcuts → Use F6, F7 and F8 as display keys*, key `fkeys_display`). The brightness keys of laptops do
+  the same. **No brightnessctl or other tool is needed any more** (`src/hde-brightness.c`):
+  1. the backlight of a laptop panel (`/sys/class/backlight`, firmware > platform > raw like GNOME), written directly
+     when allowed, otherwise through **systemd-logind** (`Session.SetBrightness`, which any user may call for the screens
+     of their own session), otherwise with brightnessctl / light / xbacklight if one is installed;
+  2. on desktop monitors and in virtual machines, which have no backlight a program can change: **software dimming** of
+     every screen through the XRandR gamma ramps (10–100 %), kept when the screens change.
+  If neither is possible, a notification says why instead of an error. *Settings → Display* has a brightness slider.
+  *Night Light* (it was a switch that did nothing) now makes the colours warmer (`night_light_temperature`, 4000 K).
+- **F8 = Project**, also **Super+P** and the display key (Fn + the key with two screens), like Windows + P: a window with
+  **PC screen only · Duplicate · Extend · Second screen only**. F8 again moves to the next choice (the open window is
+  told, no second window), `Enter` or a click applies, `1`–`4` apply directly, `Esc` closes. Built on XRandR
+  (`src/hde-randr.c`), no `xrandr` / `arandr` needed:
+  - *PC screen* = the laptop panel (eDP / LVDS / DSI), or the first connected screen on a desktop PC or VM;
+  - *Duplicate* uses the largest resolution every screen can show; *Extend* puts the other screens to the right at
+    their native resolution (an arrangement made earlier is kept), one below the other if the graphics card cannot make
+    the desktop that wide; *Second screen only* turns the computer's screen off — **a "Keep these display settings?"
+    window goes back by itself after 15 seconds** unless *Keep changes* is clicked (the other screen may show nothing);
+    pressing F8 again while it asks also goes back;
+  - only one screen connected: the window says so (connect HDMI / DisplayPort / USB-C / VGA first).
+  - **Plugging in a screen opens the window** (`display_connect=ask`; or `extend`, `duplicate`, `second`, `nothing` —
+    *Settings → Display → When a screen is plugged in*). **Unplugging the screen in use turns the computer's screen back
+    on**, and an unplugged screen never stays part of the desktop (`hde-xsettings`, HDE's display service).
+  - The choice is remembered for those screens and comes back at the next login.
+  - The panel moves to the primary screen and the desktop covers the new size after every change; each screen gets the
+    whole wallpaper.
+  - CLI: `hde-settings --display-mode pc|duplicate|extend|second`, `--displays`, `--brightness [+N|-N|N]`;
+    `hde-xsettings --status` shows the screens and the brightness method.
+- **PrtSc** keeps taking screenshots with HDE's own program (no scrot): Print = whole screen, Shift+Print = area,
+  Alt+Print = window, Ctrl + them = clipboard only. New: **Start menu → Screenshot** (`hde-screenshot --ui`) is a real
+  program window — whole screen / active window / area, a delay, then the picture with *Copy*, *Save As*, *Open*,
+  *Show in Folder*, *New Screenshot*.
+- **About redone** (*Settings → About*, and *About HDE* in the desktop menu now opens it): HDE logo, version and build,
+  the computer (name, model, processor, RAM, graphics, storage, screens), the system (OS, kernel, window manager, X
+  server, GTK, uptime), **how much RAM HDE uses right now** (per program, PSS = shared libraries counted once, refreshed
+  every 3 seconds) and what the whole system needs; *Copy system info*, *Project page*, *Session log*.
+  `hde-settings --about` prints the same as text.
+
+### Tests
+
+`tests/display-test.sh` (CI job *screens*, Ubuntu 24.04): a whole session on Xorg with the dummy video driver, whose 16
+RandR outputs act as connectors. F8 opens the window, F8 again moves on, Enter applies Extend (checked with `xrandr`:
+the second screen to the right), the panel stays on the primary screen and the desktop covers both; F6/F7 dim both
+screens (gamma: 95 %, 85 %, back to 100 %), `--brightness 60`, Night Light on and off; Duplicate; Second screen only
+goes back by itself after the countdown, and stays when *Keep changes* is clicked (the panel moves to the other
+screen); Super+P → PC screen only; the layout chosen earlier comes back when `hde-xsettings` starts; plugging in a
+third screen opens the window; a fake backlight is used first (50 → 60 %, never fully off) and an unwritable one falls
+back to software dimming. `tests/randr-plan-test.c` checks the layouts without an X server (laptop + projector,
+desktop PC with two monitors, no common resolution, too few CRTCs, desktop size limit, unplugging the screen in use).
+`make check` (Xvfb) checks F6/F7 and the OSD, the F8 window with one screen, the Screenshot window, and Settings →
+About / Display.

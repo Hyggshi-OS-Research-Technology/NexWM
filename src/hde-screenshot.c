@@ -4,6 +4,8 @@
  *   hde-screenshot              the whole screen (all monitors)
  *   hde-screenshot --area       drag a rectangle on a frozen copy of the screen (Esc / right click = cancel)
  *   hde-screenshot --window     the active window, including its title bar
+ *   hde-screenshot --ui         the Screenshot window (Start menu > Screenshot): choose whole screen / window / area
+ *                               and a delay, then see the picture with Copy, Save As, Open and Show in Folder
  *   options:  --delay N         wait N seconds first
  *             --file PATH       save to PATH instead of ~/Pictures/Screenshots/Screenshot_<date>_<time>.png
  *             --clipboard       only copy the image to the clipboard, do not save a file
@@ -32,7 +34,7 @@ typedef enum { MODE_FULL, MODE_AREA, MODE_WINDOW } Mode;
 static Mode mode = MODE_FULL;
 static int opt_delay;
 static char *opt_file;
-static gboolean opt_no_clip, opt_no_notify, opt_clip_only;
+static gboolean opt_no_clip, opt_no_notify, opt_clip_only, opt_ui;
 
 static int exit_code = 2;
 static GdkPixbuf *result;               /* the final image (also served on the clipboard) */
@@ -41,10 +43,15 @@ static gboolean clip_active, notif_active, exiting;
 static GDBusConnection *bus;
 static guint32 notif_id;
 
+static gboolean ui_visible(void);
+static void ui_show_result(GdkPixbuf *p, const char *path);
+static void ui_show_error(const char *what);
+static void ui_show_start(void);
+
 /* ---------------------------------------------------------------- helpers */
 static void quit_if_idle(void)
 {
-    if (!exiting && !clip_active && !notif_active) {
+    if (!exiting && !clip_active && !notif_active && !ui_visible()) {
         exiting = TRUE;
         gtk_main_quit();
     }
@@ -74,6 +81,7 @@ static void notify_user(const char *summary, const char *body, const char *image
 static void fail(const char *what)
 {
     g_printerr("hde-screenshot: %s\n", what);
+    if (opt_ui) { ui_show_error(what); return; }
     if (!opt_no_notify) notify_user("Screenshot failed", what, NULL, NULL, FALSE);
     exit_code = 2;
     quit_if_idle();
@@ -213,7 +221,8 @@ static void clip_get(GtkClipboard *cb, GtkSelectionData *sel, guint info, gpoint
 
 static void clip_clear(GtkClipboard *cb, gpointer data)
 {
-    (void)cb; (void)data;
+    (void)cb;
+    g_object_unref(data);
     clip_active = FALSE;                              /* another program copied something */
     quit_if_idle();
 }
@@ -225,9 +234,12 @@ static void copy_to_clipboard(GdkPixbuf *p)
     int n = 0;
     GtkTargetEntry *t = gtk_target_table_new_from_list(tl, &n);
     GtkClipboard *cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    g_object_ref(p);
     if (n > 0 && gtk_clipboard_set_with_data(cb, t, n, clip_get, clip_clear, p)) {
         clip_active = TRUE;
         gtk_clipboard_set_can_store(cb, NULL, 0);     /* lets a clipboard manager keep it after we exit */
+    } else {
+        g_object_unref(p);
     }
     gtk_target_table_free(t, n);
     gtk_target_list_unref(tl);
@@ -361,6 +373,8 @@ static char *default_path(void)
 static void finish(GdkPixbuf *p)
 {
     if (!p) { fail("Could not read the screen contents."); return; }
+    g_clear_object(&result);
+    g_clear_pointer(&saved_path, g_free);
     result = p;
     if (opt_clip_only) {                              /* Ctrl+Print & co.: clipboard only, no file */
         copy_to_clipboard(p);
@@ -388,6 +402,7 @@ static void finish(GdkPixbuf *p)
     printf("%s\n", path);
     fflush(stdout);
     if (!opt_no_clip) copy_to_clipboard(p);
+    if (opt_ui) { ui_show_result(p, path); return; }
     if (!opt_no_notify) {
         char *dir = g_path_get_dirname(path);
         char *shown = home_relative(dir);
@@ -500,6 +515,7 @@ static void area_cancel(void)
 {
     area_close();
     exit_code = 1;
+    if (opt_ui) { ui_show_start(); return; }
     quit_if_idle();
 }
 
@@ -644,6 +660,234 @@ static gboolean start_capture(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+/* ---------------------------------------------------------------- the Screenshot window (--ui) */
+static struct {
+    GtkWidget *win, *stack, *modes[3], *delay, *take, *preview, *saved, *error;
+    gboolean closed;                    /* the user closed the window (it is also hidden while taking a picture) */
+} ui;
+
+static gboolean ui_visible(void) { return opt_ui && ui.win && !ui.closed; }
+
+static void ui_present(void)
+{
+    ui.closed = FALSE;
+    gtk_widget_show(ui.win);
+    gtk_window_present(GTK_WINDOW(ui.win));
+}
+
+static void ui_show_start(void)
+{
+    gtk_stack_set_visible_child_name(GTK_STACK(ui.stack), "start");
+    gtk_widget_hide(ui.error);
+    ui_present();
+    gtk_widget_grab_focus(ui.take);
+}
+
+static void ui_show_error(const char *what)
+{
+    gtk_stack_set_visible_child_name(GTK_STACK(ui.stack), "start");
+    gtk_label_set_text(GTK_LABEL(ui.error), what);
+    gtk_widget_show(ui.error);
+    ui_present();
+}
+
+static void ui_show_result(GdkPixbuf *p, const char *path)
+{
+    int w = gdk_pixbuf_get_width(p), h = gdk_pixbuf_get_height(p);
+    double sc = MIN(1.0, MIN(560.0 / w, 320.0 / h));
+    GdkPixbuf *t = gdk_pixbuf_scale_simple(p, MAX(1, (int)(w * sc)), MAX(1, (int)(h * sc)), GDK_INTERP_BILINEAR);
+    gtk_image_set_from_pixbuf(GTK_IMAGE(ui.preview), t);
+    if (t) g_object_unref(t);
+    char *shown = home_relative(path);
+    char *msg = g_strdup_printf("%d × %d — saved as %s%s", w, h, shown, clip_active ? " and copied to the clipboard" : "");
+    gtk_label_set_text(GTK_LABEL(ui.saved), msg);
+    g_free(msg);
+    g_free(shown);
+    gtk_stack_set_visible_child_name(GTK_STACK(ui.stack), "result");
+    ui_present();
+    g_printerr("hde-screenshot: window: saved %s (%dx%d)\n", path, w, h);
+}
+
+static gboolean ui_capture(gpointer data)
+{
+    (void)data;
+    start_capture(NULL);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_ui_take(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    mode = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.modes[1])) ? MODE_WINDOW
+         : gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.modes[2])) ? MODE_AREA : MODE_FULL;
+    int delay = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ui.delay));
+    g_printerr("hde-screenshot: window: taking %s in %d s\n", mode == MODE_AREA ? "an area" : mode == MODE_WINDOW ? "the active window" : "the whole screen", delay);
+    gtk_widget_hide(ui.win);                  /* not in the picture */
+    gdk_display_flush(gdk_display_get_default());
+    g_timeout_add(MAX(delay * 1000, mode == MODE_WINDOW ? 600 : 400), ui_capture, NULL);
+}
+
+static void on_ui_new(GtkButton *b, gpointer d) { (void)b; (void)d; ui_show_start(); }
+static void on_ui_copy(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    if (result) copy_to_clipboard(result);
+    gtk_label_set_text(GTK_LABEL(ui.saved), clip_active ? "Copied to the clipboard. Paste it with Ctrl+V." : "Could not copy.");
+}
+static void on_ui_open(GtkButton *b, gpointer d) { (void)b; (void)d; open_saved(FALSE); }
+static void on_ui_folder(GtkButton *b, gpointer d) { (void)b; (void)d; open_saved(TRUE); }
+
+static void on_ui_save_as(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    if (!result) return;
+    GtkWidget *dlg = gtk_file_chooser_dialog_new("Save Screenshot As", GTK_WINDOW(ui.win), GTK_FILE_CHOOSER_ACTION_SAVE,
+                                                 "_Cancel", GTK_RESPONSE_CANCEL, "_Save", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
+    if (saved_path) {
+        char *dir = g_path_get_dirname(saved_path), *base = g_path_get_basename(saved_path);
+        gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), dir);
+        gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), base);
+        g_free(dir);
+        g_free(base);
+    }
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+        char *f = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+        const char *type = g_str_has_suffix(f, ".jpg") || g_str_has_suffix(f, ".jpeg") ? "jpeg" : "png";
+        GError *e = NULL;
+        if (gdk_pixbuf_save(result, f, type, &e, NULL)) {
+            g_free(saved_path);
+            saved_path = g_strdup(f);
+            char *shown = home_relative(f), *m = g_strdup_printf("Saved as %s", shown);
+            gtk_label_set_text(GTK_LABEL(ui.saved), m);
+            g_free(m);
+            g_free(shown);
+        } else {
+            gtk_label_set_text(GTK_LABEL(ui.saved), e ? e->message : "Could not save.");
+            g_clear_error(&e);
+        }
+        g_free(f);
+    }
+    gtk_widget_destroy(dlg);
+}
+
+static gboolean on_ui_delete(GtkWidget *w, GdkEvent *e, gpointer d)
+{
+    (void)e; (void)d;
+    gtk_widget_hide(w);
+    ui.closed = TRUE;
+    /* the picture stays on the clipboard while it is ours (at most 10 minutes), like after PrtSc */
+    if (clip_active) g_timeout_add_seconds(600, on_give_up, NULL);
+    quit_if_idle();
+    return TRUE;
+}
+
+static gboolean on_ui_key(GtkWidget *w, GdkEventKey *e, gpointer d)
+{
+    if (e->keyval == GDK_KEY_Escape || ((e->state & GDK_CONTROL_MASK) && (e->keyval == GDK_KEY_w || e->keyval == GDK_KEY_q))) {
+        on_ui_delete(w, NULL, d);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static GtkWidget *ui_mode_button(GtkWidget *group, const char *icon, const char *label)
+{
+    GtkWidget *b = gtk_radio_button_new_from_widget(group ? GTK_RADIO_BUTTON(group) : NULL);
+    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(b), FALSE);
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_container_set_border_width(GTK_CONTAINER(v), 8);
+    GtkWidget *im = gtk_image_new_from_icon_name(icon, GTK_ICON_SIZE_DIALOG);
+    gtk_image_set_pixel_size(GTK_IMAGE(im), 40);
+    gtk_box_pack_start(GTK_BOX(v), im, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(v), gtk_label_new_with_mnemonic(label), FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(b), v);
+    return b;
+}
+
+static GtkWidget *ui_button(const char *label, GCallback cb)
+{
+    GtkWidget *b = gtk_button_new_with_mnemonic(label);
+    g_signal_connect(b, "clicked", cb, NULL);
+    return b;
+}
+
+static void ui_build(void)
+{
+    ui.win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(ui.win), "Screenshot");
+    gtk_window_set_icon_name(GTK_WINDOW(ui.win), "applets-screenshooter");
+    gtk_window_set_default_size(GTK_WINDOW(ui.win), 600, -1);
+    gtk_window_set_position(GTK_WINDOW(ui.win), GTK_WIN_POS_CENTER);
+    g_signal_connect(ui.win, "delete-event", G_CALLBACK(on_ui_delete), NULL);
+    g_signal_connect(ui.win, "key-press-event", G_CALLBACK(on_ui_key), NULL);
+    ui.stack = gtk_stack_new();
+    gtk_stack_set_transition_type(GTK_STACK(ui.stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+    gtk_container_add(GTK_CONTAINER(ui.win), ui.stack);
+
+    GtkWidget *start = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+    gtk_container_set_border_width(GTK_CONTAINER(start), 22);
+    GtkWidget *title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title), "<span size=\"x-large\" weight=\"bold\">Take a screenshot</span>");
+    gtk_widget_set_halign(title, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(start), title, FALSE, FALSE, 0);
+    GtkWidget *modes = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_box_set_homogeneous(GTK_BOX(modes), TRUE);
+    ui.modes[0] = ui_mode_button(NULL, "video-display", "_Whole screen");
+    ui.modes[1] = ui_mode_button(ui.modes[0], "window-new", "Active _window");
+    ui.modes[2] = ui_mode_button(ui.modes[0], "edit-select-all", "Select an _area");
+    for (int i = 0; i < 3; i++) gtk_box_pack_start(GTK_BOX(modes), ui.modes[i], TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(start), modes, FALSE, FALSE, 0);
+    GtkWidget *drow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget *dl = gtk_label_new_with_mnemonic("_Delay (seconds):");
+    ui.delay = gtk_spin_button_new_with_range(0, 30, 1);
+    gtk_label_set_mnemonic_widget(GTK_LABEL(dl), ui.delay);
+    gtk_box_pack_start(GTK_BOX(drow), dl, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(drow), ui.delay, FALSE, FALSE, 0);
+    ui.take = gtk_button_new_with_mnemonic("_Take Screenshot");
+    gtk_style_context_add_class(gtk_widget_get_style_context(ui.take), "suggested-action");
+    gtk_widget_set_can_default(ui.take, TRUE);
+    g_signal_connect(ui.take, "clicked", G_CALLBACK(on_ui_take), NULL);
+    gtk_box_pack_end(GTK_BOX(drow), ui.take, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(start), drow, FALSE, FALSE, 0);
+    ui.error = gtk_label_new("");
+    gtk_label_set_line_wrap(GTK_LABEL(ui.error), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(ui.error), 0);
+    gtk_widget_set_no_show_all(ui.error, TRUE);
+    gtk_box_pack_start(GTK_BOX(start), ui.error, FALSE, FALSE, 0);
+    GtkWidget *hint = gtk_label_new("Keys: Print = whole screen · Alt+Print = window · Shift+Print = area · hold Ctrl as "
+                                    "well to only copy it. Pictures go to Pictures/Screenshots.");
+    gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(hint), 0);
+    gtk_widget_set_opacity(hint, 0.7);
+    gtk_box_pack_start(GTK_BOX(start), hint, FALSE, FALSE, 0);
+    gtk_stack_add_named(GTK_STACK(ui.stack), start, "start");
+
+    GtkWidget *res = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_container_set_border_width(GTK_CONTAINER(res), 18);
+    ui.preview = gtk_image_new();
+    gtk_widget_set_size_request(ui.preview, -1, 200);
+    gtk_box_pack_start(GTK_BOX(res), ui.preview, TRUE, TRUE, 0);
+    ui.saved = gtk_label_new("");
+    gtk_label_set_line_wrap(GTK_LABEL(ui.saved), TRUE);
+    gtk_label_set_selectable(GTK_LABEL(ui.saved), TRUE);
+    gtk_widget_set_can_focus(ui.saved, FALSE);
+    gtk_box_pack_start(GTK_BOX(res), ui.saved, FALSE, FALSE, 0);
+    GtkWidget *acts = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(acts, GTK_ALIGN_CENTER);
+    gtk_box_pack_start(GTK_BOX(acts), ui_button("_Copy", G_CALLBACK(on_ui_copy)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(acts), ui_button("Save _As…", G_CALLBACK(on_ui_save_as)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(acts), ui_button("_Open", G_CALLBACK(on_ui_open)), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(acts), ui_button("Show in _Folder", G_CALLBACK(on_ui_folder)), FALSE, FALSE, 0);
+    GtkWidget *again = ui_button("_New Screenshot", G_CALLBACK(on_ui_new));
+    gtk_style_context_add_class(gtk_widget_get_style_context(again), "suggested-action");
+    gtk_box_pack_start(GTK_BOX(acts), again, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(res), acts, FALSE, FALSE, 0);
+    gtk_stack_add_named(GTK_STACK(ui.stack), res, "result");
+    gtk_widget_show_all(ui.stack);
+    gtk_widget_grab_default(ui.take);
+}
+
 static void usage(FILE *f)
 {
     fprintf(f,
@@ -654,6 +898,7 @@ static void usage(FILE *f)
             "  -d, --delay N    wait N seconds first\n"
             "  -f, --file P     save to P (default: ~/Pictures/Screenshots/Screenshot_<date>_<time>.png)\n"
             "  -c, --clipboard  only copy to the clipboard, save no file\n"
+            "  -i, --ui         the Screenshot window (mode, delay, then Copy / Save As / Open / Show in Folder)\n"
             "  --no-clipboard, --no-notify\n");
 }
 
@@ -671,6 +916,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "-c") || !strcmp(a, "--clipboard")) opt_clip_only = TRUE;
         else if (!strcmp(a, "--no-clipboard")) opt_no_clip = TRUE;
         else if (!strcmp(a, "--no-notify")) opt_no_notify = TRUE;
+        else if (!strcmp(a, "-i") || !strcmp(a, "--ui") || !strcmp(a, "--interactive")) opt_ui = TRUE;
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(stdout); return 0; }
         else { fprintf(stderr, "hde-screenshot: unknown option %s\n", a); usage(stderr); return 2; }
     }
@@ -684,7 +930,15 @@ int main(int argc, char **argv)
         return 2;
     }
     g_set_application_name("Screenshot");
-    if (opt_delay > 0) g_timeout_add_seconds(opt_delay, start_capture, NULL);
+    if (opt_ui) {
+        if (opt_clip_only || opt_file) {
+            fprintf(stderr, "hde-screenshot: --ui cannot be combined with --clipboard or --file\n");
+            return 2;
+        }
+        ui_build();
+        ui_show_start();
+        g_printerr("hde-screenshot: window: shown\n");
+    } else if (opt_delay > 0) g_timeout_add_seconds(opt_delay, start_capture, NULL);
     else g_idle_add(start_capture, NULL);
     gtk_main();
     exiting = TRUE;

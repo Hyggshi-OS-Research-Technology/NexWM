@@ -19,9 +19,17 @@
  * The input part keeps running when another XSETTINGS manager owns the theme settings (HDE started inside another
  * desktop, or a program that took XSETTINGS over): only the theme part is left to that manager then.
  *
+ * And HDE's display service (src/hde-randr.c, XRandR): when a screen is plugged in it opens the Project window of F8
+ * (settings.ini display_connect=ask, or applies extend / duplicate / second / nothing); when the screen in use is
+ * unplugged it turns the PC screen back on, and an unplugged screen never stays part of the desktop; at login it
+ * restores the layout chosen with F8 for the same screens (display_mode / display_outputs); it puts software
+ * brightness (F6/F7 without a backlight) and Night Light (night_light, night_light_temperature) back on every screen
+ * after a change.
+ *
  * Usage: hde-xsettings [--replace]   (started by hde-session; exits if another hde-xsettings is already running,
  *                                     unless --replace is given)
- *        hde-xsettings --status      touchpads and mice, their state and whether it matches Settings > Input
+ *        hde-xsettings --status      touchpads and mice, their state and whether it matches Settings > Input;
+ *                                    the screens and how their brightness can be changed
  *        hde-xsettings --version
  */
 #define _DEFAULT_SOURCE
@@ -35,8 +43,12 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 #include "hde-input.h"
+#include "hde-randr.h"
+#include "hde-brightness.h"
 #include "hde-build.h"
 
 enum { XS_INT = 0, XS_STRING = 1 };
@@ -265,8 +277,166 @@ static gboolean window_is_hde_xsettings(Window w)
 
 static const char *on_off(int v) { return v < 0 ? "?" : v ? "on" : "off"; }
 
+/* ===================== display service ===================== */
+static char *settings_string(const char *key, const char *def)
+{
+    GKeyFile *kf = load_kf("hde", "settings.ini");
+    char *v = kf_string(kf, "settings", key);
+    if (kf) g_key_file_free(kf);
+    return v ? v : g_strdup(def);
+}
+
+/* An HDE program next to this one (a fresh ./build copy wins), else in $PATH. */
+static char *hde_program(const char *name)
+{
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    if (n > 0) {
+        self[n] = '\0';
+        char *dir = g_path_get_dirname(self);
+        char *p = g_build_filename(dir, name, NULL);
+        g_free(dir);
+        if (access(p, X_OK) == 0) return p;
+        g_free(p);
+    }
+    return g_find_program_in_path(name);
+}
+
+static void spawn_detached(char *const argv[])
+{
+    pid_t p = fork();
+    if (p == 0) {
+        if (fork() == 0) {
+            setsid();
+            close(ConnectionNumber(dpy));
+            execv(argv[0], argv);
+            _exit(127);
+        }
+        _exit(0);
+    }
+    if (p > 0) waitpid(p, NULL, 0);
+}
+
+static int apply_layout(HdeRandrState *st, HdeProjectMode mode, const char *why)
+{
+    HdeRandrPlan *p = g_new0(HdeRandrPlan, 1);
+    char err[256] = "";
+    int ok = hde_randr_plan(st, mode, p) && hde_randr_apply(dpy, st, p, err, sizeof err);
+    if (ok) fprintf(stderr, "hde-xsettings: displays: %s: %s\n", why, hde_project_label(mode));
+    else fprintf(stderr, "hde-xsettings: displays: %s: %s failed: %s\n", why, hde_project_label(mode), p->error[0] ? p->error : err);
+    g_free(p);
+    return ok;
+}
+
+static void log_displays(const char *what)
+{
+    HdeRandrState *st = g_new0(HdeRandrState, 1);
+    if (hde_randr_read(dpy, st, 0)) {
+        char desc[768];
+        hde_randr_describe(st, desc, sizeof desc);
+        fprintf(stderr, "hde-xsettings: displays%s: %s (layout: %s)\n", what, desc, hde_project_label(hde_randr_mode_of(st)));
+    }
+    g_free(st);
+}
+
+/* Night Light from settings.ini -> _HDE_NIGHT_LIGHT, then the gamma ramps of every screen. */
+static void apply_night_light(void)
+{
+    GKeyFile *kf = load_kf("hde", "settings.ini");
+    gboolean on = kf && g_key_file_get_boolean(kf, "settings", "night_light", NULL);
+    int k = kf && g_key_file_has_key(kf, "settings", "night_light_temperature", NULL)
+                ? g_key_file_get_integer(kf, "settings", "night_light_temperature", NULL) : 4000;
+    if (kf) g_key_file_free(kf);
+    int want = on ? CLAMP(k, 1500, 6000) : 0;
+    if (want == hde_gamma_night_kelvin(dpy)) return;
+    hde_gamma_set_night_kelvin(dpy, want);
+    int n = hde_gamma_apply(dpy, 0);
+    if (want) fprintf(stderr, "hde-xsettings: night light on (%d K) on %d screen(s)\n", want, n);
+    else fprintf(stderr, "hde-xsettings: night light off\n");
+}
+
+static char display_names[512];         /* connected screens at the last look */
+static gint64 fix_window_start;
+static int fix_count;
+
+/* At login: the layout chosen with F8 last time, if exactly the same screens are connected. */
+static void display_start(void)
+{
+    HdeRandrState *st = g_new0(HdeRandrState, 1);
+    if (!hde_randr_read(dpy, st, 0)) { g_free(st); return; }
+    hde_randr_connected_names(st, display_names, sizeof display_names);
+    char desc[768];
+    hde_randr_describe(st, desc, sizeof desc);
+    fprintf(stderr, "hde-xsettings: displays: %s (layout: %s)\n", desc, hde_project_label(hde_randr_mode_of(st)));
+    char *mode = settings_string("display_mode", ""), *outs = settings_string("display_outputs", "");
+    HdeProjectMode m = hde_project_from_id(mode);
+    if (m != HDE_PROJECT_OTHER && hde_randr_n_connected(st) >= 2 && !strcmp(outs, display_names) &&
+        hde_randr_mode_of(st) != m) {
+        char why[600];
+        g_snprintf(why, sizeof why, "the layout chosen earlier for %s", display_names);
+        if (apply_layout(st, m, why)) log_displays(" now");
+    }
+    g_free(mode);
+    g_free(outs);
+    g_free(st);
+}
+
+/* After RandR events (debounced): fix a dark or too large desktop, react to a screen plugged in, put software
+ * brightness / Night Light back on the screens. */
+static void display_check(void)
+{
+    HdeRandrState *st = g_new0(HdeRandrState, 1);
+    if (!hde_randr_read(dpy, st, 0)) { g_free(st); return; }
+    HdeProjectMode fix;
+    char why[300];
+    if (hde_randr_needs_fix(st, &fix, why, sizeof why)) {
+        gint64 now = g_get_monotonic_time();
+        if (now - fix_window_start > 10 * G_USEC_PER_SEC) { fix_window_start = now; fix_count = 0; }
+        if (++fix_count <= 3 && apply_layout(st, fix, why)) hde_randr_read(dpy, st, 0);
+        else if (fix_count == 4) fprintf(stderr, "hde-xsettings: displays: %s: given up after 3 tries\n", why);
+    }
+    char names[512];
+    hde_randr_connected_names(st, names, sizeof names);
+    if (strcmp(names, display_names)) {
+        char **was = g_strsplit(display_names, ",", -1), **is = g_strsplit(names, ",", -1);
+        GString *added = g_string_new(NULL), *removed = g_string_new(NULL);
+        for (int i = 0; is[i]; i++)
+            if (*is[i] && !g_strv_contains((const char *const *)was, is[i])) g_string_append_printf(added, "%s%s", added->len ? "," : "", is[i]);
+        for (int i = 0; was[i]; i++)
+            if (*was[i] && !g_strv_contains((const char *const *)is, was[i])) g_string_append_printf(removed, "%s%s", removed->len ? "," : "", was[i]);
+        if (removed->len) fprintf(stderr, "hde-xsettings: displays: unplugged: %s\n", removed->str);
+        if (added->len) {
+            char *act = settings_string("display_connect", "ask");
+            fprintf(stderr, "hde-xsettings: displays: connected: %s (display_connect=%s)\n", added->str, act);
+            HdeProjectMode m = hde_project_from_id(act);
+            if (hde_randr_n_connected(st) < 2) {
+                /* the only screen: nothing to choose */
+            } else if (!strcmp(act, "ask")) {
+                char *prog = hde_program("hde-settings");
+                if (prog) {
+                    char *arg = g_strdup_printf("--connected=%s", added->str);
+                    char *argv[] = { prog, (char *)"--project", arg, NULL };
+                    spawn_detached(argv);
+                    g_free(arg);
+                    g_free(prog);
+                }
+            } else if (m != HDE_PROJECT_OTHER) {
+                apply_layout(st, m, "screen connected, display_connect");
+            }
+            g_free(act);
+        }
+        g_string_free(added, TRUE);
+        g_string_free(removed, TRUE);
+        g_strfreev(was);
+        g_strfreev(is);
+        g_strlcpy(display_names, names, sizeof display_names);
+    }
+    hde_gamma_apply(dpy, 0);
+    g_free(st);
+}
+
 /* hde-xsettings --status: what HDE sees and whether the devices match Settings > Input. 0 = all match. */
-static int print_status(void)
+static int print_input_status(void)
 {
     HdeInputPrefs p;
     hde_input_prefs_load(&p);
@@ -332,6 +502,27 @@ static int print_status(void)
     return bad ? 1 : 0;
 }
 
+static int print_status(void)
+{
+    int rc = print_input_status();
+    HdeRandrState *st = g_new0(HdeRandrState, 1);
+    if (hde_randr_read(dpy, st, 0)) {
+        char desc[768];
+        hde_randr_describe(st, desc, sizeof desc);
+        printf("Displays: %s (layout: %s)\n", desc, hde_project_label(hde_randr_mode_of(st)));
+    } else {
+        printf("Displays: %s\n", hde_randr_supported() ? "the X server has no RandR 1.2"
+                                                       : "unknown (built without libxrandr-dev: no F8 layouts)");
+    }
+    g_free(st);
+    HdeBrightness b;
+    hde_brightness_get(dpy, &b);
+    char bd[384];
+    hde_brightness_describe(&b, bd, sizeof bd);
+    printf("Brightness (F6/F7): %s\n", bd);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     gboolean replace = FALSE, status = FALSE;
@@ -342,8 +533,9 @@ int main(int argc, char **argv)
             printf("hde-xsettings (HDE) %s\n", HDE_VERSION);
             return 0;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-            printf("Usage: hde-xsettings [--replace]   XSETTINGS + touchpad/mouse settings service (started by hde-session)\n"
-                   "       hde-xsettings --status      touchpads and mice, and whether they match Settings > Input\n"
+            printf("Usage: hde-xsettings [--replace]   XSETTINGS + touchpad/mouse + display service (started by hde-session)\n"
+                   "       hde-xsettings --status      touchpads and mice, and whether they match Settings > Input;\n"
+                   "                                   the screens and how their brightness can be changed\n"
                    "       hde-xsettings --version\n");
             return 0;
         }
@@ -436,7 +628,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "hde-xsettings: %s: touchpad and mouse settings are not applied\n",
                 hde_input_supported() ? "no XInput 2 on this X server" : "built without libxi-dev");
     }
-    if (!xs_owner && !xi) {
+    /* display service: one per X screen too (the input selection owner), see display_check() */
+    int rr_base = -1;
+    gboolean rr = input_owner && hde_randr_watch(dpy, &rr_base);
+    gint64 display_at = 0;
+    if (rr) {
+        display_start();
+        apply_night_light();
+        hde_gamma_apply(dpy, 0);
+    } else if (input_owner) {
+        fprintf(stderr, "hde-xsettings: displays: %s\n", hde_randr_supported() ? "no RandR 1.2 on this X server"
+                                                         : "built without libxrandr-dev (no screen hotplug handling)");
+    }
+    if (!xs_owner && !xi && !rr) {
         fprintf(stderr, "hde-xsettings: nothing to do; exiting\n");
         XDestroyWindow(dpy, mgr_win);
         XCloseDisplay(dpy);
@@ -449,6 +653,10 @@ int main(int argc, char **argv)
         while (XPending(dpy)) {
             XEvent ev;
             XNextEvent(dpy, &ev);
+            if (rr && hde_randr_is_event(dpy, &ev, rr_base)) {
+                if (!display_at) display_at = g_get_monotonic_time() + 500 * 1000;
+                continue;
+            }
             int r = xi ? hde_input_handle_event(dpy, &ev, &iprefs, ITAG) : -1;
             if (r >= 0) {
                 if (r & HDE_INPUT_EV_ADDED) recheck_at = time(NULL) + 2;
@@ -463,10 +671,12 @@ int main(int argc, char **argv)
             } else if (ev.xselectionclear.selection == input_atom && xi) {
                 fprintf(stderr, "hde-xsettings: another hde-xsettings applies the touchpad and mouse settings now\n");
                 xi = FALSE;
+                rr = FALSE;
                 changed_at = 0;
                 recheck_at = 0;
+                display_at = 0;
             }
-            if (!xs_owner && !xi) {
+            if (!xs_owner && !xi && !rr) {
                 fprintf(stderr, "hde-xsettings: nothing left to do; exiting\n");
                 stop_flag = 1;
             }
@@ -476,8 +686,9 @@ int main(int argc, char **argv)
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
         struct timeval tv = { 1, 0 };
-        if (changed_at) {
-            gint64 wait = changed_at - g_get_monotonic_time();
+        gint64 next_at = changed_at && (!display_at || changed_at < display_at) ? changed_at : display_at;
+        if (next_at) {
+            gint64 wait = next_at - g_get_monotonic_time();
             if (wait < 0) wait = 0;
             if (wait < G_USEC_PER_SEC) {
                 tv.tv_sec = 0;
@@ -498,6 +709,11 @@ int main(int argc, char **argv)
             gboolean changed = !hde_input_prefs_equal(&np, &iprefs);
             iprefs = np;
             if (xi && (changed || forced)) hde_input_apply(dpy, -1, &iprefs, ITAG);
+            if (rr) apply_night_light();
+        }
+        if (rr && display_at && g_get_monotonic_time() >= display_at) {
+            display_at = 0;
+            display_check();
         }
         if (xi && changed_at && g_get_monotonic_time() >= changed_at) {
             changed_at = 0;

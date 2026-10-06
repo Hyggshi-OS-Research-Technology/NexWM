@@ -2,7 +2,10 @@
  *
  *  Super (tapped alone)          open / close the Start menu (command sent to hde-panel, see hde-ipc.h)
  *  F1 / F2 / F3                  mute / volume down / volume up   (settings.ini: fkeys_sound=true)
- *  Media keys                    Mute, Volume-/+, MicMute, Brightness-/+, Play/Pause/Next/Prev
+ *  F6 / F7                       screen brightness down / up      (settings.ini: fkeys_display=true)
+ *  F8, Super+P, the display key  "Project": PC screen only / Duplicate / Extend / Second screen only, like
+ *                                Windows + P (the hde-settings --project window; pressing it again moves on)
+ *  Media keys                    Mute, Volume-/+, MicMute, Brightness-/+, Play/Pause/Next/Prev, Display
  *  PrtSc, Shift+PrtSc, Alt+PrtSc screenshot of the whole screen / a selected area / a window
  *                                (HDE's own hde-screenshot; settings.ini screenshot_tool= picks another tool)
  *  Ctrl + the same keys          the same, copied to the clipboard only (no file)
@@ -13,7 +16,10 @@
  * The Super key is read through XInput2 raw events (no grab), so the Super+<key> bindings of the WM and
  * of applications keep working; the menu only opens when Super is pressed and released with no other key/button.
  * Configuration (~/.config/hde/settings.ini, reloaded automatically when the file changes or on SIGHUP):
- *   super_menu=true  fkeys_sound=true  media_keys=true  system_shortcuts=true  screenshot_tool=builtin
+ *   super_menu=true  fkeys_sound=true  fkeys_display=true  media_keys=true  system_shortcuts=true
+ *   screenshot_tool=builtin
+ * Brightness needs no extra tool (src/hde-brightness.c): the laptop backlight (directly or through systemd-logind),
+ * else software dimming of the screens (desktop monitors, virtual machines).
  *
  * hde-session starts hde-hotkeys BEFORE the window manager (and waits for HDE_READY_FD), so these keys belong
  * to HDE even when the WM's own config binds them too (e.g. Openbox rc.xml: Print -> scrot, W-e -> kfmclient,
@@ -41,6 +47,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/file.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -48,6 +55,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "hde-ipc.h"
+#include "hde-brightness.h"
 
 static volatile sig_atomic_t stop_flag = 0;
 static int debug_on;               /* HDE_DEBUG=1: diagnostic log */
@@ -56,8 +64,8 @@ static Display *dpy;
 static Window root;
 
 /* ---------------- configuration ---------------- */
-typedef struct { int super_menu, fkeys, media, shortcuts; char shot_tool[64]; } Config;
-static Config cfg = { 1, 1, 1, 1, "builtin" };
+typedef struct { int super_menu, fkeys, fkeys_display, media, shortcuts; char shot_tool[64]; } Config;
+static Config cfg = { 1, 1, 1, 1, 1, "builtin" };
 static char cfg_path[4096];
 static unsigned long long cfg_sig = ~0ULL;
 
@@ -114,6 +122,7 @@ static void load_config(void)
     cfg_str("screenshot_tool", "builtin", cfg.shot_tool, sizeof cfg.shot_tool);
     cfg.super_menu = cfg_bool("super_menu", 1);
     cfg.fkeys = cfg_bool("fkeys_sound", 1);
+    cfg.fkeys_display = cfg_bool("fkeys_display", 1);
     cfg.media = cfg_bool("media_keys", 1);
     cfg.shortcuts = cfg_bool("system_shortcuts", 1);
 }
@@ -238,34 +247,48 @@ static void child_send_panel(long cmd, long arg)
     XCloseDisplay(d);
 }
 
-/* Run the volume/brightness command in a child process (serialized with flock), then ask the panel to show the OSD. */
-static void run_with_osd(const char *script, long osd_cmd, int read_percent)
+/* Run the volume/microphone command in a child process (serialized with flock), then ask the panel to show the OSD. */
+static void run_with_osd(const char *script, long osd_cmd)
 {
     pid_t p = fork_child();
     if (p != 0) return;
     char full[8192];
     snprintf(full, sizeof full,
-             "exec 9>\"${XDG_RUNTIME_DIR:-/tmp}/hde-hotkeys-%s.lock\" && command -v flock >/dev/null 2>&1 && flock 9; %s",
-             read_percent ? "brightness" : "volume", script);
-    long arg = 0;
-    if (read_percent) {
-        char buf[64] = "";
-        FILE *f = popen(full, "r");
-        int st = -1;
-        if (f) {
-            if (!fgets(buf, sizeof buf, f)) buf[0] = '\0';
-            st = pclose(f);
-        }
-        if (st != -1 && WIFEXITED(st) && WEXITSTATUS(st) == 3) {
-            notify("Brightness", "No brightness tool found. Install brightnessctl (sudo apt install brightnessctl).");
-            _exit(0);
-        }
-        arg = buf[0] ? atol(buf) : -1;
-    } else {
-        int st = system(full);
-        (void)st;
+             "exec 9>\"${XDG_RUNTIME_DIR:-/tmp}/hde-hotkeys-volume.lock\" && command -v flock >/dev/null 2>&1 && flock 9; %s",
+             script);
+    int st = system(full);
+    (void)st;
+    child_send_panel(osd_cmd, 0);
+    _exit(0);
+}
+
+/* F6 / F7 and the brightness keys: in a child process (one at a time, the key repeats while held), then the OSD of
+ * the panel. No external tool needed: backlight (sysfs / systemd-logind) or software dimming, see hde-brightness.h. */
+static void brightness_key(int step)
+{
+    pid_t p = fork_child();
+    if (p != 0) return;
+    char lock[4096];
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    snprintf(lock, sizeof lock, "%s/hde-hotkeys-brightness.lock", rt && *rt ? rt : "/tmp");
+    int lfd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (lfd >= 0 && flock(lfd, LOCK_EX) != 0) { close(lfd); lfd = -1; }
+    Display *d = XOpenDisplay(NULL);
+    HdeBrightness b;
+    int ok = hde_brightness_set(d, step, 1, &b);
+    char desc[384];
+    hde_brightness_describe(&b, desc, sizeof desc);
+    if (debug_on || !ok || b.note[0])
+        fprintf(stderr, "hde-hotkeys: brightness %s: %s%s%s%s\n", step > 0 ? "up" : "down", desc,
+                b.via[0] ? " (via " : "", b.via, b.via[0] ? ")" : "");
+    if (ok && d) hde_ipc_send(d, HDE_CMD_OSD_BRIGHTNESS, b.percent, CurrentTime);
+    if (d) XCloseDisplay(d);
+    if (!ok) {
+        char body[400];
+        snprintf(body, sizeof body, "The brightness of this screen cannot be changed: %s.", b.note);
+        notify("Brightness", body);
     }
-    child_send_panel(osd_cmd, arg);
+    if (lfd >= 0) close(lfd);
     _exit(0);
 }
 
@@ -274,9 +297,9 @@ enum {
     A_SHOT_FULL, A_SHOT_AREA, A_SHOT_WIN, A_CLIP_FULL, A_CLIP_AREA, A_CLIP_WIN,
     A_VOL_MUTE, A_VOL_DOWN, A_VOL_UP, A_MIC_MUTE, A_BRIGHT_UP, A_BRIGHT_DOWN,
     A_PLAY, A_NEXT, A_PREV, A_STOP,
-    A_LOCK, A_FILES, A_TERMINAL, A_DESKTOP, A_RUN, A_SEARCH, A_POWER
+    A_LOCK, A_FILES, A_TERMINAL, A_DESKTOP, A_RUN, A_SEARCH, A_POWER, A_PROJECT
 };
-enum { G_ALWAYS, G_FKEYS, G_MEDIA, G_SHORTCUTS };
+enum { G_ALWAYS, G_FKEYS, G_FKEYS_DISPLAY, G_MEDIA, G_SHORTCUTS };
 
 typedef struct { KeySym sym; unsigned mods; int act; int group; const char *name; } Binding;
 
@@ -291,12 +314,16 @@ static const Binding bindings[] = {
     { XK_F1, 0, A_VOL_MUTE, G_FKEYS, "F1" },
     { XK_F2, 0, A_VOL_DOWN, G_FKEYS, "F2" },
     { XK_F3, 0, A_VOL_UP, G_FKEYS, "F3" },
+    { XK_F6, 0, A_BRIGHT_DOWN, G_FKEYS_DISPLAY, "F6" },
+    { XK_F7, 0, A_BRIGHT_UP, G_FKEYS_DISPLAY, "F7" },
+    { XK_F8, 0, A_PROJECT, G_FKEYS_DISPLAY, "F8" },
     { XF86XK_AudioMute, 0, A_VOL_MUTE, G_MEDIA, "XF86AudioMute" },
     { XF86XK_AudioLowerVolume, 0, A_VOL_DOWN, G_MEDIA, "XF86AudioLowerVolume" },
     { XF86XK_AudioRaiseVolume, 0, A_VOL_UP, G_MEDIA, "XF86AudioRaiseVolume" },
     { XF86XK_AudioMicMute, 0, A_MIC_MUTE, G_MEDIA, "XF86AudioMicMute" },
     { XF86XK_MonBrightnessUp, 0, A_BRIGHT_UP, G_MEDIA, "XF86MonBrightnessUp" },
     { XF86XK_MonBrightnessDown, 0, A_BRIGHT_DOWN, G_MEDIA, "XF86MonBrightnessDown" },
+    { XF86XK_Display, 0, A_PROJECT, G_MEDIA, "XF86Display" },             /* Fn + the key with two screens */
     { XF86XK_AudioPlay, 0, A_PLAY, G_MEDIA, "XF86AudioPlay" },
     { XF86XK_AudioPause, 0, A_PLAY, G_MEDIA, "XF86AudioPause" },
     { XF86XK_AudioNext, 0, A_NEXT, G_MEDIA, "XF86AudioNext" },
@@ -310,6 +337,7 @@ static const Binding bindings[] = {
     { XK_d, Mod4Mask, A_DESKTOP, G_SHORTCUTS, "Super+D" },
     { XK_r, Mod4Mask, A_RUN, G_SHORTCUTS, "Super+R" },
     { XK_s, Mod4Mask, A_SEARCH, G_SHORTCUTS, "Super+S" },
+    { XK_p, Mod4Mask, A_PROJECT, G_SHORTCUTS, "Super+P" },                /* also what many laptops' Fn key sends */
     { XK_F2, Mod1Mask, A_RUN, G_SHORTCUTS, "Alt+F2" },
     { XK_t, ControlMask | Mod1Mask, A_TERMINAL, G_SHORTCUTS, "Ctrl+Alt+T" },
     { XK_Delete, ControlMask | Mod1Mask, A_POWER, G_SHORTCUTS, "Ctrl+Alt+Delete" },
@@ -334,8 +362,8 @@ static const struct { const char *bin, *full, *area, *window; } shot_tools[] = {
       "mkdir -p \"$HOME/Pictures/Screenshots\" && scrot -u \"$HOME/Pictures/Screenshots/Screenshot_%Y-%m-%d_%H-%M-%S.png\"" },
 };
 
-/* hde-screenshot next to this binary (a fresh ./build copy wins, like hde-session does), else in $PATH. */
-static int find_builtin_shot(char *out, size_t len)
+/* An HDE program next to this binary (a fresh ./build copy wins, like hde-session does), else in $PATH. */
+static int find_hde_program(const char *name, char *out, size_t len)
 {
     char self[4096];
     ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
@@ -344,11 +372,31 @@ static int find_builtin_shot(char *out, size_t len)
         char *slash = strrchr(self, '/');
         if (slash) {
             *slash = '\0';
-            int w = snprintf(out, len, "%s/hde-screenshot", self);
+            int w = snprintf(out, len, "%s/%s", self, name);
             if (w > 0 && (size_t)w < len && access(out, X_OK) == 0) return 1;
         }
     }
-    return find_bin("hde-screenshot", out, len);
+    return find_bin(name, out, len);
+}
+
+static int find_builtin_shot(char *out, size_t len) { return find_hde_program("hde-screenshot", out, len); }
+
+/* F8 / Super+P / the display key: the Project window of Hyggshi Settings. Pressed again while it is open, the
+ * running window moves to the next layout (it owns _HDE_PROJECT_S<n>; the new process only tells it, then exits). */
+static void project(Time t)
+{
+    char path[4096], targ[48];
+    if (!find_hde_program("hde-settings", path, sizeof path)) {
+        notify("Project", "hde-settings is missing. Reinstall HDE (make && sudo make install).");
+        return;
+    }
+    snprintf(targ, sizeof targ, "--time=%lu", (unsigned long)t);
+    if (debug_on) fprintf(stderr, "hde-hotkeys: project: %s --project %s\n", path, targ);
+    pid_t p = fork_child();
+    if (p == 0) {
+        execl(path, "hde-settings", "--project", targ, (char *)NULL);
+        _exit(127);
+    }
 }
 
 /* Never ends in a "Failed to execute child process" error: a chosen tool that is not installed (or
@@ -442,12 +490,13 @@ static void do_action(int act, Time t)
     switch (act) {
     case A_SHOT_FULL: case A_SHOT_AREA: case A_SHOT_WIN:
     case A_CLIP_FULL: case A_CLIP_AREA: case A_CLIP_WIN: screenshot(act); break;
-    case A_VOL_MUTE:  run_with_osd(HDE_SH_VOLUME_MUTE, HDE_CMD_OSD_VOLUME, 0); break;
-    case A_VOL_DOWN:  run_with_osd(HDE_SH_VOLUME_DOWN, HDE_CMD_OSD_VOLUME, 0); break;
-    case A_VOL_UP:    run_with_osd(HDE_SH_VOLUME_UP, HDE_CMD_OSD_VOLUME, 0); break;
-    case A_MIC_MUTE:  run_with_osd(HDE_SH_MIC_MUTE, HDE_CMD_OSD_MIC, 0); break;
-    case A_BRIGHT_UP:   run_with_osd(HDE_SH_BRIGHTNESS_UP, HDE_CMD_OSD_BRIGHTNESS, 1); break;
-    case A_BRIGHT_DOWN: run_with_osd(HDE_SH_BRIGHTNESS_DOWN, HDE_CMD_OSD_BRIGHTNESS, 1); break;
+    case A_VOL_MUTE:  run_with_osd(HDE_SH_VOLUME_MUTE, HDE_CMD_OSD_VOLUME); break;
+    case A_VOL_DOWN:  run_with_osd(HDE_SH_VOLUME_DOWN, HDE_CMD_OSD_VOLUME); break;
+    case A_VOL_UP:    run_with_osd(HDE_SH_VOLUME_UP, HDE_CMD_OSD_VOLUME); break;
+    case A_MIC_MUTE:  run_with_osd(HDE_SH_MIC_MUTE, HDE_CMD_OSD_MIC); break;
+    case A_BRIGHT_UP:   brightness_key(+HDE_BRIGHTNESS_STEP); break;
+    case A_BRIGHT_DOWN: brightness_key(-HDE_BRIGHTNESS_STEP); break;
+    case A_PROJECT: project(t); break;
     case A_PLAY: media("play-pause"); break;
     case A_NEXT: media("next"); break;
     case A_PREV: media("previous"); break;
@@ -486,8 +535,8 @@ static int on_x_io_error(Display *d)
 
 static int group_enabled(int g)
 {
-    return g == G_ALWAYS || (g == G_FKEYS && cfg.fkeys) || (g == G_MEDIA && cfg.media) ||
-           (g == G_SHORTCUTS && cfg.shortcuts);
+    return g == G_ALWAYS || (g == G_FKEYS && cfg.fkeys) || (g == G_FKEYS_DISPLAY && cfg.fkeys_display) ||
+           (g == G_MEDIA && cfg.media) || (g == G_SHORTCUTS && cfg.shortcuts);
 }
 
 static const unsigned ignored_mods[] = { 0, LockMask, Mod2Mask, Mod5Mask, LockMask | Mod2Mask, LockMask | Mod5Mask,
@@ -588,8 +637,8 @@ static void grab_all(void)
     }
     XSync(dpy, False);
     report_conflicts();
-    fprintf(stderr, "hde-hotkeys: super_menu=%d fkeys_sound=%d media_keys=%d system_shortcuts=%d screenshot_tool=%s\n",
-            cfg.super_menu, cfg.fkeys, cfg.media, cfg.shortcuts, cfg.shot_tool);
+    fprintf(stderr, "hde-hotkeys: super_menu=%d fkeys_sound=%d fkeys_display=%d media_keys=%d system_shortcuts=%d "
+            "screenshot_tool=%s\n", cfg.super_menu, cfg.fkeys, cfg.fkeys_display, cfg.media, cfg.shortcuts, cfg.shot_tool);
 }
 
 static int any_failed(void)
@@ -736,7 +785,8 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf("hde-hotkeys: HDE system shortcuts daemon (see the comment at the top of hde-hotkeys.c)\n"
-                   "Config: ~/.config/hde/settings.ini  super_menu fkeys_sound media_keys system_shortcuts screenshot_tool\n"
+                   "Config: ~/.config/hde/settings.ini  super_menu fkeys_sound fkeys_display media_keys system_shortcuts\n"
+                   "        screenshot_tool\n"
                    "Send SIGHUP to reload.\n");
             return 0;
         }

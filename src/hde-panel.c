@@ -675,6 +675,37 @@ static void set_strut(GtkWidget *win, GdkRectangle *mon)
                         (const guchar *)s4, 4);
 }
 
+/* ---------- screens changed (F8, a monitor plugged in or out): the panel stays at the bottom of the primary one ---------- */
+static guint place_id;
+
+static gboolean panel_place(gpointer d)
+{
+    (void)d;
+    place_id = 0;
+    if (!panel_win || !gtk_widget_get_window(panel_win)) return G_SOURCE_REMOVE;
+    GdkDisplay *dpy = gdk_display_get_default();
+    GdkMonitor *m = gdk_display_get_primary_monitor(dpy);
+    if (!m) m = gdk_display_get_monitor(dpy, 0);
+    if (!m) return G_SOURCE_REMOVE;
+    GdkRectangle geo;
+    gdk_monitor_get_geometry(m, &geo);
+    gtk_widget_set_size_request(panel_win, geo.width, PANEL_HEIGHT);
+    gtk_window_resize(GTK_WINDOW(panel_win), geo.width, PANEL_HEIGHT);
+    gtk_window_move(GTK_WINDOW(panel_win), geo.x, geo.y + geo.height - PANEL_HEIGHT);
+    set_strut(panel_win, &geo);
+    fprintf(stderr, "hde-panel: screens changed: panel at %d,%d %dx%d (primary screen %dx%d+%d+%d, %d screen(s))\n",
+            geo.x, geo.y + geo.height - PANEL_HEIGHT, geo.width, PANEL_HEIGHT, geo.width, geo.height, geo.x, geo.y,
+            gdk_display_get_n_monitors(dpy));
+    return G_SOURCE_REMOVE;
+}
+
+static void on_screens_changed(GdkScreen *s, gpointer d)
+{
+    (void)s; (void)d;
+    if (place_id) g_source_remove(place_id);
+    place_id = g_timeout_add(250, panel_place, NULL);
+}
+
 /* ---------- CSS: light/dark according to Settings > Appearance ---------- */
 static void load_css(void)
 {
@@ -883,6 +914,8 @@ int main(int argc, char **argv)
     gtk_widget_show_all(win);
     set_strut(win, &geo);
     publish_panel_window();
+    g_signal_connect(gdk_screen_get_default(), "monitors-changed", G_CALLBACK(on_screens_changed), NULL);
+    g_signal_connect(gdk_screen_get_default(), "size-changed", G_CALLBACK(on_screens_changed), NULL);
     gdk_window_raise(gtk_widget_get_window(win));   /* never covered by hde-desktop if they start in the wrong order */
 
     g_unix_signal_add(SIGTERM, on_unix_signal, NULL);

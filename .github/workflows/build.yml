@@ -29,8 +29,8 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libx11-dev \
-          xvfb xdotool x11-utils xinput dbus-x11 metacity openbox imagemagick \
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev \
+          xvfb xdotool x11-utils x11-xserver-utils xinput dbus-x11 metacity openbox imagemagick \
           pulseaudio pulseaudio-utils libnotify-bin libglib2.0-bin adwaita-icon-theme python3 python3-dbusmock librsvg2-common
 
     - name: Build (all targets)
@@ -45,7 +45,7 @@ jobs:
         echo "compiler warnings: $n"
         grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::/' || true
 
-    - name: Smoke test in Xvfb (Super key, F1-F3, notifications, Wi-Fi list, Dark mode, live WM switch)
+    - name: Smoke test in Xvfb (Super key, F1-F3, F6-F8, notifications, screenshots, Wi-Fi list, About, Dark mode, live WM switch)
       run: make check
 
     - name: Report results
@@ -90,7 +90,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-          build-essential pkg-config libgtk-3-dev libxi-dev libx11-dev \
+          build-essential pkg-config libgtk-3-dev libxi-dev libxrandr-dev libx11-dev \
           xserver-xorg-core xserver-xorg-video-dummy xserver-xorg-input-libinput xserver-xorg-input-synaptics \
           xserver-xorg-input-evdev xinput x11-utils xdotool dbus-x11 python3 python3-evdev imagemagick \
           adwaita-icon-theme librsvg2-common
@@ -121,6 +121,57 @@ jobs:
           /tmp/hde-input/*.txt
           /tmp/hde-input/shot-*.png
 
+  # Several screens for real: Xorg with the dummy video driver, whose 16 RandR outputs (xf86-video-dummy >= 0.4.0, so
+  # Ubuntu 24.04) act as connectors: F8 / Super+P Project window, Extend / Duplicate / Second screen only / PC screen
+  # only, the panel and desktop following, F6/F7 software dimming, Night Light, a screen plugged in, a fake backlight.
+  display:
+    name: screens (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04 ]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev \
+          xserver-xorg-core xserver-xorg-video-dummy x11-xserver-utils x11-utils xdotool dbus-x11 metacity \
+          imagemagick adwaita-icon-theme librsvg2-common python3
+
+    - name: Build
+      run: make -j"$(nproc)"
+
+    - name: Screens test (F8 Project, Extend / Duplicate / Second screen only, F6/F7, Night Light, hotplug, backlight)
+      run: sh tests/display-test.sh
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-display results "HDE screens test"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-display checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-screens-${{ matrix.os }}
+        path: |
+          /tmp/hde-display/*.log
+          /tmp/hde-display/*.txt
+          /tmp/hde-display/shot-*.png
+
   # HDE mostly runs on Debian-based systems (Hyggshi OS defaults to Debian 13): build with their compilers too.
   # Debian 13 has GCC 14 (implicit declarations and pointer/int mix-ups are errors); testing has the newest GCC,
   # which compiles C23 by default (bool/true/false are keywords, "f()" means "f(void)").
@@ -144,7 +195,7 @@ jobs:
       run: |
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libx11-dev
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev
         gcc --version | head -n1
 
     - name: Build (all targets)

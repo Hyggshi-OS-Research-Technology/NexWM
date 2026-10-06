@@ -59,20 +59,8 @@
     "elif command -v wpctl >/dev/null 2>&1; then wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | grep -c MUTED; " \
     "else amixer get Capture 2>/dev/null | grep -c '\\[off\\]'; fi"
 
-/* Brightness: prints the percentage after the change. Exits with code 3 if no tool is available. */
-#define HDE_SH_BRIGHTNESS_UP \
-    "if command -v brightnessctl >/dev/null 2>&1; then brightnessctl -q set 5%+; " \
-    "brightnessctl -m 2>/dev/null | head -n1 | cut -d, -f4 | tr -d %; " \
-    "elif command -v light >/dev/null 2>&1; then light -A 5; light -G | cut -d. -f1; " \
-    "elif command -v xbacklight >/dev/null 2>&1; then xbacklight -inc 5; xbacklight -get | cut -d. -f1; " \
-    "else exit 3; fi"
-
-#define HDE_SH_BRIGHTNESS_DOWN \
-    "if command -v brightnessctl >/dev/null 2>&1; then brightnessctl -q -n1 set 5%- 2>/dev/null || brightnessctl -q set 5%-; " \
-    "brightnessctl -m 2>/dev/null | head -n1 | cut -d, -f4 | tr -d %; " \
-    "elif command -v light >/dev/null 2>&1; then light -U 5; light -G | cut -d. -f1; " \
-    "elif command -v xbacklight >/dev/null 2>&1; then xbacklight -dec 5; xbacklight -get | cut -d. -f1; " \
-    "else exit 3; fi"
+/* Brightness: no shell command any more, see src/hde-brightness.c (backlight through sysfs / systemd-logind, or
+ * software dimming; no brightnessctl needed). */
 
 /* Screen lock: try real lockers first. `loginctl lock-session` only works when
  * some program listens to logind, so it comes last. */

@@ -1,7 +1,8 @@
 #!/bin/sh
 # tests/smoke.sh — HDE smoke test: runs a whole HDE session in Xvfb, then checks the main features
-# (Super key, F1/F2/F3, notifications, PrtSc screenshots, desktop icon frame + icon menu, Wi-Fi list,
-#  live Dark mode, WM switch without logout, restart after a crash).
+# (Super key, F1/F2/F3, F6/F7 brightness, F8 Project window, notifications, PrtSc screenshots and the Screenshot
+#  window, desktop icon frame + icon menu, Wi-Fi list, About / memory used, live Dark mode, WM switch without logout,
+#  restart after a crash). Several screens for real: tests/display-test.sh (Xorg).
 #
 #   make check            (or: BUILD=build sh tests/smoke.sh)
 # Needs: Xvfb xdotool dbus-run-session python3. Optional: metacity openbox pulseaudio notify-send import(ImageMagick)
@@ -136,6 +137,16 @@ check "no touchpad at login: the Touchpad scrolling window is not opened" \
     grep -q "hde-settings: touchpad setup: not shown, no touchpad found" "$OUT/session.log"
 BASE_POPUPS=$(popups)       # override-redirect windows right after login (no menu, OSD or notification open)
 
+# the screen layouts of F8 (PC screen only / Duplicate / Extend / Second screen only) without an X server
+if [ -x "$B/randr-plan-test" ]; then
+    "$B/randr-plan-test" > "$OUT/randr-plan-test.txt" 2>&1
+    while IFS= read -r l; do
+        case "$l" in PASS:*) pass "${l#PASS: }" ;; FAIL:*) fail "${l#FAIL: }" ;; esac
+    done < "$OUT/randr-plan-test.txt"
+else
+    skip "randr-plan-test not built (make build/randr-plan-test)"
+fi
+
 # ---------- 2. Super key -> Start menu ----------
 n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
 if [ "$n1" -gt "$n0" ]; then pass "Super key opens the Start menu ($n0 -> $n1 popups)"; else fail "Super key opens the Start menu ($n0 -> $n1 popups)"; fi
@@ -180,6 +191,57 @@ if pactl info >/dev/null 2>&1; then
     sed -i '/^fkeys_sound=/d' "$SETTINGS_INI"; sleep 2
 else
     skip "no PulseAudio server: F1/F2/F3 volume tests"
+fi
+
+# ---------- 3b. F6 / F7 brightness, F8 Project window (Xvfb: one screen, no backlight) ----------
+wait_osd() { i=0; while [ "$(popups)" -le "$BASE_POPUPS" ] && [ $i -lt 20 ]; do sleep 0.1; i=$((i + 1)); done; [ "$(popups)" -gt "$BASE_POPUPS" ]; }
+soft() { xprop -root _HDE_BRIGHTNESS 2>/dev/null | sed -n 's/.*= //p'; }
+"$B/hde-settings" --brightness > "$OUT/brightness.txt" 2>&1
+binfo=$(head -n 1 "$OUT/brightness.txt")
+echo "INFO: brightness in Xvfb: $binfo" | tee -a "$OUT/results.txt"
+sleep 1.6
+case "$binfo" in
+    "software dimming"*)
+        xdotool key F6
+        if wait_osd; then pass "F6 shows the brightness OSD"; else fail "F6 shows the brightness OSD"; fi
+        shot 04b-osd-brightness
+        sleep 1
+        if [ "$(soft)" = 95 ]; then pass "F6 dims the screen (software dimming: no backlight in a VM) to 95%"
+        else fail "F6 dims the screen to 95% (_HDE_BRIGHTNESS=$(soft))"; fi
+        check "... the panel got the level for its OSD" grep -q "hde-panel: command 6 (time [0-9]*, arg 95)" "$OUT/session.log"
+        xdotool key F7; sleep 1.5
+        if [ "$(soft)" = 100 ]; then pass "F7 brightens it again (100%)"; else fail "F7 brightens it again (_HDE_BRIGHTNESS=$(soft))"; fi
+        echo "fkeys_display=false" >> "$SETTINGS_INI"; sleep 2.5
+        xdotool key F6; sleep 1.5
+        if [ "$(soft)" = 100 ]; then pass "fkeys_display=false gives F6/F7/F8 back to applications"
+        else fail "fkeys_display=false gives F6/F7/F8 back to applications (F6 still dimmed: $(soft))"; fi
+        sed -i '/^fkeys_display=/d' "$SETTINGS_INI"; sleep 2 ;;
+    *)
+        n0=$(grep -c "from HDE: Brightness" "$OUT/session.log")
+        xdotool key F6; sleep 2
+        n1=$(grep -c "from HDE: Brightness" "$OUT/session.log")
+        if [ "$n1" -gt "$n0" ]; then pass "F6 where nothing can change the brightness: a notification says why (no error dialog)"
+        else fail "F6 where nothing can change the brightness: a notification says why"; fi
+        shot 04b-brightness-impossible ;;
+esac
+xdotool key F8
+i=0; while ! xdotool search --onlyvisible --name "^Project$" >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if xdotool search --onlyvisible --name "^Project$" >/dev/null 2>&1; then
+    pass "F8 opens the Project window (PC screen only / Duplicate / Extend / Second screen only)"
+    sleep 1
+    shot 04c-project-one-screen
+    check "... it knows there is only one screen" grep -q "hde-settings: project: shown: 1 screen(s)" "$OUT/session.log"
+    xdotool key F8; sleep 1.5
+    nwin=$(xdotool search --onlyvisible --name "^Project$" 2>/dev/null | wc -l)
+    if [ "$nwin" = 1 ] && grep -q "hde-settings: project: already open: next layout" "$OUT/session.log"; then
+        pass "F8 again does not open a second Project window (it tells the open one to move on)"
+    else fail "F8 again does not open a second Project window ($nwin windows)"; fi
+    xdotool key Escape; sleep 1
+    if xdotool search --onlyvisible --name "^Project$" >/dev/null 2>&1; then fail "Esc closes the Project window"
+    else pass "Esc closes the Project window"; fi
+else
+    fail "F8 opens the Project window"
+    grep -E "hde-(hotkeys|settings)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
 fi
 
 # ---------- 4. notifications ----------
@@ -267,6 +329,28 @@ if ! command -v scrot >/dev/null 2>&1; then
     else fail "screenshot_tool=scrot without scrot installed falls back to the built-in tool ($n0 -> $n1)"; fi
     sed -i '/^screenshot_tool=/d' "$SETTINGS_INI"; sleep 2
 fi
+
+# the Screenshot window: Start menu > Screenshot (hde-screenshot --ui)
+"$B/hde-screenshot" --ui > "$OUT/screenshot-ui.log" 2>&1 &
+SUI=$!
+i=0; while ! xdotool search --onlyvisible --name "^Screenshot$" >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if xdotool search --onlyvisible --name "^Screenshot$" >/dev/null 2>&1; then
+    pass "the Screenshot window opens (whole screen / active window / area, delay)"
+    sleep 1
+    shot 05k-screenshot-window
+    xdotool search --onlyvisible --name "^Screenshot$" windowactivate --sync >/dev/null 2>&1
+    n0=$(nshots); xdotool key Return; sleep 3; n1=$(nshots)
+    if [ "$n1" -gt "$n0" ] && grep -q "hde-screenshot: window: saved .* (1280x800)" "$OUT/screenshot-ui.log"; then
+        pass "Take Screenshot saves the whole screen and shows it with Copy / Save As / Open / Show in Folder"
+    else fail "Take Screenshot in the Screenshot window ($n0 -> $n1 files; $(tail -n 2 "$OUT/screenshot-ui.log" | tr '\n' ' '))"; fi
+    shot 05l-screenshot-result
+    xdotool key Escape; sleep 0.8
+    if xdotool search --onlyvisible --name "^Screenshot$" >/dev/null 2>&1; then fail "Esc closes the Screenshot window"
+    else pass "Esc closes the Screenshot window"; fi
+else
+    fail "the Screenshot window opens"
+fi
+kill "$SUI" 2>/dev/null
 
 # ---------- 4c. desktop icons: visible selection frame + each icon's own context menu ----------
 # Fresh profile, icons sorted by name in the first column: Home y=16, aaa-folder y=124, bbb-notes.txt y=232,
@@ -606,6 +690,16 @@ else
     skip "touchpad settings (needs xinput)"
 fi
 "$B/hde-settings" appearance; sleep 2; shot 09-settings-appearance-light
+"$B/hde-settings" display; sleep 2.5; shot 09b-settings-display
+"$B/hde-settings" about; sleep 3.5; shot 09c-settings-about
+if grep -q "hde-settings: about: HDE uses " "$OUT/settings.log"; then
+    pass "Settings > About shows how much memory HDE uses ($(sed -n 's/^hde-settings: about: HDE uses \([^(]*\).*/\1/p' "$OUT/settings.log" | head -n 1))"
+else fail "Settings > About shows how much memory HDE uses"; fi
+"$B/hde-settings" --about > "$OUT/about.txt" 2>&1
+if grep -q "^Desktop memory now: " "$OUT/about.txt" && grep -q " hde-panel " "$OUT/about.txt"; then
+    pass "hde-settings --about: $(sed -n 's/^Desktop memory now: //p' "$OUT/about.txt")"
+else fail "hde-settings --about lists the memory of the desktop's programs"; fi
+sed -n '/^Desktop memory now/,$p' "$OUT/about.txt" | sed 's/^/INFO: /' >> "$OUT/results.txt"
 
 # ---------- 6. Dark mode ----------
 "$B/hde-settings" --style dark > "$OUT/style-dark.log" 2>&1

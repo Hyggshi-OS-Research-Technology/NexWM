@@ -128,11 +128,13 @@ static void save_config(void)
 }
 
 /* ---------- wallpaper rendering ---------- */
-static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
+/* the wallpaper in the rectangle of one screen (X, Y, W, H) */
+static void paint_wallpaper(cairo_t *cr, double X, double Y, double W, double H)
 {
-    int W = gtk_widget_get_allocated_width(w);
-    int H = gtk_widget_get_allocated_height(w);
-
+    cairo_save(cr);
+    cairo_rectangle(cr, X, Y, W, H);
+    cairo_clip(cr);
+    cairo_translate(cr, X, Y);
     if (wallpaper) {
         double pw = gdk_pixbuf_get_width(wallpaper), ph = gdk_pixbuf_get_height(wallpaper);
         double sx, sy;
@@ -161,7 +163,29 @@ static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
         cairo_paint(cr);
         cairo_pattern_destroy(g);
     }
-    return FALSE;   /* keep drawing the child icons */
+    cairo_restore(cr);
+}
+
+/* one wallpaper per screen (with Extend, each screen shows the whole picture instead of a half) */
+static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+    (void)data;
+    int W = gtk_widget_get_allocated_width(w);
+    int H = gtk_widget_get_allocated_height(w);
+    GdkDisplay *d = gdk_display_get_default();
+    int n = gdk_display_get_n_monitors(d);
+    if (n <= 1) {
+        paint_wallpaper(cr, 0, 0, W, H);
+        return FALSE;   /* keep drawing the child icons */
+    }
+    cairo_set_source_rgb(cr, 0.10, 0.12, 0.16);     /* parts of the desktop no screen shows */
+    cairo_paint(cr);
+    for (int i = 0; i < n; i++) {
+        GdkRectangle r;
+        gdk_monitor_get_geometry(gdk_display_get_monitor(d, i), &r);
+        paint_wallpaper(cr, r.x, r.y, r.width, r.height);
+    }
+    return FALSE;
 }
 
 /* ---------- icons ---------- */
@@ -637,8 +661,8 @@ static void reload_icons(void)
     #define PLACE(w) do { \
         const char *_pp = g_object_get_data(G_OBJECT(w), "target"); \
         if (keep_arranged || !restore_icon_position((w), _pp)) { \
-            gint _px = MARGIN + (idx / rows) * CELL_W; \
-            gint _py = MARGIN + (idx % rows) * CELL_H; \
+            gint _px = mon.x + MARGIN + (idx / rows) * CELL_W; \
+            gint _py = mon.y + MARGIN + (idx % rows) * CELL_H; \
             gint _fx = _px, _fy = _py; \
             if (!find_free_cell(_px, _py, (w), &_fx, &_fy)) { \
                 _fx = _px; _fy = _py; \
@@ -1907,19 +1931,56 @@ static void m_display_settings(GtkMenuItem *i, gpointer d)
     }
 }
 
+/* "About HDE": Settings > About (this computer, the system, the memory HDE uses) */
 static void m_about(GtkMenuItem *i, gpointer d)
 {
     (void)i; (void)d;
-    const gchar *authors[] = { "HyggshiOSDeveloper", NULL };
-    gtk_show_about_dialog(GTK_WINDOW(win),
-        "program-name", "Hyggshi Desktop Environment",
-        "version", "1.0",
-        "comments", "A lightweight GTK3 desktop environment for Hyggshi OS.",
-        "copyright", "Copyright © 2026 HyggshiOSDeveloper",
-        "authors", authors,
-        "website", "https://github.com/HyggshiOSDeveloper/Hyggshi-OS-project-center",
-        "license", "MIT License",
-        NULL);
+    char *self = g_file_read_link("/proc/self/exe", NULL);
+    char *dir = self ? g_path_get_dirname(self) : NULL;
+    char *sib = dir ? g_build_filename(dir, "hde-settings", NULL) : NULL;
+    char *prog = sib && g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE) ? g_strdup(sib) : g_find_program_in_path("hde-settings");
+    if (prog) {
+        char *argv[] = { prog, (char *)"about", NULL };
+        GError *e = NULL;
+        if (!g_spawn_async(NULL, argv, NULL, 0, NULL, NULL, NULL, &e)) {
+            g_printerr("hde-desktop: cannot start %s: %s\n", prog, e ? e->message : "?");
+            g_clear_error(&e);
+        }
+    } else {
+        g_printerr("hde-desktop: hde-settings not found\n");
+    }
+    g_free(prog); g_free(sib); g_free(dir); g_free(self);
+}
+
+/* ---------- screens changed (F8, a monitor plugged in or out): cover the whole desktop again ---------- */
+static guint screens_id;
+
+static gboolean desktop_place(gpointer d)
+{
+    (void)d;
+    screens_id = 0;
+    if (!win) return G_SOURCE_REMOVE;
+    GdkDisplay *dpy = gdk_display_get_default();
+    GdkMonitor *m = gdk_display_get_primary_monitor(dpy);
+    if (!m) m = gdk_display_get_monitor(dpy, 0);
+    if (m) gdk_monitor_get_geometry(m, &mon);
+    GdkScreen *scr = gdk_display_get_default_screen(dpy);
+    int sw = gdk_screen_get_width(scr), sh = gdk_screen_get_height(scr);
+    gtk_widget_set_size_request(win, sw, sh);
+    gtk_window_resize(GTK_WINDOW(win), sw, sh);
+    gtk_window_move(GTK_WINDOW(win), 0, 0);
+    reload_icons();
+    gtk_widget_queue_draw(win);
+    fprintf(stderr, "hde-desktop: screens changed: desktop %dx%d, icons on the primary screen %dx%d+%d+%d\n",
+            sw, sh, mon.width, mon.height, mon.x, mon.y);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_screens_changed(GdkScreen *s, gpointer d)
+{
+    (void)s; (void)d;
+    if (screens_id) g_source_remove(screens_id);
+    screens_id = g_timeout_add(250, desktop_place, NULL);
 }
 
 static GtkWidget *make_sort_item(GtkWidget *submenu, GSList **group, const char *label, SortMode mode)
@@ -2298,6 +2359,8 @@ int main(int argc, char **argv)
 
     gtk_widget_show_all(win);
     gdk_window_lower(gtk_widget_get_window(win));         /* even without a WM, or when the WM ignores the DESKTOP hint */
+    g_signal_connect(scr, "monitors-changed", G_CALLBACK(on_screens_changed), NULL);
+    g_signal_connect(scr, "size-changed", G_CALLBACK(on_screens_changed), NULL);
     gtk_main();
     return 0;
 }

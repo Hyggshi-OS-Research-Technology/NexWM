@@ -6,9 +6,13 @@
  *   hde-settings --apply      re-apply the settings needed at every login, then exit (called by hde-session)
  *   hde-settings --touchpad-setup[=auto]   the "Touchpad scrolling" window (auto: only at the first login with a
  *                             touchpad, until a direction is chosen; run by hde-session)
+ *   hde-settings --project    the Project window of F8 / Super+P (PC screen only, Duplicate, Extend, Second screen only)
+ *   hde-settings --display-mode pc|duplicate|extend|second    --displays    --brightness [+N|-N|N]
+ *   hde-settings --about      this computer, the system and the memory HDE uses, as text
  *   hde-settings --version
  *
- * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound,touchpad}.c
+ * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound,touchpad,
+ * display,about}.c
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
@@ -16,7 +20,6 @@
 #include "hde-build.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
-#include <sys/utsname.h>
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
@@ -37,7 +40,8 @@ static GtkCssProvider *app_css;
 typedef struct { const char *id; const char *icon; const char *title; const char *subtitle; } SettingItem;
 static const SettingItem items[] = {
     /* icon: several alternative names separated by '|'; the first one present in the icon theme is used */
-    { "display", "video-display-symbolic|preferences-desktop-display-symbolic", "Display", "Resolution, scale and monitors" },
+    { "display", "video-display-symbolic|preferences-desktop-display-symbolic", "Display",
+      "Brightness, screens, projector (F8) and Night Light" },
     { "appearance", "preferences-desktop-appearance-symbolic|preferences-desktop-theme-symbolic|applications-graphics-symbolic|weather-clear-night-symbolic",
       "Appearance", "Dark mode, theme, accent, icons and fonts" },
     { "input", "input-mouse-symbolic", "Input", "Mouse, touchpad and pointer" },
@@ -48,9 +52,9 @@ static const SettingItem items[] = {
       "Window Management", "Window manager used by the desktop" },
     { "notifications", "preferences-system-notifications-symbolic|notification-symbolic", "Notifications", "Alerts and Do Not Disturb" },
     { "power", "battery-good-symbolic|battery-full-symbolic", "Power", "Sleep, screen timeout and battery" },
-    { "keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat, Super key and sound keys" },
+    { "keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat, Super key, sound and display keys" },
     { "users", "system-users-symbolic|avatar-default-symbolic", "Users", "Accounts and administrator" },
-    { "about", "help-about-symbolic", "About", "Hyggshi Desktop Environment" },
+    { "about", "help-about-symbolic", "About", "Hyggshi Desktop Environment and this computer" },
 };
 
 /* ================= configuration ================= */
@@ -523,20 +527,6 @@ void apply_input_settings(void)
 }
 
 /* ================= simple pages ================= */
-static void display_dialog(GtkButton *b, gpointer d)
-{
-    (void)b; (void)d;
-    const char *cmds[] = { "arandr", "lxrandr", "xfce4-display-settings", "lxqt-config-monitor", "gnome-control-center display", NULL };
-    launch_candidates(cmds);
-}
-
-static void cb_scale(GtkComboBox *c, gpointer x)
-{
-    (void)x;
-    cfg_set_int("scale", gtk_combo_box_get_active(c));
-    settings_status("Text scale applied to running GTK applications");
-}
-
 static void cb_int_combo(GtkComboBox *c, gpointer key) { cfg_set_int(key, gtk_combo_box_get_active(c)); }
 
 static gboolean cb_bool(GtkSwitch *s, gboolean v, gpointer key)
@@ -560,40 +550,6 @@ static GtkWidget *switch_with(const char *key, gboolean def)
     gtk_switch_set_active(GTK_SWITCH(s), cfg_get_bool(key, def));
     g_signal_connect(s, "state-set", G_CALLBACK(cb_bool), (gpointer)key);
     return s;
-}
-
-static GtkWidget *make_display_page(void)
-{
-    GtkWidget *box = page_base();
-    GdkDisplay *d = gdk_display_get_default();
-    int n = d ? gdk_display_get_n_monitors(d) : 0;
-    gtk_box_pack_start(GTK_BOX(box), section("Screens"), FALSE, FALSE, 0);
-    GtkWidget *card = card_new();
-    for (int i = 0; d && i < n; i++) {
-        GdkMonitor *m = gdk_display_get_monitor(d, i);
-        GdkRectangle r;
-        gdk_monitor_get_geometry(m, &r);
-        const char *model = gdk_monitor_get_model(m);
-        char *title = g_strdup_printf("%s%s", model ? model : "Display", gdk_monitor_is_primary(m) ? " (primary)" : "");
-        char *desc = g_strdup_printf("%d × %d at %d,%d · %d Hz", r.width, r.height, r.x, r.y,
-                                     (gdk_monitor_get_refresh_rate(m) + 500) / 1000);
-        gtk_container_add(GTK_CONTAINER(card), row_box(title, desc, NULL));
-        g_free(title); g_free(desc);
-    }
-    if (!n) gtk_container_add(GTK_CONTAINER(card), card_placeholder("No monitors detected"));
-    gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
-
-    gtk_box_pack_start(GTK_BOX(box), section("Display settings"), FALSE, FALSE, 0);
-    const char *scales[] = { "100%", "125%", "150%", "200%" };
-    GtkWidget *scale = combo_with(scales, 4, cfg_get_int("scale", 0));
-    g_signal_connect(scale, "changed", G_CALLBACK(cb_scale), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Text scale", "Scales text in GTK applications (applies immediately).", scale), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Night Light", "Reduce blue light during evening hours.", switch_with("night_light", FALSE)), FALSE, FALSE, 0);
-    GtkWidget *btn = gtk_button_new_with_label("Open advanced display settings (resolution, rotation, arrangement)");
-    gtk_widget_set_halign(btn, GTK_ALIGN_START);
-    g_signal_connect(btn, "clicked", G_CALLBACK(display_dialog), NULL);
-    gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 10);
-    return box;
 }
 
 static guint input_apply_id;
@@ -911,38 +867,9 @@ static GtkWidget *make_users_page(void)
     return box;
 }
 
-static GtkWidget *make_about_page(void)
-{
-    GtkWidget *box = page_base();
-    GtkWidget *logo = gtk_image_new_from_icon_name("preferences-system", GTK_ICON_SIZE_DIALOG);
-    gtk_widget_set_halign(logo, GTK_ALIGN_START);
-    gtk_box_pack_start(GTK_BOX(box), logo, FALSE, FALSE, 5);
-    GtkWidget *v = gtk_label_new("Hyggshi Desktop Environment 1.0");
-    gtk_widget_set_halign(v, GTK_ALIGN_START);
-    gtk_style_context_add_class(gtk_widget_get_style_context(v), "about-title");
-    gtk_box_pack_start(GTK_BOX(box), v, FALSE, FALSE, 0);
-    GtkWidget *card = card_new();
-    struct utsname u;
-    if (uname(&u) == 0) {
-        char *k = g_strdup_printf("%s %s", u.sysname, u.release);
-        gtk_container_add(GTK_CONTAINER(card), row_box("Kernel", k, NULL));
-        gtk_container_add(GTK_CONTAINER(card), row_box("Architecture", u.machine, NULL));
-        g_free(k);
-    }
-    char *os = g_get_os_info(G_OS_INFO_KEY_PRETTY_NAME);
-    if (os) { gtk_container_add(GTK_CONTAINER(card), row_box("Operating system", os, NULL)); g_free(os); }
-    const char *wm = g_getenv("HDE_WM");
-    gtk_container_add(GTK_CONTAINER(card), row_box("Session", g_getenv("HDE_SESSION_PID") ? "HDE (X11)" : "Not running inside an HDE session", NULL));
-    if (wm && *wm) gtk_container_add(GTK_CONTAINER(card), row_box("Window manager setting", wm, NULL));
-    gtk_container_add(GTK_CONTAINER(card), row_box("Configuration", "~/.config/hde/settings.ini", NULL));
-    gtk_container_add(GTK_CONTAINER(card), row_box("Build", HDE_VERSION, NULL));
-    gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 10);
-    return box;
-}
-
 static GtkWidget *make_page(const char *id)
 {
-    if (!strcmp(id, "display")) return make_display_page();
+    if (!strcmp(id, "display")) return page_display_new();
     if (!strcmp(id, "appearance")) return page_appearance_new();
     if (!strcmp(id, "input")) return make_input_page();
     if (!strcmp(id, "sound")) return page_sound_new();
@@ -953,7 +880,7 @@ static GtkWidget *make_page(const char *id)
     if (!strcmp(id, "power")) return make_power_page();
     if (!strcmp(id, "keyboard")) return page_keyboard_new();
     if (!strcmp(id, "users")) return make_users_page();
-    return make_about_page();
+    return page_about_new();
 }
 
 /* ================= window frame ================= */
@@ -1048,7 +975,12 @@ static void load_css(void)
         ".section-title { color: %s; font-weight: 700; font-size: 12px; }"
         ".row-title { font-weight: 600; }"
         ".row-description { opacity: 0.68; font-size: 11px; }"
-        ".about-title { font-size: 20px; font-weight: 700; }"
+        ".about-title { font-size: 24px; font-weight: 700; }"
+        ".mem-big { font-size: 16px; font-weight: 700; }"
+        ".project-tile { padding: 8px 6px; border-radius: 12px; background-image: none; }"
+        ".project-tile.selected { box-shadow: inset 0 0 0 2px %s; background-color: alpha(%s, 0.10); }"
+        ".project-tile:focus { outline-color: alpha(%s, 0.6); }"
+        ".project-window { border: 1px solid alpha(@theme_fg_color, 0.28); }"
         ".tp-heading { font-size: 20px; font-weight: 700; }"
         ".tp-hint { padding: 8px 10px; border-radius: 10px; background-color: alpha(%s, 0.10); border: 1px solid alpha(%s, 0.35); }"
         ".status { opacity: 0.7; font-size: 11px; }"
@@ -1068,7 +1000,7 @@ static void load_css(void)
         ".preview-light .pv-bar { background-color: #e2e5ea; } .preview-dark .pv-bar { background-color: #14171c; }"
         ".pv-accent { background-color: %s; border-radius: 3px; }"
         "button { border-radius: 8px; }",
-        a, a, a, a, a, a, a, a, a);
+        a, a, a, a, a, a, a, a, a, a, a, a);
     if (!app_css) {
         app_css = gtk_css_provider_new();
         gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(app_css),
@@ -1172,8 +1104,31 @@ static int on_command_line(GApplication *app, GApplicationCommandLine *cl, gpoin
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "--version")) {
-        printf("hde-settings (HDE) %s\n", HDE_VERSION);
+        printf("hde-settings (HDE) %s %s\n", HDE_RELEASE, HDE_VERSION);
         return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "--about")) return about_cli();
+    if (argc > 1 && !strcmp(argv[1], "--displays")) return display_cli_displays();
+    if (argc > 1 && (!strcmp(argv[1], "--display-mode") || g_str_has_prefix(argv[1], "--display-mode="))) {
+        const char *m = argv[1][14] == '=' ? argv[1] + 15 : argc > 2 ? argv[2] : NULL;
+        if (!m) { fprintf(stderr, "hde-settings: --display-mode expects pc, duplicate, extend or second\n"); return 2; }
+        return display_cli_mode(m);
+    }
+    if (argc > 1 && (!strcmp(argv[1], "--brightness") || g_str_has_prefix(argv[1], "--brightness="))) {
+        const char *v = argv[1][12] == '=' ? argv[1] + 13 : argc > 2 ? argv[2] : NULL;
+        return display_cli_brightness(v);
+    }
+    if (argc > 1 && !strcmp(argv[1], "--project")) {
+        /* F8 / Super+P / the display key (hde-hotkeys), or a screen just plugged in (hde-xsettings) */
+        signal(SIGPIPE, SIG_IGN);
+        gdk_set_allowed_backends("x11");
+        if (!gtk_init_check(&argc, &argv)) {
+            fprintf(stderr, "hde-settings: cannot open the X display\n");
+            return 2;
+        }
+        hde_theme_apply_process();
+        load_css();
+        return display_project_main(argc, argv);
     }
     if (argc > 1 && g_str_has_prefix(argv[1], "--touchpad-setup")) {
         /* the "Touchpad scrolling" window on its own; =auto (hde-session at login): only if it is needed */
@@ -1212,6 +1167,12 @@ int main(int argc, char **argv)
                "                             notifications power keyboard users about)\n"
                "       hde-settings --apply  re-apply login-time settings and exit\n"
                "       hde-settings --touchpad-setup   choose which way the touchpad scrolls, with a test page\n"
+               "       hde-settings --project          the Project window (F8): PC screen only, Duplicate, Extend,\n"
+               "                                       Second screen only\n"
+               "       hde-settings --display-mode pc|duplicate|extend|second   the same without a window\n"
+               "       hde-settings --displays         the screens, the layout in use and the brightness method\n"
+               "       hde-settings --brightness [+N|-N|N]   show or change the screen brightness\n"
+               "       hde-settings --about            this computer, the system and the memory HDE uses\n"
                "       hde-settings --version\n"
                "       hde-settings --style dark|light|toggle   switch Dark mode without opening the window\n");
         return 0;

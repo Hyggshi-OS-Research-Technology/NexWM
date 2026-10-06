@@ -1,0 +1,143 @@
+/* hde-randr.h — screens for HDE through XRandR 1.2+ (plain C + Xlib, libXrandr when built with HAVE_XRANDR).
+ *
+ *  - which screens are connected, which one is the computer's own ("PC screen": the laptop panel eDP/LVDS/DSI, or
+ *    else the first connected one), their resolutions and positions;
+ *  - the four "Project" layouts of F8 / Super+P / the Fn display key, like Windows + P:
+ *      PC screen only · Duplicate · Extend · Second screen only
+ *    planned by a pure function (hde_randr_plan, tested without an X server by tests/randr-plan-test.c) and applied
+ *    with the same steps as the xrandr program (no xrandr, arandr or other tool needed);
+ *  - the safety net of the display service (hde-xsettings): a screen unplugged while it was the only one in use, or
+ *    still part of the desktop, never leaves the user in front of a dark or too large desktop;
+ *  - software brightness and Night Light through the CRTC gamma ramps (screens without a backlight: desktop
+ *    monitors, virtual machines).
+ *
+ * Used by hde-settings (Display page, the F8 window), hde-hotkeys (F6/F7) and hde-xsettings (display service).
+ */
+#ifndef HDE_RANDR_H
+#define HDE_RANDR_H
+
+#include <X11/Xlib.h>
+
+typedef enum {
+    HDE_PROJECT_OTHER = -1,         /* a layout made elsewhere (arandr, xrandr) that is none of the four, or all dark */
+    HDE_PROJECT_PC = 0,             /* PC screen only */
+    HDE_PROJECT_DUPLICATE,          /* the same picture on every screen */
+    HDE_PROJECT_EXTEND,             /* one desktop across the screens, the others to the right of the PC screen */
+    HDE_PROJECT_SECOND,             /* Second screen only: the PC screen is turned off */
+    HDE_PROJECT_N
+} HdeProjectMode;
+
+const char *hde_project_id(HdeProjectMode m);          /* "pc" "duplicate" "extend" "second"; "other" */
+const char *hde_project_label(HdeProjectMode m);       /* "PC screen only", ...; "Custom layout" */
+HdeProjectMode hde_project_from_id(const char *id);    /* also: internal, mirror, clone, external, 1-4 ... */
+
+#define HDE_RANDR_MAX 16                /* outputs / CRTCs looked at */
+#define HDE_RANDR_MAX_MODES 96
+
+/* rotation values of RandR (RR_Rotate_*) */
+#define HDE_ROT_0   1
+#define HDE_ROT_90  2
+#define HDE_ROT_180 4
+#define HDE_ROT_270 8
+
+typedef struct {
+    unsigned long id;                   /* RRMode */
+    int width, height;
+    double refresh;                     /* Hz */
+    int preferred;                      /* one of the modes the screen asks for (its native resolution) */
+} HdeRandrMode;
+
+typedef struct {
+    unsigned long id;                   /* RROutput */
+    char name[32];                      /* eDP-1, HDMI-1, DP-2, Virtual-1, DUMMY1 */
+    char monitor[64];                   /* the monitor's name from its EDID ("DELL U2415"), "" if unknown */
+    int connected;
+    int builtin;                        /* laptop panel: eDP, LVDS, DSI (name) or ConnectorType "Panel" */
+    unsigned long crtc;                 /* current CRTC, 0 = off */
+    unsigned long mode;                 /* current mode (when on) */
+    int x, y, width, height;            /* current geometry (when on) */
+    int rotation;                       /* current HDE_ROT_* (when on) */
+    int mm_width, mm_height;
+    int ncrtc;
+    unsigned long crtcs[HDE_RANDR_MAX]; /* the CRTCs that can drive it */
+    int nmode;
+    HdeRandrMode modes[HDE_RANDR_MAX_MODES];
+} HdeRandrOutput;
+
+typedef struct {
+    unsigned long id;                   /* RRCrtc */
+    unsigned long mode;                 /* 0 = off */
+    int x, y, width, height, rotation;
+    int noutput;
+    unsigned long outputs[HDE_RANDR_MAX];
+    int gamma_size;
+} HdeRandrCrtc;
+
+typedef struct {
+    int n_out;
+    HdeRandrOutput out[HDE_RANDR_MAX];  /* every output, connected or not, in the server's order */
+    int n_crtc;
+    HdeRandrCrtc crtc[HDE_RANDR_MAX];
+    int screen_w, screen_h, mm_w, mm_h; /* the X screen (bounding box of the desktop) */
+    int min_w, min_h, max_w, max_h;     /* limits of the graphics card */
+    unsigned long primary;              /* RandR primary output, 0 = none */
+} HdeRandrState;
+
+/* What a plan does with one output. */
+typedef struct {
+    int out;                            /* index in HdeRandrState.out */
+    int on;
+    unsigned long crtc, mode;
+    int x, y, width, height, rotation;
+} HdeRandrTarget;
+
+typedef struct {
+    HdeProjectMode mode;
+    int n;
+    HdeRandrTarget t[HDE_RANDR_MAX];    /* every output that is on afterwards, and every one that is turned off */
+    int screen_w, screen_h;
+    unsigned long primary;
+    char error[200];                    /* why it is not possible (hde_randr_plan returned 0) */
+} HdeRandrPlan;
+
+/* ---- pure functions (no X server needed) ---- */
+int hde_randr_name_is_builtin(const char *name);
+int hde_randr_n_connected(const HdeRandrState *s);
+/* The PC screen: the connected built-in panel, or else the first connected output; -1 if nothing is connected. */
+int hde_randr_main_index(const HdeRandrState *s);
+/* The layout in use now, looking at the connected screens only. */
+HdeProjectMode hde_randr_mode_of(const HdeRandrState *s);
+/* Plan a layout. 1 = possible (p filled), 0 = not possible, p->error says why (e.g. only one screen connected). */
+int hde_randr_plan(const HdeRandrState *s, HdeProjectMode mode, HdeRandrPlan *p);
+/* Plan going back to a layout saved earlier with hde_randr_read() (the "Revert" of the confirmation). */
+int hde_randr_plan_restore(const HdeRandrState *now, const HdeRandrState *saved, HdeRandrPlan *p);
+/* After a screen was plugged in or out: 1 if the layout must be fixed, *mode = the layout to apply:
+ *  - connected screens exist but none of them is on (the screen in use was unplugged): PC screen only;
+ *  - an unplugged screen is still part of the desktop: the current layout again, on the screens that are left. */
+int hde_randr_needs_fix(const HdeRandrState *s, HdeProjectMode *mode, char *why, unsigned long why_len);
+/* "eDP-1 1920x1080+0+0 (PC screen), HDMI-1 1280x1024+1920+0; screen 3200x1080" — for logs and --displays. */
+void hde_randr_describe(const HdeRandrState *s, char *buf, unsigned long len);
+/* Label of a screen for people: "Built-in screen", "DELL U2415 (HDMI-1)", "DUMMY1". */
+void hde_randr_output_label(const HdeRandrOutput *o, char *buf, unsigned long len);
+/* Comma-separated names of the connected outputs, sorted ("DUMMY0,DUMMY1"): which screens a saved choice is for. */
+void hde_randr_connected_names(const HdeRandrState *s, char *buf, unsigned long len);
+
+/* ---- X server (return 0 when built without libXrandr or the server has no RandR 1.2) ---- */
+int hde_randr_supported(void);                         /* built with libXrandr */
+int hde_randr_available(Display *dpy);                 /* the X server has RandR >= 1.2 */
+/* probe = 1: ask the drivers to look for screens again (slower, finds screens plugged in without a hotplug event) */
+int hde_randr_read(Display *dpy, HdeRandrState *s, int probe);
+int hde_randr_apply(Display *dpy, const HdeRandrState *s, const HdeRandrPlan *p, char *err, unsigned long err_len);
+/* Select the RandR change events on the root window; *event_base gets the first RandR event number. */
+int hde_randr_watch(Display *dpy, int *event_base);
+/* 1 if ev is a RandR event (also updates Xlib's idea of the screen size). */
+int hde_randr_is_event(Display *dpy, XEvent *ev, int event_base);
+
+/* Gamma ramps of every screen that is on: percent = software brightness (10-100), kelvin = Night Light colour
+ * temperature (0 or >= 6500: none). Returns the number of screens set (0: no gamma support). */
+int hde_randr_set_gamma(Display *dpy, int percent, int kelvin);
+int hde_randr_gamma_screens(Display *dpy);             /* screens that are on and have a gamma ramp */
+/* Night Light: the red/green/blue factors of a colour temperature (1, 1, 1 at 6500 K and above). */
+void hde_randr_temperature_rgb(int kelvin, double *r, double *g, double *b);
+
+#endif

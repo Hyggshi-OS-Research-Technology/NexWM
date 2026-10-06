@@ -13,5 +13,7 @@
 #ifndef HDE_VERSION
 #define HDE_VERSION "unknown"
 #endif
+/* the release shown in Settings > About next to the build */
+#define HDE_RELEASE "1.0"
 
 #endif
