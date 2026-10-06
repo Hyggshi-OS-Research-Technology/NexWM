@@ -231,19 +231,20 @@ static guint64 file_sig(const char *a, const char *b)
 }
 
 /* One line per touchpad / mouse at startup: shows in the session log what HDE found and their state. */
-static void log_input_devices(void)
+static void log_input_devices(const HdeInputPrefs *p)
 {
     HdeInputDevice devs[24];
     int n = hde_input_list(dpy, devs, (int)G_N_ELEMENTS(devs));
     for (int i = 0; i < n; i++) {
         const HdeInputDevice *d = &devs[i];
         fprintf(stderr, "hde-xsettings: input device %d: %s (%s, %s): natural scrolling %s%s\n", d->id, d->name,
-                d->kind == HDE_INPUT_TOUCHPAD ? "touchpad" : "mouse", d->driver,
+                hde_input_kind_label(d, p), d->driver,
                 d->natural < 0 ? "?" : d->natural ? "on" : "off",
                 d->kind != HDE_INPUT_TOUCHPAD ? "" : d->tapping < 0 ? ", tap to click ?" :
                 d->tapping ? ", tap to click on" : ", tap to click off");
     }
-    if (n == 0) fprintf(stderr, "hde-xsettings: input: no touchpad or mouse with the libinput or synaptics X driver\n");
+    if (n == 0)
+        fprintf(stderr, "hde-xsettings: input: no touchpad or mouse with the libinput, synaptics or evdev X driver\n");
 }
 
 /* Is this window the manager window of an hde-xsettings (WM_NAME "hde-xsettings")? */
@@ -296,8 +297,8 @@ static int print_status(void)
     for (int i = 0; i < n; i++) {
         const HdeInputDevice *d = &devs[i];
         if (!d->configurable) {
-            printf("  [%d] %s: not configurable by HDE (%s driver, no libinput or synaptics settings)\n", d->id, d->name,
-                   d->driver);
+            printf("  [%d] %s: not configurable by HDE (%s driver, no libinput, synaptics or evdev settings)\n", d->id,
+                   d->name, d->driver);
             continue;
         }
         managed++;
@@ -306,8 +307,8 @@ static int print_status(void)
         gboolean differs = (wn >= 0 && d->natural >= 0 && wn != d->natural) ||
                            (wt >= 0 && d->tapping >= 0 && wt != d->tapping);
         if (differs) bad++;
-        printf("  [%d] %s: %s, %s driver: natural scrolling %s", d->id, d->name,
-               d->kind == HDE_INPUT_TOUCHPAD ? "touchpad" : "mouse", d->driver, on_off(d->natural));
+        printf("  [%d] %s: %s, %s driver: natural scrolling %s", d->id, d->name, hde_input_kind_label(d, &p), d->driver,
+               on_off(d->natural));
         if (d->kind == HDE_INPUT_TOUCHPAD) printf(", tap to click %s", on_off(d->tapping));
         if (differs)
             printf("  <- DIFFERS from Settings (natural scrolling %s, tap to click %s)", on_off(wn), on_off(wt));
@@ -318,7 +319,13 @@ static int print_status(void)
         printf("\n");
     }
     if (managed == 0)
-        printf("  No touchpad or mouse uses the libinput or synaptics X driver (package xserver-xorg-input-libinput).\n");
+        printf("  No touchpad or mouse uses the libinput, synaptics or evdev X driver "
+               "(package xserver-xorg-input-libinput).\n");
+    if (p.n_as_touchpad) {
+        printf("Used as the touchpad (treat_as_touchpad):");
+        for (int i = 0; i < p.n_as_touchpad; i++) printf("%s \"%s\"", i ? "," : "", p.as_touchpad[i]);
+        printf("\n");
+    }
     if (bad) printf("Result: %d device(s) differ from Settings.%s\n", bad,
                     service ? "" : " Start the service: hde-xsettings & (or log out and in)");
     else printf("Result: every device matches Settings.\n");
@@ -423,7 +430,7 @@ int main(int argc, char **argv)
     gint64 changed_at = 0;          /* monotonic time at which to look at devices changed by other programs */
     if (xi) {
         hde_input_apply(dpy, -1, &iprefs, ITAG);
-        log_input_devices();
+        log_input_devices(&iprefs);
         recheck_at = time(NULL) + 4;
     } else if (input_owner) {
         fprintf(stderr, "hde-xsettings: %s: touchpad and mouse settings are not applied\n",

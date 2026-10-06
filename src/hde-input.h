@@ -8,11 +8,16 @@
  *                         hde-session opens at the first login with a touchpad, see hde-settings-touchpad.c)
  *   tap_to_click          touchpad: a tap is a click, a two-finger tap a right click (default true)
  *   mouse_natural_scroll  mouse wheel in the reverse direction (default false)
+ *   treat_as_touchpad     names of pointer devices that ARE touchpads although X sees a mouse: the touchpad of the
+ *                         computer inside a virtual machine (the host turns swipes into wheel turns), a touchpad
+ *                         in PS/2 or HID mouse mode. They scroll the way natural_scroll says, not like a mouse wheel.
+ *                         Set by "It is my touchpad" in the Touchpad scrolling window or Settings > Input > Devices.
  *   pointer_speed         0..1, 0.5 = the driver default
  *   pointer_acceleration  true = adaptive profile, false = flat
  * The two touchpad values are ALWAYS applied: the X drivers default to the opposite (classic scrolling, no tapping),
  * which is what Settings showed but did not do before. The other values are applied once they have been changed in
  * Settings, so a system-wide xorg.conf keeps working until then.
+ * X drivers: libinput (everything), synaptics (touchpads), evdev (scroll direction only).
  *
  * Talks to the X server directly (XInput 2 device properties): no `xinput` program needed.
  * Used by hde-xsettings (at login, whenever settings.ini changes, for every pointer device that appears or is
@@ -26,6 +31,9 @@
 #include <X11/Xlib.h>
 #include <glib.h>
 
+#define HDE_INPUT_MAX_AS_TOUCHPAD 8
+#define HDE_INPUT_AS_TOUCHPAD_KEY "treat_as_touchpad"
+
 typedef struct {
     gboolean touchpad_natural;
     gboolean tap_to_click;
@@ -33,6 +41,8 @@ typedef struct {
     gboolean has_speed;
     double speed;                       /* 0..1 */
     gboolean has_acceleration, acceleration;
+    int n_as_touchpad;                  /* treat_as_touchpad: touchpads that X sees as a mouse */
+    char as_touchpad[HDE_INPUT_MAX_AS_TOUCHPAD][128];
 } HdeInputPrefs;
 
 typedef enum { HDE_INPUT_OTHER = 0, HDE_INPUT_TOUCHPAD, HDE_INPUT_MOUSE } HdeInputKind;
@@ -41,7 +51,7 @@ typedef struct {
     int id;                             /* XInput device id */
     char name[128];
     HdeInputKind kind;
-    const char *driver;                 /* "libinput" or "synaptics"; hde_input_list_all(): also "evdev", "unknown" */
+    const char *driver;                 /* "libinput", "synaptics" or "evdev"; hde_input_list_all(): also "unknown" */
     gboolean configurable;              /* FALSE: HDE cannot change this device (only from hde_input_list_all()) */
     int natural;                        /* natural scrolling now: 1 on, 0 off, -1 unknown */
     int tapping;                        /* touchpads, tap to click now: 1 on, 0 off, -1 unknown */
@@ -50,6 +60,12 @@ typedef struct {
 /* Reads settings.ini (missing keys -> defaults above). */
 void     hde_input_prefs_load(HdeInputPrefs *p);
 gboolean hde_input_prefs_equal(const HdeInputPrefs *a, const HdeInputPrefs *b);
+/* Is this device (by name) in treat_as_touchpad? */
+gboolean hde_input_prefs_as_touchpad(const HdeInputPrefs *p, const char *name);
+/* Does the device scroll the way the touchpad direction says (a touchpad, or a device in treat_as_touchpad)? */
+gboolean hde_input_follows_touchpad(const HdeInputDevice *d, const HdeInputPrefs *p);
+/* "touchpad", "mouse used as the touchpad" or "mouse" */
+const char *hde_input_kind_label(const HdeInputDevice *d, const HdeInputPrefs *p);
 
 /* FALSE when HDE was built without libxi-dev: nothing can be applied then. */
 gboolean hde_input_supported(void);
@@ -66,6 +82,11 @@ int hde_input_apply(Display *dpy, int deviceid, const HdeInputPrefs *p, const ch
 int hde_input_list(Display *dpy, HdeInputDevice *out, int max);
 /* Every enabled pointer device, also those HDE cannot configure (configurable FALSE): for diagnostics. */
 int hde_input_list_all(Display *dpy, HdeInputDevice *out, int max);
+/* One device by XInput id (configurable or not); FALSE if it is not an enabled slave pointer. */
+gboolean hde_input_lookup(Display *dpy, int deviceid, HdeInputDevice *out);
+/* Natural scrolling of one device right now: 1 on, 0 off, -1 unknown (not a configurable pointer device). For
+ * controls that should follow the fingers physically whatever the page direction, e.g. the panel's volume icon. */
+int hde_input_device_natural(Display *dpy, int deviceid);
 /* What Settings wants for a device: natural scrolling / tap to click 1 or 0, -1 = HDE leaves it alone. */
 void hde_input_wanted(const HdeInputDevice *d, const HdeInputPrefs *p, int *natural, int *tapping);
 

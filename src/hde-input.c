@@ -5,7 +5,12 @@
  *                     "libinput Accel Speed" (FLOAT -1..1), "libinput Accel Profile Enabled" (adaptive, flat[, custom])
  *   synaptics driver  "Synaptics Scrolling Distance" (negative = natural scrolling),
  *                     "Synaptics Tap Action" (RT RB LT LB F1 F2 F3: 1/2/3-finger taps -> buttons 1/3/2)
- * A touchpad is recognised the way GTK does it: a "libinput Tapping Enabled" or "Synaptics Off" property.
+ *   evdev driver      "Evdev Scrolling Distance" (vertical, horizontal, dial; negative = reversed): only the scroll
+ *                     direction, e.g. a touchpad in PS/2 mouse mode whose firmware turns swipes into wheel turns
+ * A touchpad is recognised the way GTK does it: a "libinput Tapping Enabled" or "Synaptics Off" property (or
+ * two-finger / edge scrolling). Some touchpads reach X as a plain mouse — the touchpad of the computer inside a
+ * virtual machine (the host sends wheel turns), a touchpad in PS/2 or HID mouse mode: the user marks those in
+ * Settings ("It is my touchpad", treat_as_touchpad) and they then follow the touchpad direction.
  * hde-xsettings also watches these properties (XI_PropertyEvent): when another program — a window manager with its
  * own touchpad settings (Mutter, Muffin), an autostart script, xinput — changes one of them, HDE puts it back to what
  * Settings says, so the direction the user picked stays the direction the touchpad scrolls.
@@ -46,6 +51,13 @@ void hde_input_prefs_load(HdeInputPrefs *p)
         kf_bool(kf, "tap_to_click", &p->tap_to_click);
         p->has_mouse_natural = kf_bool(kf, "mouse_natural_scroll", &p->mouse_natural);
         p->has_acceleration = kf_bool(kf, "pointer_acceleration", &p->acceleration);
+        gsize n = 0;
+        char **names = g_key_file_get_string_list(kf, "settings", HDE_INPUT_AS_TOUCHPAD_KEY, &n, NULL);
+        for (gsize i = 0; names && i < n && p->n_as_touchpad < HDE_INPUT_MAX_AS_TOUCHPAD; i++) {
+            if (!names[i][0] || hde_input_prefs_as_touchpad(p, names[i])) continue;
+            g_strlcpy(p->as_touchpad[p->n_as_touchpad++], names[i], sizeof p->as_touchpad[0]);
+        }
+        g_strfreev(names);
         GError *e = NULL;
         double d = g_key_file_get_double(kf, "settings", "pointer_speed", &e);
         if (e) g_error_free(e);
@@ -61,10 +73,33 @@ void hde_input_prefs_load(HdeInputPrefs *p)
 gboolean hde_input_prefs_equal(const HdeInputPrefs *a, const HdeInputPrefs *b)
 {
     double ds = a->speed - b->speed;
+    if (a->n_as_touchpad != b->n_as_touchpad) return FALSE;
+    for (int i = 0; i < a->n_as_touchpad; i++)
+        if (strcmp(a->as_touchpad[i], b->as_touchpad[i])) return FALSE;
     return a->touchpad_natural == b->touchpad_natural && a->tap_to_click == b->tap_to_click &&
            a->has_mouse_natural == b->has_mouse_natural && a->mouse_natural == b->mouse_natural &&
            a->has_speed == b->has_speed && ds < 1e-6 && ds > -1e-6 &&
            a->has_acceleration == b->has_acceleration && a->acceleration == b->acceleration;
+}
+
+gboolean hde_input_prefs_as_touchpad(const HdeInputPrefs *p, const char *name)
+{
+    for (int i = 0; p && name && i < p->n_as_touchpad; i++)
+        if (!strcmp(p->as_touchpad[i], name)) return TRUE;
+    return FALSE;
+}
+
+gboolean hde_input_follows_touchpad(const HdeInputDevice *d, const HdeInputPrefs *p)
+{
+    return d && (d->kind == HDE_INPUT_TOUCHPAD || (d->configurable && hde_input_prefs_as_touchpad(p, d->name)));
+}
+
+const char *hde_input_kind_label(const HdeInputDevice *d, const HdeInputPrefs *p)
+{
+    if (!d) return "?";
+    if (d->kind == HDE_INPUT_TOUCHPAD) return "touchpad";
+    if (hde_input_follows_touchpad(d, p)) return "mouse used as the touchpad";
+    return d->kind == HDE_INPUT_MOUSE ? "mouse" : "other";
 }
 
 #ifdef HAVE_XI2
@@ -184,7 +219,12 @@ static gboolean dev_probe(Display *dpy, const Atom *atoms, int id, const char *n
         d->driver = "synaptics";
         return TRUE;
     }
-    if (!d->has[A_TAP] && !d->has[A_NATURAL] && !d->has[A_SPEED]) return FALSE;
+    if (!d->has[A_TAP] && !d->has[A_NATURAL] && !d->has[A_SPEED]) {
+        if (!d->has[A_EVDEV_SCROLL_DIST]) return FALSE;
+        d->kind = HDE_INPUT_MOUSE;           /* evdev: no touchpad gestures, only wheel (or firmware) scrolling */
+        d->driver = "evdev";
+        return TRUE;
+    }
     d->driver = "libinput";
     d->kind = d->has[A_TAP] ? HDE_INPUT_TOUCHPAD : HDE_INPUT_MOUSE;
     if (d->kind == HDE_INPUT_MOUSE && d->has[A_SCROLL_METHODS]) {
@@ -224,6 +264,26 @@ static void syn_natural(Display *dpy, const Dev *d, Atom atom, gboolean natural,
         }
         if (cur[0] && cur[1] && (want[0] != cur[0] || want[1] != cur[1])) {
             XIChangeProperty(dpy, d->id, atom, XA_INTEGER, 32, PropModeReplace, (unsigned char *)want, 2);
+            note(log, "natural scrolling", natural ? "on" : "off");
+        }
+    }
+    prop_free(&p);
+}
+
+/* evdev: natural scrolling = negative vertical and horizontal scrolling distances (the dial is left alone) */
+static void evdev_natural(Display *dpy, const Dev *d, Atom atom, gboolean natural, GString *log)
+{
+    Prop p;
+    if (!prop_read(dpy, d->id, atom, &p)) return;
+    if (p.format == 32 && p.type == XA_INTEGER && p.n == 3) {
+        int32_t cur[3], want[3];
+        for (int i = 0; i < 3; i++) cur[i] = want[i] = (int32_t)prop_int(&p, (unsigned long)i);
+        for (int i = 0; i < 2; i++) {
+            int32_t a = cur[i] < 0 ? -cur[i] : cur[i];
+            want[i] = natural ? -a : a;
+        }
+        if (memcmp(cur, want, sizeof cur) != 0) {
+            XIChangeProperty(dpy, d->id, atom, XA_INTEGER, 32, PropModeReplace, (unsigned char *)want, 3);
             note(log, "natural scrolling", natural ? "on" : "off");
         }
     }
@@ -295,29 +355,34 @@ static const char *kind_name(HdeInputKind k)
 static int apply_dev(Display *dpy, const Atom *atoms, const Dev *d, const HdeInputPrefs *p, const char *tag)
 {
     GString *log = g_string_new(NULL);
-    gboolean libinput = !strcmp(d->driver, "libinput");
+    gboolean libinput = !strcmp(d->driver, "libinput"), synaptics = !strcmp(d->driver, "synaptics");
+    /* a touchpad that X sees as a mouse (virtual machine, mouse mode) follows the touchpad direction */
+    gboolean as_touchpad = d->kind != HDE_INPUT_TOUCHPAD && hde_input_prefs_as_touchpad(p, d->name);
+    int natural = d->kind == HDE_INPUT_TOUCHPAD || as_touchpad ? p->touchpad_natural
+                : p->has_mouse_natural ? p->mouse_natural : -1;            /* -1: the mouse wheel is left alone */
     trap_push();
-    if (!libinput) {
+    if (synaptics) {
         syn_natural(dpy, d, atoms[A_SYN_SCROLL_DIST], p->touchpad_natural, log);
         syn_tap(dpy, d, atoms[A_SYN_TAP_ACTION], p->tap_to_click, log);
-    } else if (d->kind == HDE_INPUT_TOUCHPAD) {
-        set_bool8(dpy, d, atoms[A_NATURAL], p->touchpad_natural, "natural scrolling", log);
-        set_bool8(dpy, d, atoms[A_TAP], p->tap_to_click, "tap to click", log);
-    } else if (p->has_mouse_natural) {
-        set_bool8(dpy, d, atoms[A_NATURAL], p->mouse_natural, "natural scrolling", log);
+    } else if (libinput) {
+        if (natural >= 0) set_bool8(dpy, d, atoms[A_NATURAL], natural, "natural scrolling", log);
+        if (d->kind == HDE_INPUT_TOUCHPAD) set_bool8(dpy, d, atoms[A_TAP], p->tap_to_click, "tap to click", log);
+    } else if (natural >= 0) {                                               /* evdev */
+        evdev_natural(dpy, d, atoms[A_EVDEV_SCROLL_DIST], natural, log);
     }
     if (libinput && p->has_speed && d->has[A_SPEED]) set_speed(dpy, d, atoms, p->speed, log);
     if (libinput && p->has_acceleration && d->has[A_PROFILE]) set_profile(dpy, d, atoms, p->acceleration, log);
     int err = trap_pop(dpy);
     int changed = 0;
+    const char *kind = as_touchpad ? "mouse used as the touchpad" : kind_name(d->kind);
     if (err) {
         if (tag && (log->len || debug_on()))
             fprintf(stderr, "%s: %s: not changed now (X error %d: device disabled or unplugged)\n", tag, d->name, err);
     } else if (log->len) {
         changed = 1;
-        if (tag) fprintf(stderr, "%s: %s (%s, %s): %s\n", tag, d->name, kind_name(d->kind), d->driver, log->str);
+        if (tag) fprintf(stderr, "%s: %s (%s, %s): %s\n", tag, d->name, kind, d->driver, log->str);
     } else if (tag && debug_on()) {
-        fprintf(stderr, "%s: %s (%s, %s): already up to date\n", tag, d->name, kind_name(d->kind), d->driver);
+        fprintf(stderr, "%s: %s (%s, %s): already up to date\n", tag, d->name, kind, d->driver);
     }
     g_string_free(log, TRUE);
     return changed;
@@ -399,6 +464,12 @@ static void list_cb(Display *dpy, const Atom *atoms, const Dev *d, gboolean conf
     if (!strcmp(d->driver, "libinput")) {
         o->natural = read_flag(dpy, d->id, atoms[A_NATURAL]);
         if (d->kind == HDE_INPUT_TOUCHPAD) o->tapping = read_flag(dpy, d->id, atoms[A_TAP]);
+    } else if (!strcmp(d->driver, "evdev")) {
+        Prop p;
+        if (prop_read(dpy, d->id, atoms[A_EVDEV_SCROLL_DIST], &p)) {
+            if (p.format == 32 && p.n == 3 && prop_int(&p, 0) != 0) o->natural = prop_int(&p, 0) < 0;
+            prop_free(&p);
+        }
     } else {
         Prop p;
         if (prop_read(dpy, d->id, atoms[A_SYN_SCROLL_DIST], &p)) {
@@ -425,6 +496,19 @@ int hde_input_list_all(Display *dpy, HdeInputDevice *out, int max)
     ListCtx c = { out, max, 0 };
     if (dpy && out && max > 0) for_each_device(dpy, -1, TRUE, list_cb, &c);
     return c.n;
+}
+
+gboolean hde_input_lookup(Display *dpy, int deviceid, HdeInputDevice *out)
+{
+    ListCtx c = { out, 1, 0 };
+    if (dpy && out && deviceid > 0) for_each_device(dpy, deviceid, TRUE, list_cb, &c);
+    return c.n == 1;
+}
+
+int hde_input_device_natural(Display *dpy, int deviceid)
+{
+    HdeInputDevice d;
+    return hde_input_lookup(dpy, deviceid, &d) && d.configurable ? d.natural : -1;
 }
 
 gboolean hde_input_watch(Display *dpy)
@@ -455,7 +539,8 @@ static Guard guards[16];
 
 static gboolean watched_property(Atom a)
 {
-    static const int which[] = { A_TAP, A_NATURAL, A_SPEED, A_PROFILE, A_SYN_SCROLL_DIST, A_SYN_TAP_ACTION };
+    static const int which[] = { A_TAP, A_NATURAL, A_SPEED, A_PROFILE, A_SYN_SCROLL_DIST, A_SYN_TAP_ACTION,
+                                 A_EVDEV_SCROLL_DIST };
     for (unsigned i = 0; i < G_N_ELEMENTS(which); i++)
         if (a != None && a == watch_atoms[which[i]]) return TRUE;
     return FALSE;
@@ -543,6 +628,12 @@ int hde_input_apply(Display *dpy, int deviceid, const HdeInputPrefs *p, const ch
 }
 int hde_input_list(Display *dpy, HdeInputDevice *out, int max) { (void)dpy; (void)out; (void)max; return 0; }
 int hde_input_list_all(Display *dpy, HdeInputDevice *out, int max) { (void)dpy; (void)out; (void)max; return 0; }
+gboolean hde_input_lookup(Display *dpy, int deviceid, HdeInputDevice *out)
+{
+    (void)dpy; (void)deviceid; (void)out;
+    return FALSE;
+}
+int hde_input_device_natural(Display *dpy, int deviceid) { (void)dpy; (void)deviceid; return -1; }
 gboolean hde_input_watch(Display *dpy) { (void)dpy; return FALSE; }
 int hde_input_handle_event(Display *dpy, XEvent *ev, const HdeInputPrefs *p, const char *tag)
 {
@@ -565,6 +656,8 @@ void hde_input_wanted(const HdeInputDevice *d, const HdeInputPrefs *p, int *natu
     if (d->kind == HDE_INPUT_TOUCHPAD) {
         *natural = p->touchpad_natural ? 1 : 0;
         *tapping = p->tap_to_click ? 1 : 0;
+    } else if (hde_input_prefs_as_touchpad(p, d->name)) {
+        *natural = p->touchpad_natural ? 1 : 0;
     } else if (d->kind == HDE_INPUT_MOUSE && p->has_mouse_natural) {
         *natural = p->mouse_natural ? 1 : 0;
     }

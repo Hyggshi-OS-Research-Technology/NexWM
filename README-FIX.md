@@ -297,3 +297,46 @@ XSETTINGS manager running, `hde-xsettings` stays and keeps applying Settings. `m
 the Input page, opens the window with *Try both…*, scrolls its test page, and checks the first-login window and that
 it stays closed once a direction was chosen.
 
+## Touchpad that X sees as a mouse, evdev, and the volume icon (fix 10)
+
+Fixes 8 and 9 change the scroll direction of *touchpads*. Some touchpads never reach X as one, so the choice changed
+nothing for them and "swipe up and it goes down" stayed:
+
+- **Inside a virtual machine** (VirtualBox, VMware, QEMU/KVM, Hyper-V) the host turns two-finger swipes into wheel
+  turns of a virtual mouse ("VirtualBox mouse integration", "ImExPS/2 Generic Explorer Mouse", "QEMU USB Tablet").
+- **Touchpads in mouse mode**: a touchpad running as a PS/2 mouse, or an I2C touchpad whose multi-touch part is not
+  used ("ELAN… Mouse", "SYNA… Mouse"): the touchpad itself turns the swipes into wheel turns.
+- **The evdev X driver** (when xserver-xorg-input-libinput is not installed) was not handled at all.
+
+Now:
+
+- **The test page knows which device scrolled it.** In the *Touchpad scrolling* window (*Settings → Input → Try
+  both…*, or opened at the first login), scrolling the test page with a device that X sees as a mouse shows
+  *"You scrolled with “…”, which HDE sees as a mouse — usual inside a virtual machine, or for a touchpad in mouse mode,
+  and then the choice above changes nothing. Is it your touchpad?"* with an **It is my touchpad** button. From then on
+  that device follows the touchpad direction (*Like a phone* / *Like a mouse wheel*), applied at once, on every login,
+  after hotplug and when another program changes it — like a real touchpad. Saved as `treat_as_touchpad` in
+  `settings.ini`.
+- **Settings → Input → Devices** has an **It is a touchpad** check box next to every mouse (unticking it gives the
+  device the mouse wheel direction back) and a note when no touchpad was found at all.
+- **First login on a virtual machine or a laptop where only a mouse was found**: the *Touchpad scrolling* window now
+  opens too (before, it opened only when a touchpad was found), with a note that the touchpad may arrive as a mouse.
+- **evdev driver**: the scroll direction is applied with `Evdev Scrolling Distance` (negative = natural scrolling),
+  for the mouse wheel setting and for devices marked as the touchpad.
+- **Volume icon**: scrolling over the panel's volume icon follows the fingers (or the wheel) physically — up = louder.
+  With natural scrolling the X driver turns a swipe up into "scroll down" so that pages follow the fingers, and that
+  used to turn the volume *down*. The panel now reads the scrolling device's direction and turns it around.
+- `hde-xsettings --status` and the session log name such devices "mouse used as the touchpad" and list evdev devices.
+
+### Tests
+
+`tests/input-test.sh` (CI job *touchpad*) now also runs the evdev driver: a mouse pinned to evdev keeps its wheel
+direction by default, gets natural scrolling (negative scrolling distance — the window then receives scroll-down for
+wheel up) and back, and is listed by `--status`. With the libinput wheel mouse playing a touchpad seen as a mouse: its
+wheel over the test page makes the window ask *Is it your touchpad?*; *It is my touchpad* saves it, applies *Like a
+phone* at once (wheel up now reads on toward the end of the page), *Like a mouse wheel* and back apply to it too,
+`--status` shows "mouse used as the touchpad … OK", `hde-xsettings` sets it back when another program changes it, and
+unticking *It is a touchpad* in *Settings → Input → Devices* gives it the mouse direction back. With the touchpads
+unplugged, the first-login window opens on the (virtual) CI machine and asks about the mouse. `make check` (Xvfb)
+scrolls over the panel's volume icon: with natural scrolling a swipe up (scroll down) turns the volume up, with the
+classic direction scroll up does.

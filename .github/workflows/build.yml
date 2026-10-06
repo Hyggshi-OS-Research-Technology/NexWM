@@ -70,7 +70,7 @@ jobs:
           /tmp/hde-smoke/shot-*.png
           build.log
 
-  # Touchpad / mouse settings against the REAL X input drivers: Xorg (dummy video) + libinput + synaptics, with
+  # Touchpad / mouse settings against the REAL X input drivers: Xorg (dummy video) + libinput + synaptics + evdev, with
   # virtual uinput devices (needs root and /dev/uinput, which the GitHub VMs have; containers do not).
   touchpad:
     name: touchpad (${{ matrix.os }})
@@ -92,12 +92,13 @@ jobs:
         sudo apt-get install -y --no-install-recommends \
           build-essential pkg-config libgtk-3-dev libxi-dev libx11-dev \
           xserver-xorg-core xserver-xorg-video-dummy xserver-xorg-input-libinput xserver-xorg-input-synaptics \
-          xinput x11-utils xdotool dbus-x11 python3 python3-evdev imagemagick adwaita-icon-theme librsvg2-common
+          xserver-xorg-input-evdev xinput x11-utils xdotool dbus-x11 python3 python3-evdev imagemagick \
+          adwaita-icon-theme librsvg2-common
 
     - name: Build hde-xsettings and hde-settings
       run: make -j"$(nproc)" build/hde-xsettings build/hde-settings
 
-    - name: Touchpad test (scroll direction, tap to click, hotplug, live changes, other programs, real swipes)
+    - name: Touchpad test (scroll direction, tap to click, hotplug, live changes, other programs, real swipes, touchpads seen as a mouse)
       run: sh tests/input-test.sh
 
     - name: Report results

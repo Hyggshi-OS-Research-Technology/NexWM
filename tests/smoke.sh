@@ -568,6 +568,38 @@ if command -v xinput >/dev/null 2>&1 && [ -n "$XS_PID" ] &&
         fail "first login with a touchpad: the Touchpad scrolling window opens by itself"
         kill "$TS" 2>/dev/null
     fi
+    # g. scrolling over the panel's volume icon follows the fingers: up = louder, also with natural scrolling, where the
+    #    X driver turns a two-finger swipe UP into "scroll down" (button 5) so that pages follow the fingers
+    # shellcheck disable=SC2046
+    set -- $(sed -n 's/^hde-panel: widget volume at \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p' \
+        "$OUT/session.log" | tail -n 1 | awk '{ printf "%d %d\n", $1 + $3 / 2, $2 + $4 / 2 }')
+    if [ -n "${2:-}" ] && pactl info >/dev/null 2>&1; then
+        sed -i 's/^natural_scroll=.*/natural_scroll=true/' "$SETTINGS_INI"
+        tp_wait "$NAT" 1
+        pactl set-sink-volume @DEFAULT_SINK@ 50%; pactl set-sink-mute @DEFAULT_SINK@ 0
+        wait_popups
+        xdotool mousemove "$1" "$2"; sleep 1.5
+        xdotool click 5; sleep 1.3
+        v=$(vol)
+        if [ "$v" = 55 ]; then pass "natural scrolling: a swipe UP over the volume icon (it arrives as 'scroll down') turns the volume UP (50% -> $v%)"
+        else fail "natural scrolling: a swipe UP over the volume icon (it arrives as 'scroll down') turns the volume UP (50% -> $v%)"; fi
+        xdotool click 4; sleep 1.3
+        v=$(vol)
+        if [ "$v" = 50 ]; then pass "natural scrolling: a swipe DOWN over the volume icon turns the volume down (55% -> $v%)"
+        else fail "natural scrolling: a swipe DOWN over the volume icon turns the volume down (55% -> $v%)"; fi
+        sed -i 's/^natural_scroll=.*/natural_scroll=false/' "$SETTINGS_INI"
+        tp_wait "$NAT" 0; sleep 1.3
+        xdotool click 4; sleep 1.3
+        v=$(vol)
+        if [ "$v" = 55 ]; then pass "classic direction: a swipe (or wheel) UP over the volume icon turns the volume up (50% -> $v%)"
+        else fail "classic direction: a swipe (or wheel) UP over the volume icon turns the volume up (50% -> $v%)"; fi
+        grep 'hde-panel: volume: scroll' "$OUT/session.log" | tail -n 3 | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+        sed -i 's/^natural_scroll=.*/natural_scroll=true/' "$SETTINGS_INI"
+        tp_wait "$NAT" 1
+        xdotool mousemove 640 400
+    else
+        skip "volume icon scrolling (no PulseAudio, or the panel did not report the volume icon)"
+    fi
     xinput delete-prop "$FAKE_TP" "$NAT" 2>/dev/null
     xinput delete-prop "$FAKE_TP" "$TAPP" 2>/dev/null
 else

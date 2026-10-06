@@ -9,10 +9,17 @@
  * window has a test page to try both before deciding. hde-session opens that window once, at the first login with a
  * touchpad (`hde-settings --touchpad-setup=auto`); `hde-settings --touchpad-setup` opens it any time.
  * The value is natural_scroll in settings.ini, applied by hde-input.c (here at once, and by hde-xsettings).
+ *
+ * Some touchpads reach X as a plain mouse: the touchpad of the computer inside a virtual machine (the host turns the
+ * swipes into wheel turns of a virtual mouse), a touchpad in PS/2 or HID mouse mode. The touchpad direction would
+ * then change nothing. The test page sees which device scrolled it: for such a "mouse" it offers "It is my
+ * touchpad" (settings.ini treat_as_touchpad, also a check box in Settings > Input > Devices), and the window also
+ * opens at the first login on a virtual machine or a laptop where only a mouse was found.
  */
 #include "hde-settings.h"
 #include "hde-input.h"
 #include "hde-theme.h"
+#include <gdk/gdkx.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,10 +33,15 @@ static gboolean syncing;
 
 typedef struct {
     GtkWidget *win, *feedback;
+    GtkWidget *hint, *hint_label;               /* "You scrolled with X, which HDE sees as a mouse" + button */
     GtkAdjustment *adj;
     double last, start;
     guint settle;
     gboolean centered, recentering, standalone;
+    int scroll_dev, logged_dev;                 /* XInput id of the device that scrolled the test page last */
+    gboolean offered;
+    int hint_id;
+    char hint_name[128];
 } Setup;
 static Setup *the_setup;
 
@@ -289,10 +301,44 @@ static void setup_recenter(Setup *s)
     s->last = s->start = v;
 }
 
+/* Which device scrolled the test page? A mouse that does not follow the touchpad direction may be the touchpad seen
+ * as a mouse (virtual machine, mouse mode): then the window asks "Is it your touchpad?". */
+static void setup_check_device(Setup *s)
+{
+    if (s->scroll_dev <= 0) return;
+    HdeInputDevice d;
+    Display *dpy = hde_input_open();
+    gboolean found = dpy && hde_input_lookup(dpy, s->scroll_dev, &d);
+    if (dpy) XCloseDisplay(dpy);
+    if (!found) return;
+    HdeInputPrefs p;
+    hde_input_prefs_load(&p);
+    gboolean offer = d.configurable && !hde_input_follows_touchpad(&d, &p);
+    if (s->scroll_dev != s->logged_dev || offer != s->offered)
+        fprintf(stderr, "hde-settings: touchpad setup: test page: scrolled with \"%s\" (%s, %s driver)%s\n", d.name,
+                hde_input_kind_label(&d, &p), d.driver,
+                !d.configurable ? ", which HDE cannot change" : offer ? ": asks whether it is the touchpad" : "");
+    s->logged_dev = s->scroll_dev;
+    s->offered = offer;
+    if (!offer) {
+        gtk_widget_hide(s->hint);
+        return;
+    }
+    g_strlcpy(s->hint_name, d.name, sizeof s->hint_name);
+    s->hint_id = d.id;
+    char *m = g_markup_printf_escaped("You scrolled with <b>%s</b>, which HDE sees as a mouse — usual inside a virtual "
+                                      "machine, or for a touchpad in mouse mode, and then the choice above changes "
+                                      "nothing. Is it your touchpad?", d.name);
+    gtk_label_set_markup(GTK_LABEL(s->hint_label), m);
+    g_free(m);
+    gtk_widget_show(s->hint);
+}
+
 static gboolean setup_scroll_settled(gpointer p)
 {
     Setup *s = p;
     s->settle = 0;
+    setup_check_device(s);
     int a = line_at(s->start), b = line_at(s->last);
     if (a == b) return G_SOURCE_REMOVE;
     char *m = g_markup_printf_escaped(b > a ? "You went from line %d to line %d: <b>toward the end</b> of the page."
@@ -315,6 +361,15 @@ static void on_test_scrolled(GtkAdjustment *adj, gpointer p)
     s->settle = g_timeout_add(350, setup_scroll_settled, s);
 }
 
+static gboolean on_test_scroll_event(GtkWidget *w, GdkEvent *e, gpointer p)
+{
+    (void)w;
+    Setup *s = p;
+    GdkDevice *src = gdk_event_get_source_device(e);
+    if (src && GDK_IS_X11_DISPLAY(gdk_device_get_display(src))) s->scroll_dev = gdk_x11_device_get_id(src);
+    return FALSE;                                   /* the scrolled window does the scrolling */
+}
+
 static void on_test_layout(GtkAdjustment *adj, gpointer p)
 {
     Setup *s = p;
@@ -332,6 +387,67 @@ static void setup_direction_changed(Setup *s)
     setup_recenter(s);
     char *m = g_markup_printf_escaped("Now <b>%s</b>. Try the test page again.",
                                       cfg_get_bool("natural_scroll", TRUE) ? "like a phone" : "like a mouse wheel");
+    gtk_label_set_markup(GTK_LABEL(s->feedback), m);
+    g_free(m);
+}
+
+void touchpad_use_device(const char *name, int deviceid, gboolean on)
+{
+    if (!name || !name[0]) return;
+    GKeyFile *kf = cfg_begin();
+    gsize n = 0;
+    char **old = g_key_file_get_string_list(kf, CONFIG_GROUP, HDE_INPUT_AS_TOUCHPAD_KEY, &n, NULL);
+    GPtrArray *names = g_ptr_array_new();
+    gboolean present = FALSE;
+    for (gsize i = 0; old && i < n; i++) {
+        if (!strcmp(old[i], name)) {
+            if (present || !on) continue;
+            present = TRUE;
+        }
+        g_ptr_array_add(names, old[i]);
+    }
+    if (on && !present) g_ptr_array_add(names, (gpointer)name);
+    if (names->len)
+        g_key_file_set_string_list(kf, CONFIG_GROUP, HDE_INPUT_AS_TOUCHPAD_KEY, (const gchar *const *)names->pdata,
+                                   names->len);
+    else
+        g_key_file_remove_key(kf, CONFIG_GROUP, HDE_INPUT_AS_TOUCHPAD_KEY, NULL);
+    cfg_commit(kf);                                 /* first: hde-xsettings must not undo the change below */
+    g_ptr_array_free(names, TRUE);
+    g_strfreev(old);
+    fprintf(stderr, "hde-settings: touchpad: \"%s\" is %s\n", name,
+            on ? "used as the touchpad from now on" : "a mouse again");
+    apply_input_settings();
+    if (!on && deviceid > 0) {
+        /* back to the mouse wheel direction (hde-xsettings leaves a mouse alone unless that was changed in Settings) */
+        HdeInputPrefs p;
+        hde_input_prefs_load(&p);
+        p.has_mouse_natural = TRUE;
+        Display *dpy = hde_input_open();
+        if (dpy) {
+            hde_input_apply(dpy, deviceid, &p, "hde-settings: input");
+            XCloseDisplay(dpy);
+        }
+    }
+    input_page_refresh();
+}
+
+static void on_setup_is_touchpad(GtkButton *b, gpointer p)
+{
+    (void)b;
+    Setup *s = p;
+    if (!s->hint_name[0]) return;
+    touchpad_use_device(s->hint_name, s->hint_id, TRUE);
+    gtk_widget_hide(s->hint);
+    s->offered = FALSE;
+    if (s->settle) {
+        g_source_remove(s->settle);
+        s->settle = 0;
+    }
+    setup_recenter(s);
+    char *m = g_markup_printf_escaped("<b>%s</b> now scrolls like the touchpad: <b>%s</b>. Try the test page again.",
+                                      s->hint_name, cfg_get_bool("natural_scroll", TRUE) ? "like a phone"
+                                                                                         : "like a mouse wheel");
     gtk_label_set_markup(GTK_LABEL(s->feedback), m);
     g_free(m);
 }
@@ -366,16 +482,61 @@ static gboolean on_setup_key(GtkWidget *win, GdkEventKey *e, gpointer d)
     return TRUE;
 }
 
-static gboolean have_touchpad(void)
+enum { FOUND_NO_X = -1, FOUND_NOTHING, FOUND_MOUSE, FOUND_TOUCHPAD };
+
+/* What HDE can change here: a touchpad (or a mouse used as the touchpad), only mice, or nothing. name: the first
+ * touchpad, else the first mouse. */
+static int devices_found(char *name, gsize size)
 {
+    if (name && size) name[0] = 0;
     Display *dpy = hde_input_open();
-    if (!dpy) return FALSE;
+    if (!dpy) return FOUND_NO_X;
     HdeInputDevice devs[16];
-    int n = hde_input_list(dpy, devs, (int)G_N_ELEMENTS(devs));
+    HdeInputPrefs p;
+    hde_input_prefs_load(&p);
+    int n = hde_input_list(dpy, devs, (int)G_N_ELEMENTS(devs)), found = FOUND_NOTHING;
     XCloseDisplay(dpy);
-    for (int i = 0; i < n; i++)
-        if (devs[i].kind == HDE_INPUT_TOUCHPAD) return TRUE;
-    return FALSE;
+    for (int i = 0; i < n && found != FOUND_TOUCHPAD; i++) {
+        if (hde_input_follows_touchpad(&devs[i], &p)) {
+            found = FOUND_TOUCHPAD;
+            if (name) g_strlcpy(name, devs[i].name, size);
+        } else if (found == FOUND_NOTHING) {
+            found = FOUND_MOUSE;
+            if (name) g_strlcpy(name, devs[i].name, size);
+        }
+    }
+    return found;
+}
+
+static gboolean file_contains_any(const char *path, const char *const *needles)
+{
+    char *s = NULL;
+    gboolean hit = FALSE;
+    if (!g_file_get_contents(path, &s, NULL, NULL)) return FALSE;
+    for (int i = 0; needles[i] && !hit; i++) hit = strstr(s, needles[i]) != NULL;
+    g_free(s);
+    return hit;
+}
+
+/* "a virtual machine", "a laptop" or NULL: where a touchpad often reaches X as a mouse. In a virtual machine the host
+ * turns touchpad swipes into wheel turns of a virtual mouse; a laptop without a touchpad device usually runs its
+ * touchpad in PS/2 or HID mouse mode. */
+static const char *machine_with_hidden_touchpad(void)
+{
+    static const char *const cpu[] = { " hypervisor", NULL };
+    static const char *const dmi[] = { "QEMU", "KVM", "VirtualBox", "innotek", "VMware", "Virtual Machine", "Xen",
+                                       "Parallels", "Bochs", "BHYVE", NULL };
+    if (file_contains_any("/proc/cpuinfo", cpu) || file_contains_any("/sys/class/dmi/id/sys_vendor", dmi) ||
+        file_contains_any("/sys/class/dmi/id/product_name", dmi))
+        return "a virtual machine";
+    char *t = NULL;
+    if (g_file_get_contents("/sys/class/dmi/id/chassis_type", &t, NULL, NULL)) {
+        int c = atoi(t);
+        g_free(t);
+        /* SMBIOS chassis: 8 portable, 9 laptop, 10 notebook, 14 sub notebook, 30 tablet, 31 convertible, 32 detachable */
+        if (c == 8 || c == 9 || c == 10 || c == 14 || c == 30 || c == 31 || c == 32) return "a laptop";
+    }
+    return NULL;
 }
 
 gboolean touchpad_setup_needed(void)
@@ -385,18 +546,21 @@ gboolean touchpad_setup_needed(void)
                 direction_name(cfg_get_bool("natural_scroll", TRUE)));
         return FALSE;
     }
-    Display *dpy = hde_input_open();
-    if (!dpy) {
+    char name[128];
+    int found = devices_found(name, sizeof name);
+    if (found == FOUND_NO_X) {
         fprintf(stderr, "hde-settings: touchpad setup: not shown, %s\n",
                 hde_input_supported() ? "no X display with XInput 2" : "HDE was built without libxi-dev");
         return FALSE;
     }
-    HdeInputDevice devs[16];
-    int n = hde_input_list(dpy, devs, (int)G_N_ELEMENTS(devs));
-    XCloseDisplay(dpy);
-    for (int i = 0; i < n; i++) {
-        if (devs[i].kind != HDE_INPUT_TOUCHPAD) continue;
-        fprintf(stderr, "hde-settings: touchpad setup: shown, first login with a touchpad (%s)\n", devs[i].name);
+    if (found == FOUND_TOUCHPAD) {
+        fprintf(stderr, "hde-settings: touchpad setup: shown, first login with a touchpad (%s)\n", name);
+        return TRUE;
+    }
+    const char *where = found == FOUND_MOUSE ? machine_with_hidden_touchpad() : NULL;
+    if (where) {
+        fprintf(stderr, "hde-settings: touchpad setup: shown, first login on %s where no touchpad was found, only a "
+                        "mouse (%s): the touchpad may arrive as a mouse\n", where, name);
         return TRUE;
     }
     fprintf(stderr, "hde-settings: touchpad setup: not shown, no touchpad found\n");
@@ -452,13 +616,19 @@ void touchpad_setup_show(GtkWindow *parent)
     gtk_label_set_max_width_chars(GTK_LABEL(note), 50);
     gtk_style_context_add_class(gtk_widget_get_style_context(note), "row-description");
     gtk_box_pack_start(GTK_BOX(left), note, FALSE, FALSE, 0);
-    if (!have_touchpad()) {
-        GtkWidget *w = gtk_label_new("No touchpad found that HDE can change (libinput or synaptics X driver). "
-                                     "This choice only changes touchpads; the mouse wheel has its own setting.");
+    int found = devices_found(NULL, 0);
+    if (found != FOUND_TOUCHPAD) {
+        GtkWidget *w = gtk_label_new(found == FOUND_MOUSE
+            ? "HDE found no touchpad here, only a mouse. Inside a virtual machine, or with a touchpad in mouse mode, the "
+              "touchpad arrives as a mouse: scroll the test page with it and HDE asks whether it is your touchpad."
+            : !hde_input_supported()
+            ? "HDE was built without libxi-dev, so the touchpad cannot be changed. Install it (sudo apt install "
+              "libxi-dev) and rebuild HDE."
+            : "No touchpad or mouse found that HDE can change (libinput, synaptics or evdev X driver).");
         gtk_label_set_xalign(GTK_LABEL(w), 0);
         gtk_label_set_line_wrap(GTK_LABEL(w), TRUE);
         gtk_label_set_max_width_chars(GTK_LABEL(w), 50);
-        gtk_style_context_add_class(gtk_widget_get_style_context(w), "error-text");
+        if (found != FOUND_MOUSE) gtk_style_context_add_class(gtk_widget_get_style_context(w), "error-text");
         gtk_box_pack_start(GTK_BOX(left), w, FALSE, FALSE, 0);
     }
 
@@ -489,9 +659,30 @@ void touchpad_setup_show(GtkWindow *parent)
     s->adj = g_object_ref(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw)));
     g_signal_connect(s->adj, "value-changed", G_CALLBACK(on_test_scrolled), s);
     g_signal_connect(s->adj, "changed", G_CALLBACK(on_test_layout), s);
+    g_signal_connect(sw, "scroll-event", G_CALLBACK(on_test_scroll_event), s);
 
     GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_box_pack_start(GTK_BOX(outer), bottom, FALSE, FALSE, 0);
+    /* shown after the test page was scrolled with a device that HDE sees as a mouse */
+    s->hint = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_style_context_add_class(gtk_widget_get_style_context(s->hint), "tp-hint");
+    s->hint_label = gtk_label_new(NULL);
+    gtk_label_set_xalign(GTK_LABEL(s->hint_label), 0);
+    gtk_label_set_line_wrap(GTK_LABEL(s->hint_label), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(s->hint_label), 62);
+    gtk_label_set_width_chars(GTK_LABEL(s->hint_label), 40);
+    gtk_box_pack_start(GTK_BOX(s->hint), s->hint_label, TRUE, TRUE, 0);
+    GtkWidget *is_tp = gtk_button_new_with_mnemonic("It is my _touchpad");
+    gtk_widget_set_valign(is_tp, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(is_tp, "This device then scrolls the way chosen above, not like a mouse wheel (it can "
+                                       "be undone in Settings › Input › Devices)");
+    g_signal_connect(is_tp, "clicked", G_CALLBACK(on_setup_is_touchpad), s);
+    gtk_box_pack_start(GTK_BOX(s->hint), is_tp, FALSE, FALSE, 0);
+    debug_geometry_watch(is_tp, "setup-as-touchpad");
+    gtk_widget_show_all(s->hint);
+    gtk_widget_hide(s->hint);
+    gtk_widget_set_no_show_all(s->hint, TRUE);
+    gtk_box_pack_start(GTK_BOX(bottom), s->hint, TRUE, TRUE, 0);
     GtkWidget *done = gtk_button_new_with_mnemonic("_Done");
     gtk_style_context_add_class(gtk_widget_get_style_context(done), "suggested-action");
     gtk_widget_set_size_request(done, 110, -1);

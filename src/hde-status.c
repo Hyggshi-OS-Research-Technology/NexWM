@@ -4,9 +4,11 @@
  *   so the panel never freezes.
  * - Bluetooth is read straight from BlueZ over D-Bus (not bluetoothctl — it hangs while bluetoothd is not running).
  * - Items without the matching hardware/service hide themselves.
- * - Left click: main action · right click: open the configuration tool · scrolling on the volume: ±5%.
+ * - Left click: main action · right click: open the configuration tool · scrolling on the volume: ±5%, in the
+ *   direction the fingers (or the wheel) move: up = louder, also with natural scrolling.
  */
 #include <gtk/gtk.h>
+#include <gdk/gdkx.h>
 #include <gio/gio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +16,7 @@
 #include "hde-status.h"
 #include "hde-osd.h"
 #include "hde-commands.h"
+#include "hde-input.h"
 
 #define POLL_SECONDS 5
 #define CMD_TIMEOUT_SECONDS 4
@@ -546,14 +549,73 @@ static gboolean on_press(GtkWidget *w, GdkEventButton *e, gpointer data)
     return TRUE;
 }
 
+/* Does the device that sent this scroll event have natural scrolling on (read from the device itself, XInput)?
+ * Remembered for a second: a swipe sends many events. */
+static gboolean scroll_from_natural_device(GdkEvent *e, int *id_out)
+{
+    static Display *xdpy;
+    static gboolean tried;
+    static int last_id = -1, last_natural;
+    static gint64 last_at;
+    GdkDevice *src = gdk_event_get_source_device(e);
+    *id_out = -1;
+    if (!src || !GDK_IS_X11_DISPLAY(gdk_device_get_display(src))) return FALSE;
+    int id = *id_out = gdk_x11_device_get_id(src);
+    gint64 now = g_get_monotonic_time();
+    if (id == last_id && now - last_at < G_USEC_PER_SEC) return last_natural;
+    if (!tried) {                       /* an own connection: XInput 2 version requests stay off GTK's */
+        tried = TRUE;
+        xdpy = hde_input_open();
+    }
+    last_id = id;
+    last_at = now;
+    last_natural = xdpy && hde_input_device_natural(xdpy, id) == 1;
+    return last_natural;
+}
+
+/* Scrolling on the volume follows the fingers, or the wheel, physically: up = louder. With natural scrolling the X
+ * driver turns a swipe up into "scroll down" (so that pages follow the fingers), which used to turn the volume down. */
 static gboolean on_scroll(GtkWidget *w, GdkEventScroll *e, gpointer data)
 {
     (void)w; (void)data;
-    if (e->direction == GDK_SCROLL_UP)        run_shell(HDE_SH_VOLUME_UP);
-    else if (e->direction == GDK_SCROLL_DOWN) run_shell(HDE_SH_VOLUME_DOWN);
+    gboolean up;
+    if (e->direction == GDK_SCROLL_UP) up = TRUE;
+    else if (e->direction == GDK_SCROLL_DOWN) up = FALSE;
     else return FALSE;
+    int id;
+    gboolean natural = scroll_from_natural_device((GdkEvent *)e, &id);
+    if (natural) up = !up;
+    if (getenv("HDE_DEBUG"))
+        fprintf(stderr, "hde-panel: volume: scroll %s from device %d (natural scrolling %s): volume %s\n",
+                e->direction == GDK_SCROLL_UP ? "up" : "down", id, natural ? "on" : "off", up ? "up" : "down");
+    run_shell(up ? HDE_SH_VOLUME_UP : HDE_SH_VOLUME_DOWN);
     g_timeout_add(300, refresh_once, NULL);
     return TRUE;
+}
+
+/* HDE_DEBUG: screen position of the volume icon, for the GUI tests */
+static guint vol_geom_timer;
+
+static gboolean log_volume_geometry(gpointer d)
+{
+    (void)d;
+    vol_geom_timer = 0;
+    GtkWidget *w = it_vol.btn, *top = w ? gtk_widget_get_toplevel(w) : NULL;
+    GdkWindow *gw = top ? gtk_widget_get_window(top) : NULL;
+    int ox = 0, oy = 0, x = 0, y = 0;
+    if (gw && gtk_widget_get_mapped(w) && gtk_widget_translate_coordinates(w, top, 0, 0, &x, &y)) {
+        gdk_window_get_origin(gw, &ox, &oy);
+        fprintf(stderr, "hde-panel: widget volume at %d,%d %dx%d\n", ox + x, oy + y, gtk_widget_get_allocated_width(w),
+                gtk_widget_get_allocated_height(w));
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void on_volume_allocate(GtkWidget *w, GdkRectangle *a, gpointer d)
+{
+    (void)w; (void)a; (void)d;
+    if (vol_geom_timer) g_source_remove(vol_geom_timer);
+    vol_geom_timer = g_timeout_add(500, log_volume_geometry, NULL);
 }
 
 GtkWidget *hde_status_new(void)
@@ -572,6 +634,7 @@ GtkWidget *hde_status_new(void)
     g_signal_connect(it_bt.btn,    "button-press-event", G_CALLBACK(on_press), "bt");
     g_signal_connect(it_vol.btn,   "button-press-event", G_CALLBACK(on_press), "vol");
     g_signal_connect(it_vol.btn,   "scroll-event",       G_CALLBACK(on_scroll), NULL);
+    if (getenv("HDE_DEBUG")) g_signal_connect(it_vol.btn, "size-allocate", G_CALLBACK(on_volume_allocate), NULL);
     g_signal_connect(it_bat.btn,   "button-press-event", G_CALLBACK(on_press), "bat");
 
     g_bus_get(G_BUS_TYPE_SYSTEM, NULL, on_sysbus, NULL);

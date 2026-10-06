@@ -71,9 +71,13 @@ void       touchpad_direction_sync(void);             /* re-read natural_scroll 
 /* The "Touchpad scrolling" window with a test page. parent NULL: on its own (hde-settings --touchpad-setup), the
  * GTK main loop ends when it closes. */
 void       touchpad_setup_show(GtkWindow *parent);
-/* hde-settings --touchpad-setup=auto (hde-session, at login): TRUE if a touchpad is present and no direction was
- * chosen yet (logs the reason either way). */
+/* hde-settings --touchpad-setup=auto (hde-session, at login): TRUE if no direction was chosen yet and a touchpad is
+ * present — or only a mouse, on a virtual machine or a laptop, where the touchpad often reaches X as a mouse (logs the
+ * reason either way). */
 gboolean   touchpad_setup_needed(void);
+/* A touchpad that X sees as a mouse (virtual machine, mouse mode): on = it follows the touchpad direction
+ * (settings.ini treat_as_touchpad), off = it is a mouse again (mouse wheel direction). Applies at once. */
+void       touchpad_use_device(const char *name, int deviceid, gboolean on);
 
 /* HDE_DEBUG=1: log where a widget is on the screen ("hde-settings: widget NAME at X,Y WxH") whenever it is shown or
  * its window moves, so that tests can click it whatever the fonts and theme. Does nothing otherwise. */

@@ -1,16 +1,17 @@
 #!/bin/sh
-# tests/input-test.sh — HDE touchpad / mouse settings on a REAL X server: Xorg (dummy video driver) with the libinput
-# and synaptics input drivers and virtual uinput devices: a laptop-like touchpad, a second touchpad plugged in later,
-# a wheel mouse, and a touchpad driven by the synaptics driver.
+# tests/input-test.sh — HDE touchpad / mouse settings on a REAL X server: Xorg (dummy video driver) with the libinput,
+# synaptics and evdev input drivers and virtual uinput devices: a laptop-like touchpad, a second touchpad plugged in
+# later, a wheel mouse, a touchpad driven by the synaptics driver and a mouse driven by the evdev driver.
 # Checks that HDE applies Settings > Input — on a fresh account, live, after hotplug and after a remove/re-add
 # (suspend/resume), when another program changes a device, with another XSETTINGS manager running — that a
 # two-finger swipe UP really moves the content UP (natural scrolling, the default), and that in the "Touchpad
 # scrolling" window a real swipe UP over the test page goes toward the end with "Like a phone" and back toward the top
-# with "Like a mouse wheel".
+# with "Like a mouse wheel". A touchpad that X sees as a mouse (inside a virtual machine, or in mouse mode): the window
+# asks "Is it your touchpad?" when the test page is scrolled with it, and the touchpad direction then applies to it.
 #
 # Needs root through sudo (Xorg, /dev/uinput, a file in /usr/share/X11/xorg.conf.d): meant for CI, not a desktop.
 #   sudo apt install xserver-xorg-core xserver-xorg-video-dummy xserver-xorg-input-libinput \
-#                    xserver-xorg-input-synaptics xinput x11-utils python3-evdev xdotool
+#                    xserver-xorg-input-synaptics xserver-xorg-input-evdev xinput x11-utils python3-evdev xdotool
 #   make && sh tests/input-test.sh
 # Output: $HDE_TEST_OUT (default /tmp/hde-input): results.txt, Xorg.log, xsettings.log, shot-*.png
 set -u
@@ -24,6 +25,8 @@ TP="HDE Test Touchpad"
 TP2="HDE Test Touchpad 2"
 MOUSE="HDE Test Mouse"
 SYN="HDE Test Synaptics Pad"
+EVM="HDE Test Evdev Mouse"
+EVD="Evdev Scrolling Distance"
 NAT="libinput Natural Scrolling Enabled"
 TAP="libinput Tapping Enabled"
 CONF=/usr/share/X11/xorg.conf.d/99-hde-input-test.conf
@@ -45,7 +48,7 @@ python3 -c "import evdev" 2>/dev/null || { fail "missing python3-evdev"; exit 2;
 sudo -n modprobe uinput 2>/dev/null
 [ -e /dev/uinput ] || { fail "/dev/uinput is missing (kernel module uinput)"; exit 2; }
 info "kernel $(uname -r); $(dpkg-query -W -f '${Package} ${Version}, ' xserver-xorg-core xserver-xorg-input-libinput \
-    xserver-xorg-input-synaptics 'libinput1*' python3-evdev 2>/dev/null)"
+    xserver-xorg-input-synaptics xserver-xorg-input-evdev 'libinput1*' python3-evdev 2>/dev/null)"
 
 # ---------- X server ----------
 # The synaptics package makes every touchpad use synaptics (70-synaptics.conf); pin each test device to its driver
@@ -62,6 +65,12 @@ Section "InputClass"
     MatchProduct "HDE Test Synaptics"
     MatchDevicePath "/dev/input/event*"
     Driver "synaptics"
+EndSection
+Section "InputClass"
+    Identifier "HDE input test: evdev mouse"
+    MatchProduct "HDE Test Evdev"
+    MatchDevicePath "/dev/input/event*"
+    Driver "evdev"
 EndSection
 EOF
 cat > "$OUT/xorg.conf" <<'EOF'
@@ -186,11 +195,15 @@ point_at() { set -- $(widget "$1" "$2"); [ -n "${2:-}" ] && xdotool mousemove "$
 vin add-touchpad "$TP"
 vin add-mouse "$MOUSE"
 vin add-touchpad "$SYN"
-for dev in "$TP" "$MOUSE" "$SYN"; do check "X server sees the virtual device '$dev'" wait_dev "$dev"; done
+vin add-mouse "$EVM"
+for dev in "$TP" "$MOUSE" "$SYN" "$EVM"; do check "X server sees the virtual device '$dev'" wait_dev "$dev"; done
 sleep 1
-info "X drivers: $TP=$(driver_of "$TP"), $MOUSE=$(driver_of "$MOUSE"), $SYN=$(driver_of "$SYN")"
+info "X drivers: $TP=$(driver_of "$TP"), $MOUSE=$(driver_of "$MOUSE"), $SYN=$(driver_of "$SYN"), $EVM=$(driver_of "$EVM")"
 check "'$TP' uses the libinput driver" test "$(driver_of "$TP")" = libinput
 check "'$SYN' uses the synaptics driver" test "$(driver_of "$SYN")" = synaptics
+EVDEV=0
+if [ "$(driver_of "$EVM")" = evdev ]; then EVDEV=1; pass "'$EVM' uses the evdev driver"
+else info "'$EVM' does not use the evdev driver (xserver-xorg-input-evdev not installed?): evdev not checked"; fi
 
 # what a fresh account had before this fix: the drivers' defaults
 before="natural scrolling=$(prop "$TP" "$NAT"), tapping=$(prop "$TP" "$TAP")"
@@ -204,6 +217,7 @@ XS=$!
 check "touchpad: natural scrolling is ON after login (default, without the xinput program)" wait_prop "$TP" "$NAT" 1
 check "touchpad: tap to click is ON after login (default)" wait_prop "$TP" "$TAP" 1
 check "mouse: wheel direction untouched (natural scrolling off)" wait_prop "$MOUSE" "$NAT" 0 10
+[ $EVDEV = 1 ] && check "evdev mouse: wheel direction untouched (scrolling distance 1, 1, 1)" wait_prop "$EVM" "$EVD" "1, 1, 1" 10
 ok=1; wait_prop_re "$SYN" "Synaptics Scrolling Distance" '^-[0-9]+, -[0-9]+$' || ok=0
 v=$(prop "$SYN" "Synaptics Scrolling Distance")
 if [ $ok = 1 ]; then pass "synaptics touchpad: natural scrolling ON (negative scrolling distance: $v)"
@@ -266,11 +280,23 @@ check "mouse natural scrolling does not change the touchpads" wait_prop "$TP" "$
 r=$(scroll "$MOUSE" up wheel); d=$(direction "$r")
 if [ "$d" = down ]; then pass "mouse with natural scrolling: wheel up scrolls the view down ($r)"
 else fail "mouse with natural scrolling: wheel up scrolls the view down (got $d: $r)"; fi
+if [ $EVDEV = 1 ]; then
+    check "evdev mouse: natural scrolling switched on (negative scrolling distance)" wait_prop "$EVM" "$EVD" "-1, -1, 1"
+    r=$(scroll "$EVM" up wheel); d=$(direction "$r")
+    if [ "$d" = down ]; then pass "evdev mouse with natural scrolling: wheel up scrolls the view down ($r)"
+    else fail "evdev mouse with natural scrolling: wheel up scrolls the view down (got $d: $r)"; fi
+fi
 set_ini mouse_natural_scroll false
 check "mouse natural scrolling switched off" wait_prop "$MOUSE" "$NAT" 0
 r=$(scroll "$MOUSE" up wheel); d=$(direction "$r")
 if [ "$d" = up ]; then pass "mouse: wheel up scrolls the view up ($r)"
 else fail "mouse: wheel up scrolls the view up (got $d: $r)"; fi
+if [ $EVDEV = 1 ]; then
+    check "evdev mouse: natural scrolling switched off (scrolling distance 1, 1, 1)" wait_prop "$EVM" "$EVD" "1, 1, 1"
+    r=$(scroll "$EVM" up wheel); d=$(direction "$r")
+    if [ "$d" = up ]; then pass "evdev mouse: wheel up scrolls the view up ($r)"
+    else fail "evdev mouse: wheel up scrolls the view up (got $d: $r)"; fi
+fi
 set_ini pointer_speed 0.75
 check "pointer speed applies to the touchpad (libinput Accel Speed 0.5)" wait_prop "$TP" "libinput Accel Speed" 0.500000
 check "pointer speed applies to the mouse" wait_prop "$MOUSE" "libinput Accel Speed" 0.500000
@@ -308,6 +334,8 @@ if [ $rc = 0 ] && grep -q "\] $TP: touchpad, libinput driver: natural scrolling 
    grep -q "HDE input service (hde-xsettings): running" "$OUT/status.txt"; then
     pass "hde-xsettings --status: every device matches Settings, the input service runs (exit 0)"
 else fail "hde-xsettings --status: every device matches Settings, the input service runs (exit $rc)"; fi
+[ $EVDEV = 1 ] && check "hde-xsettings --status lists the evdev mouse with its scroll direction" \
+    grep -q "\] $EVM: mouse, evdev driver: natural scrolling off  OK" "$OUT/status.txt"
 sed 's/^/INFO:   status: /' "$OUT/status.txt" >> "$OUT/results.txt"
 timeout 5 "$B/hde-xsettings" > "$OUT/xsettings-second.log" 2>&1
 rc=$?
@@ -362,6 +390,77 @@ else
     info "xdotool missing: Touchpad scrolling window not checked"
 fi
 
+# ---------- a touchpad that X sees as a mouse (inside a virtual machine, or in mouse mode): "It is my touchpad" ----------
+# (the wheel mouse plays that touchpad: inside a virtual machine the host turns two-finger swipes into wheel turns)
+if command -v xdotool >/dev/null 2>&1; then
+    LOG="$OUT/touchpad-setup-mouse.log"
+    HDE_DEBUG=1 "$B/hde-settings" --touchpad-setup > "$LOG" 2>&1 &
+    TS=$!
+    i=0; while ! xdotool search --onlyvisible --name "^Touchpad scrolling$" >/dev/null 2>&1 && [ $i -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+    sleep 1
+    point_at setup-test-page "$LOG"; sleep 0.3
+    vin wheel "$MOUSE" up; sleep 1.2
+    if grep -q "test page: scrolled with \"$MOUSE\" (mouse, libinput driver): asks whether it is the touchpad" "$LOG"; then
+        pass "the test page scrolled with a device that X sees as a mouse: the window asks whether it is the touchpad"
+    else fail "the test page scrolled with a device that X sees as a mouse: the window asks whether it is the touchpad"; fi
+    last=$(grep 'test page: line' "$LOG" | tail -n 1)
+    info "before: its wheel up over the test page: ${last#*test page: } (the touchpad direction does not reach a mouse)"
+    command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-23-touchpad-setup-mouse.png" 2>/dev/null
+    click_widget setup-as-touchpad "$LOG"; sleep 1
+    check "'It is my touchpad' saves the device (treat_as_touchpad in settings.ini)" grep -q "^treat_as_touchpad=$MOUSE" "$INI"
+    check "... and it follows the touchpad direction at once ('Like a phone': natural scrolling on)" wait_prop "$MOUSE" "$NAT" 1
+    tp_lines=$(grep -c 'test page: line' "$LOG")
+    point_at setup-test-page "$LOG"; sleep 0.3
+    vin wheel "$MOUSE" up; sleep 1.2
+    last=$(grep 'test page: line' "$LOG" | tail -n 1)
+    if [ "$(grep -c 'test page: line' "$LOG")" -gt "$tp_lines" ] && echo "$last" | grep -q "(toward the end)"; then
+        pass "'Like a phone' now applies to it: scrolling UP over the test page reads on, toward the END (${last#*test page: })"
+    else fail "'Like a phone' now applies to it: scrolling UP over the test page reads on, toward the END ($last)"; fi
+    command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-24-touchpad-setup-as-touchpad.png" 2>/dev/null
+    click_widget setup-wheel "$LOG"; sleep 0.8
+    check "'Like a mouse wheel' applies to it too (natural scrolling off)" wait_prop "$MOUSE" "$NAT" 0
+    tp_lines=$(grep -c 'test page: line' "$LOG")
+    point_at setup-test-page "$LOG"; sleep 0.3
+    vin wheel "$MOUSE" up; sleep 1.2
+    last=$(grep 'test page: line' "$LOG" | tail -n 1)
+    if [ "$(grep -c 'test page: line' "$LOG")" -gt "$tp_lines" ] && echo "$last" | grep -q "(toward the top)"; then
+        pass "'Like a mouse wheel': scrolling UP over the test page goes back toward the TOP (${last#*test page: })"
+    else fail "'Like a mouse wheel': scrolling UP over the test page goes back toward the TOP ($last)"; fi
+    click_widget setup-phone "$LOG"; sleep 0.8
+    check "'Like a phone' again (natural scrolling on)" wait_prop "$MOUSE" "$NAT" 1
+    click_widget setup-done "$LOG"; sleep 1
+    kill "$TS" 2>/dev/null
+    "$B/hde-xsettings" --status > "$OUT/status-as-touchpad.txt" 2>&1
+    check "hde-xsettings --status: 'mouse used as the touchpad', matching Settings" \
+        grep -q "\] $MOUSE: mouse used as the touchpad, libinput driver: natural scrolling on  OK" "$OUT/status-as-touchpad.txt"
+    xinput set-prop "pointer:$MOUSE" "$NAT" 0
+    check "... and hde-xsettings keeps it so (another program turns it off: set back)" wait_prop "$MOUSE" "$NAT" 1 20
+
+    # Settings > Input > Devices: "It is a touchpad" unticked -> a mouse again
+    LOG="$OUT/settings-as-touchpad.log"
+    HDE_DEBUG=1 dbus-run-session -- "$B/hde-settings" input > "$LOG" 2>&1 &
+    SP=$!
+    sleep 4
+    if grep -q "hde-settings: input device: $MOUSE: Mouse used as the touchpad · libinput driver · scrolls like a phone" "$LOG"; then
+        pass "Settings > Input > Devices shows it as 'Mouse used as the touchpad', scrolling like a phone"
+    else fail "Settings > Input > Devices shows it as 'Mouse used as the touchpad', scrolling like a phone"; fi
+    # shellcheck disable=SC2046
+    set -- $(widget input-try "$LOG")          # a point on the page, to scroll it down to the device list
+    if [ -n "${2:-}" ]; then
+        xdotool mousemove "$1" "$2"; sleep 0.3
+        for i in $(seq 1 25); do xdotool click 5; sleep 0.03; done
+        sleep 1.2
+        command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-25-settings-input-as-touchpad.png" 2>/dev/null
+        click_widget "as-touchpad:$MOUSE" "$LOG"; sleep 1.5
+    fi
+    check "unticking 'It is a touchpad' in Settings > Input makes it a mouse again (treat_as_touchpad removed)" \
+        sh -c "! grep -q '^treat_as_touchpad=' '$INI'"
+    check "... and its wheel goes back to the mouse direction (natural scrolling off)" wait_prop "$MOUSE" "$NAT" 0
+    kill "$SP" 2>/dev/null
+    pkill -x hde-settings 2>/dev/null
+    sed -i '/^treat_as_touchpad=/d' "$INI"
+fi
+
 # ---------- HDE inside another desktop: another XSETTINGS manager runs ----------
 kill "$XS" 2>/dev/null
 wait "$XS" 2>/dev/null
@@ -406,6 +505,31 @@ if command -v dbus-run-session >/dev/null 2>&1; then
     else fail "Settings > Input lists the touchpads and the mouse with their state"; fi
     kill "$SP" 2>/dev/null
     pkill -x hde-settings 2>/dev/null
+fi
+
+# ---------- first login on a virtual machine (or a laptop) where X sees no touchpad, only a mouse ----------
+# (the GitHub runners are virtual machines; elsewhere the window rightly stays closed)
+if command -v xdotool >/dev/null 2>&1; then
+    for dev in "$TP" "$TP2" "$SYN"; do vin remove "$dev"; wait_gone "$dev"; done
+    sed -i '/^touchpad_direction_chosen=/d; /^treat_as_touchpad=/d' "$INI"
+    LOG="$OUT/touchpad-setup-vm.log"
+    HDE_DEBUG=1 "$B/hde-settings" --touchpad-setup=auto > "$LOG" 2>&1 &
+    TS=$!
+    sleep 3
+    if grep -q "touchpad setup: shown, first login on a \(virtual machine\|laptop\) where no touchpad was found, only a mouse" "$LOG"; then
+        pass "first login where X sees only a mouse, on a virtual machine or a laptop: the Touchpad scrolling window opens ($(sed -n 's/.*touchpad setup: shown, first login on \(a [a-z ]*\) where.*/\1/p' "$LOG"))"
+        point_at setup-test-page "$LOG"; sleep 0.3
+        vin wheel "$MOUSE" up; sleep 1.2
+        check "... and when its test page is scrolled with the mouse, asks whether it is the touchpad" \
+            grep -q "test page: scrolled with \"$MOUSE\" (mouse, libinput driver): asks whether it is the touchpad" "$LOG"
+        command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-26-touchpad-setup-virtual-machine.png" 2>/dev/null
+        click_widget setup-done "$LOG"; sleep 1
+    elif grep -q "touchpad setup: not shown, no touchpad found" "$LOG"; then
+        info "neither a virtual machine nor a laptop: the Touchpad scrolling window is (rightly) not opened"
+    else
+        fail "first login where X sees only a mouse: the Touchpad scrolling window decides ($(grep 'touchpad setup:' "$LOG" | head -n 1))"
+    fi
+    kill "$TS" 2>/dev/null
 fi
 
 [ "$FAILS" -gt 0 ] && { echo "--- hde-xsettings log (end)"; tail -n 25 "$OUT/xsettings.log"; } | sed 's/^/INFO:   /' >> "$OUT/results.txt"

@@ -23,7 +23,8 @@ GUI_CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initial
 GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE
 
 HDE_HEADERS=$(wildcard src/*.h)
-PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-notify.c src/hde-search.c src/hde-theme.c
+PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-notify.c src/hde-search.c src/hde-theme.c \
+          src/hde-input.c
 DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
@@ -45,7 +46,8 @@ components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUIL
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 $(BUILD)/hde-panel: $(PANEL_SRC) $(HDE_HEADERS) | $(BUILD)
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(WNCK_LIBS) -lm
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) \
+	    $(WNCK_LIBS) $(XI_LIBS) $(X11_LIBS) -lm
 $(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(XI_LIBS) $(X11_LIBS) -lm
 $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-ipc.h src/hde-commands.h | $(BUILD)

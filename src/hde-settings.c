@@ -313,6 +313,12 @@ static gboolean on_geom_configure(GtkWidget *w, GdkEvent *e, gpointer d)
     return FALSE;
 }
 
+static void on_geom_scrolled(GtkAdjustment *a, gpointer d)
+{
+    (void)a; (void)d;
+    geom_schedule();
+}
+
 static void on_geom_map(GtkWidget *w, gpointer d)
 {
     (void)d;
@@ -320,6 +326,14 @@ static void on_geom_map(GtkWidget *w, gpointer d)
     if (gtk_widget_is_toplevel(top) && !g_object_get_data(G_OBJECT(top), "hde-geom-top")) {
         g_object_set_data(G_OBJECT(top), "hde-geom-top", GINT_TO_POINTER(1));
         g_signal_connect(top, "configure-event", G_CALLBACK(on_geom_configure), NULL);
+    }
+    /* the position also changes when the page around the widget is scrolled */
+    GtkWidget *parent = gtk_widget_get_parent(w);
+    GtkWidget *sw = parent ? gtk_widget_get_ancestor(parent, GTK_TYPE_SCROLLED_WINDOW) : NULL;
+    GtkAdjustment *adj = sw ? gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw)) : NULL;
+    if (adj && !g_object_get_data(G_OBJECT(adj), "hde-geom-adj")) {
+        g_object_set_data(G_OBJECT(adj), "hde-geom-adj", GINT_TO_POINTER(1));
+        g_signal_connect(adj, "value-changed", G_CALLBACK(on_geom_scrolled), NULL);
     }
     geom_schedule();
 }
@@ -585,15 +599,27 @@ static GtkWidget *make_display_page(void)
 static guint input_apply_id;
 static GtkWidget *input_devices_card;
 static GtkWidget *input_service_note;
+static GtkWidget *input_no_touchpad_note;
 static GSList *input_switches;          /* GtkSwitch* of the Input page, data "hde-key" / "hde-default" */
 
-/* The touchpads and mice HDE configures, with their state right now (refreshed after every change and hotplug). */
+static void on_as_touchpad_toggled(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    touchpad_use_device(g_object_get_data(G_OBJECT(b), "hde-device"),
+                        GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "hde-device-id")), gtk_toggle_button_get_active(b));
+}
+
+/* The touchpads and mice HDE configures, with their state right now (refreshed after every change and hotplug).
+ * A mouse can be marked "It is a touchpad": a touchpad that X sees as a mouse (inside a virtual machine, or in mouse
+ * mode) then follows the touchpad direction instead of the mouse wheel's. */
 static void input_devices_refresh(void)
 {
     if (!input_devices_card) return;
     card_clear(input_devices_card);
     HdeInputDevice devs[16];
-    int n = 0;
+    HdeInputPrefs p;
+    hde_input_prefs_load(&p);
+    int n = 0, touchpads = 0;
     gboolean have_x = FALSE, service = TRUE;
     Display *dpy = hde_input_open();
     if (dpy) {
@@ -604,25 +630,44 @@ static void input_devices_refresh(void)
     }
     for (int i = 0; i < n; i++) {
         const HdeInputDevice *d = &devs[i];
-        GString *desc = g_string_new(d->kind == HDE_INPUT_TOUCHPAD ? "Touchpad" : "Mouse");
+        gboolean follows = hde_input_follows_touchpad(d, &p);
+        if (follows) touchpads++;
+        GString *desc = g_string_new(d->kind == HDE_INPUT_TOUCHPAD ? "Touchpad" : follows ? "Mouse used as the touchpad"
+                                                                                        : "Mouse");
         g_string_append_printf(desc, " · %s driver", d->driver);
-        if (d->natural >= 0 && d->kind == HDE_INPUT_TOUCHPAD)
+        if (d->natural >= 0 && follows)
             g_string_append_printf(desc, " · scrolls %s", d->natural ? "like a phone" : "like a mouse wheel");
         else if (d->natural >= 0)
             g_string_append_printf(desc, " · natural scrolling %s", d->natural ? "on" : "off");
         if (d->tapping >= 0) g_string_append_printf(desc, " · tap to click %s", d->tapping ? "on" : "off");
         if (getenv("HDE_DEBUG")) fprintf(stderr, "hde-settings: input device: %s: %s\n", d->name, desc->str);
-        gtk_container_add(GTK_CONTAINER(input_devices_card), row_box(d->name, desc->str, NULL));
+        GtkWidget *control = NULL;
+        if (d->kind != HDE_INPUT_TOUCHPAD) {
+            control = gtk_check_button_new_with_label("It is a touchpad");
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(control), follows);
+            gtk_widget_set_valign(control, GTK_ALIGN_CENTER);
+            gtk_widget_set_tooltip_text(control, "For a touchpad that HDE sees as a mouse: the touchpad of your computer "
+                                                 "inside a virtual machine, or a touchpad working in mouse mode. It then "
+                                                 "scrolls the way chosen under Touchpad, not like the mouse wheel.");
+            g_object_set_data_full(G_OBJECT(control), "hde-device", g_strdup(d->name), g_free);
+            g_object_set_data(G_OBJECT(control), "hde-device-id", GINT_TO_POINTER(d->id));
+            g_signal_connect(control, "toggled", G_CALLBACK(on_as_touchpad_toggled), NULL);
+            char *gname = g_strdup_printf("as-touchpad:%s", d->name);
+            debug_geometry_watch(control, gname);
+            g_free(gname);
+        }
+        gtk_container_add(GTK_CONTAINER(input_devices_card), row_box(d->name, desc->str, control));
         g_string_free(desc, TRUE);
     }
     if (n == 0)
         gtk_container_add(GTK_CONTAINER(input_devices_card), card_placeholder(
             !hde_input_supported() ? "HDE was built without libxi-dev, so these settings cannot be applied. "
                                      "Install it (sudo apt install libxi-dev) and rebuild HDE."
-                                   : "No touchpad or mouse found that uses the libinput or synaptics X driver "
+                                   : "No touchpad or mouse found that uses the libinput, synaptics or evdev X driver "
                                      "(package xserver-xorg-input-libinput)."));
     gtk_widget_show_all(input_devices_card);
     if (input_service_note) gtk_widget_set_visible(input_service_note, have_x && !service && n > 0);
+    if (input_no_touchpad_note) gtk_widget_set_visible(input_no_touchpad_note, n > 0 && touchpads == 0);
 }
 
 static gboolean input_apply_idle(gpointer d)
@@ -684,6 +729,7 @@ static void on_input_page_destroy(GtkWidget *w, gpointer d)
     (void)w; (void)d;
     input_devices_card = NULL;
     input_service_note = NULL;
+    input_no_touchpad_note = NULL;
     g_slist_free(input_switches);
     input_switches = NULL;
     GdkDisplay *dsp = gdk_display_get_default();
@@ -752,6 +798,11 @@ static GtkWidget *make_input_page(void)
     gtk_box_pack_start(GTK_BOX(box), section("Devices"), FALSE, FALSE, 0);
     input_devices_card = card_new();
     gtk_box_pack_start(GTK_BOX(box), input_devices_card, FALSE, FALSE, 0);
+    input_no_touchpad_note = info_label("No touchpad found, only a mouse. If your touchpad scrolls the wrong way, HDE "
+                                        "sees it as a mouse — usual inside a virtual machine, or for a touchpad in "
+                                        "mouse mode: tick “It is a touchpad” next to it, then pick the direction above.");
+    gtk_widget_set_no_show_all(input_no_touchpad_note, TRUE);
+    gtk_box_pack_start(GTK_BOX(box), input_no_touchpad_note, FALSE, FALSE, 0);
     input_service_note = info_label("HDE's input service (hde-xsettings) is not running in this session: the choices "
                                     "above apply now, but a touchpad or mouse plugged in later, or back after "
                                     "suspend, keeps its old settings. Log out and log in again.");
@@ -999,6 +1050,7 @@ static void load_css(void)
         ".row-description { opacity: 0.68; font-size: 11px; }"
         ".about-title { font-size: 20px; font-weight: 700; }"
         ".tp-heading { font-size: 20px; font-weight: 700; }"
+        ".tp-hint { padding: 8px 10px; border-radius: 10px; background-color: alpha(%s, 0.10); border: 1px solid alpha(%s, 0.35); }"
         ".status { opacity: 0.7; font-size: 11px; }"
         ".card { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.12); border-radius: 12px; }"
         ".card > row { padding: 2px 8px; border-bottom: 1px solid alpha(@theme_fg_color, 0.07); }"
@@ -1016,7 +1068,7 @@ static void load_css(void)
         ".preview-light .pv-bar { background-color: #e2e5ea; } .preview-dark .pv-bar { background-color: #14171c; }"
         ".pv-accent { background-color: %s; border-radius: 3px; }"
         "button { border-radius: 8px; }",
-        a, a, a, a, a, a, a);
+        a, a, a, a, a, a, a, a, a);
     if (!app_css) {
         app_css = gtk_css_provider_new();
         gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(app_css),
