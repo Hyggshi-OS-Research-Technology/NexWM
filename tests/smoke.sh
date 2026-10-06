@@ -1048,9 +1048,9 @@ if [ "$(soft)" != "" ] || grep -q "control center: brightness: software" "$OUT/s
         b=$(soft)
         if [ "${b:-0}" -ge 55 ] && [ "${b:-0}" -le 75 ]; then pass "the brightness slider dims the screen (software dimming: $b%)"
         else fail "the brightness slider dims the screen (_HDE_BRIGHTNESS=$b)"; fi
-        xdotool mousemove "$(($3 + $4 - 1))" "$2" click 1; sleep 2
+        xdotool mousemove "$(($3 + $4 - 16))" "$2" click 1; sleep 2        # (the theme's padding around the trough: not clickable)
         b=$(soft)
-        if [ "${b:-0}" -ge 95 ]; then pass "... and brightens it back at the right end ($b%)"
+        if [ "${b:-0}" -ge 90 ]; then pass "... and brightens it back at the right end ($b%)"
         else fail "... and brightens it back at the right end (_HDE_BRIGHTNESS=$b)"; fi
         "$B/hde-settings" --brightness 100 >/dev/null 2>&1
     else fail "the brightness slider is in the Control Center (no widget position logged)"; fi
