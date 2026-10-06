@@ -1236,7 +1236,8 @@ case "$binfo" in "software dimming"*)
     if [ "$(soft)" = 70 ]; then pass "... it dims the screen to 70% of its brightness"
     else fail "... it dims the screen to 70% of its brightness (_HDE_BRIGHTNESS=$(soft))"; fi ;;
 esac
-check "... a notification says so" grep -q "hde-notify: notification [0-9]* from Power: Battery saver is on" "$OUT/session.log"
+if wait_nlog "hde-notify: notification [0-9]* from Power: Battery saver is on" 0 30; then pass "... a notification says so"
+else fail "... a notification says so"; fi
 check "... the extensions refresh less often" grep -q "hde-panel: extensions: refreshed 3 times less often (battery saver)" "$OUT/session.log"
 shot 19a-battery-saver
 "$B/hde-settings" --power > "$OUT/power-cli.txt" 2>&1
@@ -1251,16 +1252,19 @@ if [ -n "$PPD_MOCK" ]; then
         grep -q "hde-settings: power mode power-saver (.*balanced" "$OUT/settings-power.log"
 fi
 kill "$SPW" 2>/dev/null; sleep 0.5
-c0=$(nlog "hde-panel: power: battery low")
+c0=$(nlog "hde-panel: power: battery low"); n0=$(nlog "from Power: Battery low")
 bat 9 Discharging 0
 if wait_nlog "hde-panel: power: battery low" "$c0" 90; then pass "'Battery low' at 10% ($(grep 'hde-panel: power: battery low' "$OUT/session.log" | tail -n 1 | sed 's/.*power: //'))"
 else fail "'Battery low' at 10%"; fi
-check "... as a notification" grep -q "hde-notify: notification [0-9]* from Power: Battery low" "$OUT/session.log"
-c0=$(nlog "hde-panel: power: battery critically low")
+# (the notification goes through D-Bus: it is logged a moment later)
+if wait_nlog "hde-notify: notification [0-9]* from Power: Battery low" "$n0" 30; then pass "... as a notification"
+else fail "... as a notification"; fi
+c0=$(nlog "hde-panel: power: battery critically low"); n0=$(nlog "from Power: Battery critically low")
 bat 4 Discharging 0
 if wait_nlog "hde-panel: power: battery critically low" "$c0" 90; then pass "'Battery critically low' at 5%"
 else fail "'Battery critically low' at 5%"; fi
-check "... as a notification that stays (critical)" grep -q "hde-notify: notification [0-9]* from Power: Battery critically low" "$OUT/session.log"
+if wait_nlog "hde-notify: notification [0-9]* from Power: Battery critically low" "$n0" 30; then pass "... as a notification that stays (critical)"
+else fail "... as a notification that stays (critical)"; fi
 sleep 1
 shot 19c-battery-critical
 c0=$(nlog "hde-panel: battery saver: off")
