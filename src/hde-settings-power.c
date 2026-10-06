@@ -317,6 +317,7 @@ GtkWidget *page_power_new(void)
     gtk_box_pack_start(GTK_BOX(pw.saver_box), row_box("Dim the screen", "To 70% of its brightness while the battery saver "
                                                       "is on; back when it turns off.", pw.dim_switch), FALSE, FALSE, 0);
     pw.saver_state = info_label("");
+    gtk_widget_set_margin_start(pw.saver_state, 6);       /* in line with the rows above */
     gtk_box_pack_start(GTK_BOX(pw.saver_box), pw.saver_state, FALSE, FALSE, 0);
     pw.warn_switch = gtk_switch_new();
     gtk_widget_set_valign(pw.warn_switch, GTK_ALIGN_CENTER);

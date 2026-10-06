@@ -1202,7 +1202,10 @@ xdotool key Escape; sleep 0.6
 # the battery saver and the low-battery warnings (src/hde-powersave.c, fed by the battery readings every 5 s), and
 # Settings > Power; the fake battery of HDE_POWER_SUPPLY_DIR is drained and plugged in
 PSD=$HDE_POWER_SUPPLY_DIR
-bat() { printf '%s\n' "$1" > "$PSD/BAT0/capacity"; printf '%s\n' "$2" > "$PSD/BAT0/status"; printf '%s\n' "$3" > "$PSD/AC/online"; }
+bat() {     # CAPACITY STATUS AC_ONLINE (the energy left follows the capacity: 1% of the 58 Wh full charge = 580000 µWh)
+    printf '%s\n' "$1" > "$PSD/BAT0/capacity"; printf '%s\n' "$(($1 * 580000))" > "$PSD/BAT0/energy_now"
+    printf '%s\n' "$2" > "$PSD/BAT0/status"; printf '%s\n' "$3" > "$PSD/AC/online"
+}
 ppd() {
     if [ -n "${1:-}" ]; then
         gdbus call --system --dest net.hadess.PowerProfiles --object-path /net/hadess/PowerProfiles \
@@ -1271,7 +1274,7 @@ fi
 case "$binfo" in "software dimming"*)
     if [ "$(soft)" = 100 ]; then pass "... and the brightness 100% again"; else fail "... and the brightness 100% again (_HDE_BRIGHTNESS=$(soft))"; fi ;;
 esac
-bat 82 Discharging 0
+bat 82 Discharging 0; printf '47600000\n' > "$PSD/BAT0/energy_now"
 sed -i '/^battery_saver=/d; /^battery_saver_level=/d' "$SETTINGS_INI"
 xdotool key Escape; sleep 0.5
 # GNOME's touchpad settings follow HDE's (Mutter / Muffin apply them themselves); the keyfile backend stands in for dconf

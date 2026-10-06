@@ -114,12 +114,13 @@ wait_nowin() { i=0; while [ "$i" -lt "${2:-60}" ]; do win_visible "$1" || return
 wait_log() { i=0; while [ "$i" -lt "${2:-60}" ]; do grep -q "$1" "$LOG" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 nlog() { nlog_n=$(grep -c "$1" "$LOG" 2>/dev/null); echo "${nlog_n:-0}"; }
 wait_more() { i=0; while [ "$i" -lt "${3:-60}" ]; do [ "$(nlog "$1")" -gt "$2" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+# widget NAME [LOG] -> "X Y", the centre of a widget of hde-settings (HDE_DEBUG: "hde-settings: widget NAME at ...")
 widget() {
-    sed -n "s/^hde-settings: widget $1 at \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p" "$LOG" | tail -n 1 |
+    sed -n "s/^hde-settings: widget $1 at \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p" "${2:-$LOG}" | tail -n 1 |
         awk '{ printf "%d %d\n", $1 + $3 / 2, $2 + $4 / 2 }'
 }
 # shellcheck disable=SC2046  # "X Y" -> two arguments
-click_widget() { set -- $(widget "$1"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
+click_widget() { set -- $(widget "$1" "${2:-$LOG}"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
 root_prop() { xprop -root "$1" 2>/dev/null | sed -n 's/.*= \([0-9]*\)$/\1/p'; }
 # xrandr prints the brightness as "0.95", "0.60", "1.0": as a whole percentage
 pct() { echo "${1:-0}" | awk '{ printf "%d", $1 * 100 + 0.5 }'; }
@@ -400,13 +401,14 @@ set_ini display_modes ""
 "$B/hde-settings" --display-set DUMMY0 auto > /dev/null 2>&1; sleep 1
 # the Display page: another resolution from the list, nobody keeps it -> back by itself; then one that is kept
 pkill -x hde-settings 2>/dev/null; sleep 0.5
-"$B/hde-settings" display >> "$LOG" 2>&1 &      # (its widget positions go to the session log, see widget())
+SLOG="$OUT/settings-res.log"         # (not appended to the session log: hde-session's own writes would cover it)
+"$B/hde-settings" display > "$SLOG" 2>&1 &
 SRES=$!
 if wait_win "Hyggshi Settings" 60; then
     sleep 2
     shot 13-settings-display-resolution
-    if [ -n "$(widget display-resolution)" ]; then
-        click_widget display-resolution; sleep 0.8
+    if [ -n "$(widget display-resolution "$SLOG")" ]; then
+        click_widget display-resolution "$SLOG"; sleep 0.8
         xdotool key Down; sleep 0.3; xdotool key Return
         if wait_win "^Keep these display settings\?$" 40 && ! wait_geom DUMMY0 "1280x800\+0\+0" 5; then
             pass "a new resolution from the list applies at once and asks to keep it (DUMMY0 $(geom DUMMY0))"
@@ -415,20 +417,20 @@ if wait_win "Hyggshi Settings" 60; then
             else fail "... nobody answers: back to 1280x800 after the countdown (DUMMY0 $(geom DUMMY0))"; fi
             check "... and not remembered" sh -c "! grep -q '^display_modes=.*DUMMY0=' '$INI'"
             sleep 1.5
-            click_widget display-resolution; sleep 0.8
+            click_widget display-resolution "$SLOG"; sleep 0.8
             xdotool key Down; sleep 0.3; xdotool key Return
             if wait_win "^Keep these display settings\?$" 40; then
                 sleep 1.5
-                n0=$(nlog "hde-settings: project: kept")
-                click_widget project-keep
-                wait_more "hde-settings: project: kept" "$n0" 30
+                n0=$(grep -c "hde-settings: project: kept" "$SLOG")
+                click_widget project-keep "$SLOG"
+                i=0; while [ "$i" -lt 30 ] && [ "$(grep -c "hde-settings: project: kept" "$SLOG")" -le "$n0" ]; do sleep 0.1; i=$((i + 1)); done
                 sleep 1
                 g=$(geom DUMMY0)
                 if [ -n "$g" ] && [ "$g" != "1280x800+0+0" ] && grep -q "^display_modes=DUMMY0=${g%%+*}@" "$INI"; then
                     pass "'Keep changes' keeps it and remembers it for the next logins ($g)"
                 else fail "'Keep changes' keeps it and remembers it ($g; $(grep '^display_modes' "$INI"))"; fi
             else fail "a second choice from the list asks again"; fi
-        else fail "a new resolution from the list applies and asks to keep it (DUMMY0 $(geom DUMMY0); $(grep 'hde-settings: display' "$LOG" | tail -n 2 | tr '\n' ' '))"; fi
+        else fail "a new resolution from the list applies and asks to keep it (DUMMY0 $(geom DUMMY0); $(grep 'hde-settings: display' "$SLOG" | tail -n 2 | tr '\n' ' '))"; fi
     else fail "the Display page has a resolution list (no widget position logged)"; fi
 else fail "Settings opens at the Display page"; fi
 kill "$SRES" 2>/dev/null; sleep 0.5

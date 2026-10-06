@@ -56,21 +56,25 @@ say "packages"
 apt-get update
 NEW_BUILD_DEPS=""
 for p in $BUILD_DEPS; do installed "$p" || NEW_BUILD_DEPS="$NEW_BUILD_DEPS $p"; done
-RUNTIME="$RUNTIME_MIN"
+# what HDE needs: all of it, or stop
+# shellcheck disable=SC2086  # lists of package names
+apt-get install -y --no-install-recommends $BUILD_DEPS $RUNTIME_MIN
+# what its features use: each one that can be installed (a package missing or refused here is not worth failing for)
 if [ "$HDE_RUNTIME" != "minimal" ]; then
-    RUNTIME="$RUNTIME $RUNTIME_FULL"
-    for a in $POLKIT_AGENTS; do
-        if available "$a"; then RUNTIME="$RUNTIME $a"; break; fi
+    OPT=""
+    for p in $RUNTIME_FULL; do
+        if available "$p"; then OPT="$OPT $p"; else echo "note: $p is not available here: skipped"; fi
     done
-fi
-WANT=""
-for p in $BUILD_DEPS $RUNTIME; do
-    if available "$p"; then WANT="$WANT $p"
-    else echo "note: $p is not available here: skipped"
+    for a in $POLKIT_AGENTS; do
+        if available "$a"; then OPT="$OPT $a"; break; fi
+    done
+    # shellcheck disable=SC2086
+    if ! apt-get install -y --no-install-recommends $OPT; then
+        for p in $OPT; do
+            apt-get install -y --no-install-recommends "$p" || echo "note: $p could not be installed: skipped"
+        done
     fi
-done
-# shellcheck disable=SC2086  # a list of package names
-apt-get install -y --no-install-recommends $WANT
+fi
 
 if [ -n "${NEXWM_LOCAL_SRC:-}" ]; then
     say "source: $NEXWM_LOCAL_SRC"
@@ -123,12 +127,18 @@ say "runtime libraries"
 LIBS=$(for b in "$PREFIX"/bin/hde-*; do ldd "$b" 2>/dev/null | awk '$2 == "=>" && $3 ~ /^\// { print $3 }'; done | sort -u)
 PKGS=""
 for l in $LIBS; do
-    p=$( { dpkg -S "$l" 2>/dev/null || dpkg -S "$(readlink -f "$l")" 2>/dev/null || true; } | head -n 1)
-    p=${p%%:*}
+    p=""
+    for f in "$l" "$(readlink -f "$l")"; do
+        # "libgtk-3-0t64:amd64: /usr/lib/...", "pkg1, pkg2: /path"; not the "diversion by ..." lines
+        p=$(dpkg -S "$f" 2>/dev/null | grep -v '^diversion' | head -n 1 | sed -n 's/^\([^:, ]*\)[:,].*/\1/p')
+        [ -n "$p" ] && break
+    done
     [ -n "$p" ] && case " $PKGS " in *" $p "*) ;; *) PKGS="$PKGS $p" ;; esac
 done
 # shellcheck disable=SC2086
-[ -n "$PKGS" ] && apt-mark manual $PKGS >/dev/null
+if [ -n "$PKGS" ] && ! apt-mark manual $PKGS > /dev/null; then
+    echo "note: apt-mark could not mark every library package as manually installed"
+fi
 echo "kept:$PKGS"
 
 if [ "${KEEP_BUILD_DEPS:-}" != "true" ] && [ -n "$NEW_BUILD_DEPS" ]; then

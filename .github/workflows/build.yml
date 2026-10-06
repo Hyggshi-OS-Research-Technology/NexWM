@@ -245,7 +245,15 @@ jobs:
     - uses: actions/checkout@v5
 
     - name: build-nexwm.sh
-      run: NEXWM_LOCAL_SRC="$GITHUB_WORKSPACE" bash packaging/hyggshi-os/build-nexwm.sh
+      run: |
+        set +e
+        NEXWM_LOCAL_SRC="$GITHUB_WORKSPACE" bash packaging/hyggshi-os/build-nexwm.sh 2>&1 | tee /tmp/build-nexwm.log
+        rc=${PIPESTATUS[0]}
+        grep -E "^(note|ERROR|E): " /tmp/build-nexwm.log | sort -u | head -n 20 | sed 's/^/::warning::build-nexwm.sh: /'
+        if [ "$rc" != 0 ]; then
+          tail -n 25 /tmp/build-nexwm.log | sed 's/^/::error::build-nexwm.sh: /'
+          exit "$rc"
+        fi
 
     - name: The installed session
       run: |
