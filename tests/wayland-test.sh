@@ -49,7 +49,15 @@ shot() { grim "$OUT/shot-wl-$1.png" 2>/dev/null || info "grim could not take sho
 wait_log() { i=0; while [ "$i" -lt "${2:-60}" ]; do grep -q "$1" "$LOG" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 nlog() { nlog_n=$(grep -c "$1" "$LOG" 2>/dev/null); echo "${nlog_n:-0}"; }
 wait_more() { i=0; while [ "$i" -lt "${3:-60}" ]; do [ "$(nlog "$1")" -gt "$2" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
-running() { pgrep -x "$1" >/dev/null 2>&1; }
+# a live process of that name; zombies do not count: in a container nothing reaps the orphans of labwc (it double-forks
+# what its key bindings run), a real system's init does
+running() {
+    for rp in $(pgrep -x "$1" 2>/dev/null); do
+        rs=$(awk '{print $3}' "/proc/$rp/stat" 2>/dev/null)
+        [ -n "$rs" ] && [ "$rs" != Z ] && return 0
+    done
+    return 1
+}
 pixel() { convert "$1" -format "%[fx:int(255*r)] %[fx:int(255*g)] %[fx:int(255*b)]" -crop "1x1+$2+$3" info: 2>/dev/null; }
 
 info "labwc: $(labwc --version 2>/dev/null | head -n 1); gtk-layer-shell: $(pkg-config --modversion gtk-layer-shell-0 2>/dev/null || echo ?)"
@@ -79,7 +87,8 @@ sleep 2
 check "hde-start --wayland starts labwc ($sock)" running labwc
 for p in hde-panel hde-desktop; do check "$p is running inside labwc" running $p; done
 check "hde-session runs as the session inside labwc" grep -q "^hde-session: HDE build .*, Wayland session inside labwc" "$LOG"
-check "no hde-hotkeys / hde-xsettings / window manager on Wayland" sh -c "! pgrep -x hde-hotkeys && ! pgrep -x hde-xsettings && ! pgrep -x metacity"
+if ! running hde-hotkeys && ! running hde-xsettings && ! running metacity; then pass "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"
+else fail "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"; fi
 check "labwc's configuration is written from settings.ini (rc.xml, menu.xml, environment, themerc-override)" \
     grep -q "hde-settings: wayland: labwc .* configuration in .*/hde/labwc: rc.xml, menu.xml, environment, themerc-override" "$LOG"
 RC="$XDG_CONFIG_HOME/hde/labwc/rc.xml"
@@ -204,9 +213,9 @@ while [ $i -lt 75 ]; do
 done
 st=$(awk '{print $3}' "/proc/$START/stat" 2>/dev/null)
 if [ -z "$st" ] || [ "$st" = Z ]; then wait "$START" 2>/dev/null; fi
-if ! pgrep -x labwc >/dev/null 2>&1 && ! pgrep -x hde-panel >/dev/null 2>&1; then pass "logging out stops the session and labwc"
+if ! running labwc && ! running hde-panel && ! running hde-desktop; then pass "logging out stops the session and labwc"
 else
-    fail "logging out stops the session and labwc (still running: $(pgrep -a 'labwc|hde-' 2>/dev/null | tr '\n' ';'))"
+    fail "logging out stops the session and labwc (still running: $(pgrep -a 'labwc|hde-' 2>/dev/null | grep -v defunct | tr '\n' ';'))"
     tail -n 15 "$LOG" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
 fi
 check "... as the log says" grep -q "hde-session: stopping the Wayland compositor" "$LOG"
