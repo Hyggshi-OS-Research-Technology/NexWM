@@ -158,7 +158,7 @@ int main(void)
     s.dpi = 120;
     g_strlcpy(s.output, "eDP-1", sizeof s.output);
     char *t = hde_measure_screen_text(&s, "x");
-    CHECK(!strcmp(t, "1280 x 800 (eDP-1, text 125 %)"), "the screen in words: %s", t);
+    CHECK(!strcmp(t, "1280x800 (eDP-1, text 125 %)"), "the screen in words: %s", t);
     g_free(t);
     sm.dpi = 96;
     t = hde_measure_screen_text(&sm, "×");

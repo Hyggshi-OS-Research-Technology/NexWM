@@ -60,7 +60,7 @@ long hde_measure_strut_size(const long st[12], gboolean top);
  * separated by "; ". size: the panel height set in Settings > Panel (application px). */
 int hde_measure_check(const HdeScreen *s, const HdePanelGeo *p, gboolean top, int size, GString *why);
 
-/* "1920 x 1080 (eDP-1, text 125 %)"; times: the multiplication sign to use ("x" in logs, "×" in Settings) */
+/* "1920x1080 (eDP-1, text 125 %)"; times: "x" for logs, or e.g. "×" for Settings ("1920 × 1080 (...)") */
 char *hde_measure_screen_text(const HdeScreen *s, const char *times);
 /* The report of `hde-panel --measure` (several lines, ends with a newline) */
 char *hde_measure_report(const HdeScreen *s, const HdePanelGeo *p, gboolean top, int size);

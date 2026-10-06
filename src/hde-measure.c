@@ -237,7 +237,8 @@ int hde_measure_check(const HdeScreen *s, const HdePanelGeo *p, gboolean top, in
 char *hde_measure_screen_text(const HdeScreen *s, const char *times)
 {
     GString *t = g_string_new(NULL);
-    g_string_append_printf(t, "%d %s %d", s->mon_px.width, times, s->mon_px.height);
+    /* "1920x1080" in logs, "1920 × 1080" in Settings */
+    g_string_append_printf(t, strcmp(times, "x") ? "%d %s %d" : "%d%s%d", s->mon_px.width, times, s->mon_px.height);
     GPtrArray *parts = g_ptr_array_new_with_free_func(g_free);
     if (*s->output) g_ptr_array_add(parts, g_strdup(s->output));
     if (s->scale > 1) g_ptr_array_add(parts, g_strdup_printf("scale %d", s->scale));
