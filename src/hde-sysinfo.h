@@ -34,6 +34,8 @@ typedef struct {
  * Sorted by PSS, largest first. Returns how many were found (at most max). The PSS total is what the desktop
  * really costs (shared libraries counted once); the RSS total counts them in every process. */
 int hde_sysinfo_desktop_memory(HdeProcMem *out, int max, guint64 *total_pss, guint64 *total_rss);
+/* Leave this process out of the list (`hde-settings --about` measuring the desktop, not itself). */
+void hde_sysinfo_exclude_self(gboolean exclude);
 
 char *hde_format_bytes(guint64 bytes);              /* "86 MB", "3.8 GB" (g_free) */
 

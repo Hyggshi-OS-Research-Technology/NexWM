@@ -105,6 +105,7 @@ static char *extra_lines(Display *d, gboolean with_gtk)
 
 int about_cli(void)
 {
+    hde_sysinfo_exclude_self(TRUE);
     HdeSysInfo si;
     hde_sysinfo_load(&si);
     Display *d = XOpenDisplay(NULL);

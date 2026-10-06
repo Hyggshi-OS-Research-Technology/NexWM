@@ -221,6 +221,27 @@ static char *gpu_name(const char *dev, unsigned vendor, unsigned device)
     return res;
 }
 
+/* Graphics without a PCI display controller (Hyper-V, ARM boards, firmware framebuffer): name from the DRM driver
+ * or the framebuffer ("hyperv_drm", "hyperv_fb", "simpledrmdrmfb", "EFI VGA"). */
+static char *gpu_from_driver(const char *drv)
+{
+    static const struct { const char *match, *name; } map[] = {
+        { "hyperv", "Microsoft Hyper-V synthetic video" }, { "virtio", "Virtio GPU" }, { "vmwgfx", "VMware SVGA" },
+        { "svga", "VMware SVGA" }, { "qxl", "QXL (QEMU/SPICE)" }, { "bochs", "QEMU standard VGA" },
+        { "vboxvideo", "VirtualBox Graphics Adapter" }, { "cirrus", "Cirrus Logic (QEMU)" },
+        { "i915", "Intel graphics" }, { "xe", "Intel graphics" }, { "amdgpu", "AMD graphics" },
+        { "radeon", "AMD Radeon graphics" }, { "nouveau", "NVIDIA graphics (nouveau)" }, { "nvidia", "NVIDIA graphics" },
+        { "vc4", "Broadcom VideoCore (Raspberry Pi)" }, { "v3d", "Broadcom VideoCore (Raspberry Pi)" },
+        { "msm", "Qualcomm Adreno" }, { "panfrost", "Arm Mali" }, { "lima", "Arm Mali" }, { "etnaviv", "Vivante" },
+        { "simpledrm", "Basic framebuffer (no graphics driver loaded)" }, { "simplefb", "Basic framebuffer (no graphics driver loaded)" },
+        { "efifb", "Basic framebuffer (no graphics driver loaded)" }, { "EFI VGA", "Basic framebuffer (no graphics driver loaded)" },
+        { "vesa", "VESA framebuffer (no graphics driver loaded)" }, { "VESA", "VESA framebuffer (no graphics driver loaded)" },
+    };
+    for (guint i = 0; i < G_N_ELEMENTS(map); i++)
+        if (strstr(drv, map[i].match)) return g_strdup(map[i].name);
+    return g_strdup_printf("%s driver", drv);
+}
+
 static void load_gpu(HdeSysInfo *si)
 {
     GDir *d = g_dir_open("/sys/bus/pci/devices", 0, NULL);
@@ -240,13 +261,28 @@ static void load_gpu(HdeSysInfo *si)
     }
     if (d) g_dir_close(d);
     if (!all->len) {
-        char *t = g_file_read_link("/sys/class/drm/card0/device/driver", NULL);
-        if (t) {
-            char *b = g_path_get_basename(t);
-            g_string_append_printf(all, "%s driver", b);
-            g_free(b);
-            g_free(t);
+        for (int c = 0; c < 4 && !all->len; c++) {
+            char *link = g_strdup_printf("/sys/class/drm/card%d/device/driver", c);
+            char *t = g_file_read_link(link, NULL);
+            if (t) {
+                char *b = g_path_get_basename(t), *g = gpu_from_driver(b);
+                g_string_append(all, g);
+                g_free(g);
+                g_free(b);
+                g_free(t);
+            }
+            g_free(link);
         }
+    }
+    if (!all->len) {
+        char *fb = read_line("/proc/fb");             /* "0 hyperv_fb" */
+        const char *name = fb ? strchr(fb, ' ') : NULL;
+        if (name && *(name + 1)) {
+            char *g = gpu_from_driver(name + 1);
+            g_string_append(all, g);
+            g_free(g);
+        }
+        g_free(fb);
     }
     si->gpu = all->len ? g_string_free(all, FALSE) : (g_string_free(all, TRUE), NULL);
 }
@@ -324,6 +360,9 @@ static int cmp_pss(const void *a, const void *b)
     return x->pss < y->pss ? 1 : x->pss > y->pss ? -1 : 0;
 }
 
+static gboolean exclude_self;
+void hde_sysinfo_exclude_self(gboolean exclude) { exclude_self = exclude; }
+
 int hde_sysinfo_desktop_memory(HdeProcMem *out, int max, guint64 *total_pss, guint64 *total_rss)
 {
     GDir *d = g_dir_open("/proc", 0, NULL);
@@ -333,6 +372,7 @@ int hde_sysinfo_desktop_memory(HdeProcMem *out, int max, guint64 *total_pss, gui
     const char *e;
     while (d && (e = g_dir_read_name(d)) && n < max) {
         if (!isdigit((unsigned char)e[0])) continue;
+        if (exclude_self && atoi(e) == (int)getpid()) continue;
         char path[64];
         struct stat st;
         g_snprintf(path, sizeof path, "/proc/%s", e);

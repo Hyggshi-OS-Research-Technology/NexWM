@@ -83,8 +83,9 @@ static void rounded(cairo_t *cr, double x, double y, double w, double h, double 
     cairo_close_path(cr);
 }
 
+/* num_at: where the number sits (0.5 = middle; higher up when a window is drawn under it) */
 static void draw_screen(cairo_t *cr, double x, double y, double w, double h, gboolean lit, const char *num,
-                        const GdkRGBA *ac, const GdkRGBA *fg)
+                        double num_at, const GdkRGBA *ac, const GdkRGBA *fg)
 {
     rounded(cr, x, y, w, h, 4);
     if (lit) cairo_set_source_rgba(cr, ac->red, ac->green, ac->blue, 0.92);
@@ -99,12 +100,12 @@ static void draw_screen(cairo_t *cr, double x, double y, double w, double h, gbo
     cairo_fill(cr);
     if (!num) return;
     cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, h * 0.42);
+    cairo_set_font_size(cr, h * (num_at < 0.5 ? 0.36 : 0.42));
     cairo_text_extents_t te;
     cairo_text_extents(cr, num, &te);
     if (lit) cairo_set_source_rgba(cr, 1, 1, 1, 0.95);
     else cairo_set_source_rgba(cr, fg->red, fg->green, fg->blue, 0.40);
-    cairo_move_to(cr, x + (w - te.width) / 2 - te.x_bearing, y + (h - te.height) / 2 - te.y_bearing);
+    cairo_move_to(cr, x + (w - te.width) / 2 - te.x_bearing, y + h * num_at - te.height / 2 - te.y_bearing);
     cairo_show_text(cr, num);
 }
 
@@ -119,11 +120,14 @@ static gboolean draw_layout(GtkWidget *w, cairo_t *cr, gpointer data)
     if (sh > H - 16) { sh = H - 16; sw = sh / 0.62; }
     double x1 = (W - 2 * sw - gap) / 2, x2 = x1 + sw + gap, y = (H - sh - 8) / 2;
     gboolean l1 = m != HDE_PROJECT_SECOND, l2 = m != HDE_PROJECT_PC;
-    draw_screen(cr, x1, y, sw, sh, l1, "1", &ac, &fg);
-    draw_screen(cr, x2, y, sw, sh, l2, m == HDE_PROJECT_DUPLICATE ? "1" : "2", &ac, &fg);
+    gboolean win = m == HDE_PROJECT_DUPLICATE || m == HDE_PROJECT_EXTEND;
+    gboolean dim = !gtk_widget_is_sensitive(w);       /* not possible now (one screen): a faded picture */
+    if (dim) cairo_push_group(cr);
+    draw_screen(cr, x1, y, sw, sh, l1, "1", win ? 0.38 : 0.5, &ac, &fg);
+    draw_screen(cr, x2, y, sw, sh, l2, m == HDE_PROJECT_DUPLICATE ? "1" : "2", win ? 0.38 : 0.5, &ac, &fg);
     /* a window: on both screens at the same place (Duplicate), across both (Extend) */
     cairo_set_source_rgba(cr, 1, 1, 1, 0.85);
-    double wy = y + sh * 0.68, wh = sh * 0.16;
+    double wy = y + sh * 0.66, wh = sh * 0.15;
     if (m == HDE_PROJECT_DUPLICATE) {
         rounded(cr, x1 + sw * 0.12, wy, sw * 0.40, wh, 1.5);
         cairo_fill(cr);
@@ -134,6 +138,10 @@ static gboolean draw_layout(GtkWidget *w, cairo_t *cr, gpointer data)
         cairo_fill(cr);
         rounded(cr, x2, wy, sw * 0.40, wh, 1.5);
         cairo_fill(cr);
+    }
+    if (dim) {
+        cairo_pop_group_to_source(cr);
+        cairo_paint_with_alpha(cr, 0.35);
     }
     return FALSE;
 }
@@ -543,12 +551,26 @@ static gboolean project_next_idle(gpointer d)
     return G_SOURCE_REMOVE;
 }
 
+static gboolean project_replaced_idle(gpointer d)
+{
+    (void)d;
+    if (!pj.busy && !confirm_open) {
+        fprintf(stderr, "hde-settings: project: another Project window took over\n");
+        project_quit();
+    }
+    return G_SOURCE_REMOVE;
+}
+
 static GdkFilterReturn project_filter(GdkXEvent *xev, GdkEvent *ev, gpointer d)
 {
     (void)ev; (void)d;
     XEvent *x = (XEvent *)xev;
     if (x->type == ClientMessage && x->xclient.message_type == pj.cmd_atom) {
         g_idle_add(project_next_idle, GINT_TO_POINTER((int)x->xclient.data.l[0]));
+        return GDK_FILTER_REMOVE;
+    }
+    if (x->type == SelectionClear) {            /* F8 pressed twice at the same moment: the newer window stays */
+        g_idle_add(project_replaced_idle, NULL);
         return GDK_FILTER_REMOVE;
     }
     return GDK_FILTER_CONTINUE;

@@ -823,6 +823,7 @@ static void ui_build(void)
     g_signal_connect(ui.win, "key-press-event", G_CALLBACK(on_ui_key), NULL);
     ui.stack = gtk_stack_new();
     gtk_stack_set_transition_type(GTK_STACK(ui.stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(ui.stack), FALSE);    /* the start page as small as it is */
     gtk_container_add(GTK_CONTAINER(ui.win), ui.stack);
 
     GtkWidget *start = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);

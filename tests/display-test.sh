@@ -131,12 +131,21 @@ if ! connected DUMMY0 || ! xrandr 2>/dev/null | grep -q "^DUMMY1 "; then
 fi
 pass "Xorg with the dummy driver has RandR outputs (DUMMY0 on: $(geom DUMMY0))"
 
-# a second screen is "plugged in": the dummy driver reports an output as connected once it had a mode
-xrandr --output DUMMY1 --mode 1024x768 --right-of DUMMY0 2>/dev/null
-xrandr --output DUMMY1 --off 2>/dev/null
+# a second screen is "plugged in": the dummy driver reports an output as connected once it had a mode (a disconnected
+# output has no modes: give it one first, like xpra does)
+plug() {    # OUTPUT RIGHT_OF [off]
+    xrandr --addmode "$1" 1024x768 2>> "$OUT/xrandr.log"
+    xrandr --output "$1" --mode 1024x768 --right-of "$2" 2>> "$OUT/xrandr.log"
+    [ "${3:-}" = off ] && xrandr --output "$1" --off 2>> "$OUT/xrandr.log"
+    return 0
+}
+plug DUMMY1 DUMMY0 off
 sleep 0.5
 if connected DUMMY1 && [ -z "$(geom DUMMY1)" ]; then pass "a second screen (DUMMY1) is connected and off, like a monitor just plugged in"
-else fail "a second screen (DUMMY1) is connected and off ($(xrandr | grep '^DUMMY1'))"; fi
+else
+    fail "a second screen (DUMMY1) is connected and off ($(xrandr | grep '^DUMMY1 '))"
+    sed 's/^/INFO:   xrandr: /' "$OUT/xrandr.log" | tee -a "$OUT/results.txt"
+fi
 
 export HDE_DEBUG=1 HDE_DISPLAY_CONFIRM_SECONDS=5
 "$B/hde-session" > "$LOG" 2>&1 &
@@ -227,7 +236,9 @@ else fail "Duplicate (DUMMY0 $g0, DUMMY1 $g1: $(cat "$OUT/duplicate.txt"))"; fi
 sleep 1.5
 shot 06-duplicate
 
+close_project() { win_visible "^Project$" && xdotool key Escape && sleep 0.5; return 0; }
 # ---------- 5. Second screen only: nobody keeps it -> back by itself ----------
+close_project
 xdotool key F8
 if wait_win "^Project$"; then
     sleep 0.6
@@ -246,6 +257,7 @@ else fail "F8 opens the Project window (2nd time)"; fi
 sleep 1
 
 # ---------- 6. Second screen only, kept ----------
+close_project
 xdotool key F8
 if wait_win "^Project$"; then
     sleep 0.6
@@ -265,6 +277,7 @@ if wait_win "^Project$"; then
 else fail "F8 opens the Project window (3rd time)"; fi
 
 # ---------- 7. PC screen only with Super+P ----------
+close_project
 xdotool key super+p
 if wait_win "^Project$"; then
     pass "Super+P opens the Project window too"
@@ -277,6 +290,7 @@ else fail "Super+P opens the Project window"; fi
 sleep 1.5
 
 # ---------- 8. the layout chosen with F8 comes back at login ----------
+close_project
 set_ini display_mode extend
 pkill -x hde-xsettings; sleep 0.5
 "$B/hde-xsettings" > "$OUT/xsettings-login.log" 2>&1 &
@@ -286,7 +300,7 @@ else fail "at login the layout chosen earlier comes back (DUMMY1 $(geom DUMMY1))
 check "... and hde-xsettings logs it" grep -q "hde-xsettings: displays: the layout chosen earlier for DUMMY0,DUMMY1: Extend" "$OUT/xsettings-login.log"
 
 # ---------- 9. a screen plugged in: the Project window asks ----------
-xrandr --output DUMMY2 --mode 1024x768 --right-of DUMMY1 2>/dev/null
+plug DUMMY2 DUMMY1
 if wait_win "^Project$" 80; then
     pass "a third screen (DUMMY2) plugged in: the Project window opens by itself"
     check "... saying which screen is new" grep -q "hde-xsettings: displays: connected: DUMMY2 (display_connect=ask)" "$OUT/xsettings-login.log"
@@ -327,6 +341,8 @@ check "Settings opens" wait_win "Hyggshi Settings"
 shot 10-settings-display
 "$B/hde-settings" about; sleep 3
 shot 11-settings-about
+xdotool mousemove 760 520; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do xdotool click 5; done; sleep 1
+shot 12-settings-about-memory
 grep "hde-settings: about:" "$OUT/settings.log" | head -n 1 | sed 's/^/INFO: /' | tee -a "$OUT/results.txt"
 kill $SETTINGS 2>/dev/null
 
