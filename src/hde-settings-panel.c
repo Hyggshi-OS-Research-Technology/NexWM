@@ -6,6 +6,9 @@
 #include "hde-panel-config.h"
 #include "hde-osinfo.h"
 #include "hde-theme.h"
+#include "hde-measure.h"
+#include "hde-ipc.h"
+#include <gdk/gdkx.h>
 #include <gio/gdesktopappinfo.h>
 #include <string.h>
 
@@ -581,9 +584,116 @@ static void on_reset_panel(GtkButton *b, gpointer d)
     if (preview_area) gtk_widget_queue_draw(preview_area);
 }
 
+/* ---------------------------------------------------------------- Screen: the screen and the panel, measured
+ * What the X server says (hde-measure.c): the main screen, where the panel window really is and how high, the space
+ * kept free for it and the room the window manager leaves to windows. "Measure again" has the panel measure the
+ * screen itself and put itself right (HDE_CMD_PLACE), then shows the result. */
+static GtkWidget *measure_desc, *measure_warn;
+static guint measure_timer;
+
+static gboolean measure_refresh(gpointer d)
+{
+    (void)d;
+    measure_timer = 0;
+    if (!measure_desc || !gtk_widget_get_mapped(measure_desc)) return G_SOURCE_REMOVE;
+    HdeScreen s;
+    hde_measure_screen(&s);
+    HdePanelConfig c = { 0 };
+    hde_panel_config_load(&c);
+    char *scr = hde_measure_screen_text(&s, "×");
+    GString *t = g_string_new(scr), *why = g_string_new(NULL);
+    int bad = 0;
+    HdePanelGeo p;
+    if (!s.x11) {
+        g_string_append(t, ". On Wayland the compositor fits the panel to the screen itself.");
+    } else if (!hde_measure_panel(0, &p) || !p.mapped) {
+        g_string_append(t, p.found ? ". The panel window is not shown." : ". The panel is not running.");
+        fprintf(stderr, "hde-settings: panel measured: screen %dx%d at %d,%d; no panel\n", s.mon_px.width, s.mon_px.height,
+                s.mon_px.x, s.mon_px.y);
+    } else {
+        bad = hde_measure_check(&s, &p, c.top, c.size, why);
+        long kept = p.have_strut ? hde_measure_strut_size(p.strut, c.top) : 0;
+        g_string_append_printf(t, ". The panel: %d × %d at the %s edge, %ld px kept free for it", p.win.width,
+                               p.win.height, c.top ? "top" : "bottom", kept);
+        if (p.have_work) g_string_append_printf(t, "; windows get %d × %d", p.work.width, p.work.height);
+        g_string_append(t, bad ? "." : ". It fits.");
+        fprintf(stderr, "hde-settings: panel measured: screen %dx%d at %d,%d; panel %d,%d %dx%d, %ld px reserved at the %s; "
+                "windows get %dx%d at %d,%d: %s%s\n", s.mon_px.width, s.mon_px.height, s.mon_px.x, s.mon_px.y, p.win.x,
+                p.win.y, p.win.width, p.win.height, kept, c.top ? "top" : "bottom", p.work.width, p.work.height, p.work.x,
+                p.work.y, bad ? "does not fit: " : "fits", why->str);
+    }
+    gtk_label_set_text(GTK_LABEL(measure_desc), t->str);
+    if (bad) {
+        char *w = g_strdup_printf("%c%s. “Measure again” lets the panel put itself right.", g_ascii_toupper(why->str[0]),
+                                  why->str + 1);
+        gtk_label_set_text(GTK_LABEL(measure_warn), w);
+        g_free(w);
+    }
+    gtk_widget_set_visible(measure_warn, bad != 0);
+    g_string_free(t, TRUE);
+    g_string_free(why, TRUE);
+    g_free(scr);
+    hde_panel_config_clear(&c);
+    return G_SOURCE_REMOVE;
+}
+
+static void measure_later(guint ms)
+{
+    if (!measure_desc) return;
+    if (measure_timer) g_source_remove(measure_timer);
+    measure_timer = g_timeout_add(ms, measure_refresh, NULL);
+}
+
+static void on_measure_map(GtkWidget *w, gpointer d) { (void)w; (void)d; measure_later(300); }
+static void on_measure_screens(GdkScreen *s, gpointer d) { (void)s; (void)d; measure_later(1500); }
+
+static void on_measure_again(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    GdkDisplay *dpy = gdk_display_get_default();
+    if (!GDK_IS_X11_DISPLAY(dpy)) {
+        settings_status("On Wayland the compositor fits the panel to the screen");
+        measure_later(10);
+        return;
+    }
+    Display *x = GDK_DISPLAY_XDISPLAY(dpy);
+    if (hde_ipc_send(x, HDE_CMD_PLACE, 0, CurrentTime) != 0) {
+        settings_status("The panel is not running");
+        measure_later(10);
+        return;
+    }
+    XFlush(x);
+    fprintf(stderr, "hde-settings: panel: measure again\n");
+    settings_status("The panel measures the screen again…");
+    gtk_label_set_text(GTK_LABEL(measure_desc), "Measuring…");
+    measure_later(1800);     /* the panel puts itself at once and measures 0.6 s later (corrections 0.7 s apart) */
+}
+
+static GtkWidget *screen_row(void)
+{
+    GtkWidget *btn = gtk_button_new_with_mnemonic("_Measure again");
+    gtk_widget_set_tooltip_text(btn, "The panel measures the screen and its own window again and puts itself right");
+    g_signal_connect(btn, "clicked", G_CALLBACK(on_measure_again), NULL);
+    debug_geometry_watch(btn, "panel-measure");
+    GtkWidget *row = row_box("Screen", "Measuring…", btn);
+    measure_desc = g_object_get_data(G_OBJECT(row), "hde-description");
+    measure_warn = gtk_label_new(NULL);
+    gtk_label_set_line_wrap(GTK_LABEL(measure_warn), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(measure_warn), 0);
+    gtk_widget_set_halign(measure_warn, GTK_ALIGN_START);
+    gtk_style_context_add_class(gtk_widget_get_style_context(measure_warn), "error-text");
+    gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(measure_desc)), measure_warn, FALSE, FALSE, 0);
+    gtk_widget_set_no_show_all(measure_warn, TRUE);
+    g_signal_connect(measure_desc, "map", G_CALLBACK(on_measure_map), NULL);
+    g_signal_connect(gdk_screen_get_default(), "monitors-changed", G_CALLBACK(on_measure_screens), NULL);
+    g_signal_connect(gdk_screen_get_default(), "size-changed", G_CALLBACK(on_measure_screens), NULL);
+    return row;
+}
+
 static void on_settings_file_changed(gpointer d)
 {
     (void)d;
+    measure_later(1500);      /* the panel may have moved (position, height): measure it again once it is there */
     /* pinned / favorite apps changed elsewhere (right-click in the Start menu): show them */
     refresh_launchers();
     refresh_favorites();
@@ -622,6 +732,7 @@ GtkWidget *page_panel_new(void)
     g_signal_connect(op, "value-changed", G_CALLBACK(on_opacity), NULL);
     gtk_container_add(GTK_CONTAINER(card), row_box("Opacity", "Below 100 % the desktop shows through the panel (needs a "
                                                    "compositing window manager, e.g. Metacity, Marco, Mutter, Muffin; always on Wayland)", op));
+    gtk_container_add(GTK_CONTAINER(card), screen_row());
     gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Items on the panel"), FALSE, FALSE, 0);

@@ -920,10 +920,11 @@ static char *pick_icon(const char *spec)
 
 static GtkWidget *make_sidebar(void)
 {
+    /* no background of its own: the scrolled window around it has the sidebar's (see on_activate) */
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_set_size_request(box, 250, -1);
     gtk_container_set_border_width(GTK_CONTAINER(box), 14);
-    gtk_style_context_add_class(gtk_widget_get_style_context(box), "sidebar");
+    gtk_style_context_add_class(gtk_widget_get_style_context(box), "sidebar-items");
     GtkWidget *brand = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(brand), "<b>Hyggshi Settings</b>");
     gtk_widget_set_halign(brand, GTK_ALIGN_START);
@@ -957,6 +958,7 @@ static void load_css(void)
     const char *a = ti.accent;
     char *data = g_strdup_printf(
         ".sidebar { background-color: shade(@theme_bg_color, 0.96); border-right: 1px solid alpha(@theme_fg_color, 0.10); }"
+        ".sidebar viewport, .sidebar-items { background: none; border: none; }"
         ".sidebar button { color: @theme_fg_color; padding: 9px 10px; border-radius: 10px; }"
         ".sidebar button:checked { background: %s; color: white; }"
         ".sidebar button:checked label, .sidebar button:checked image { color: white; }"
@@ -1039,7 +1041,12 @@ static void on_activate(GtkApplication *app, gpointer d)
 
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_container_add(GTK_CONTAINER(window), root);
+    /* The sidebar's background is on the scrolled window, not on the box of buttons inside it. GtkViewport draws its
+     * child through a pixel cache that it makes opaque (no alpha channel) as soon as the child has an opaque
+     * background, and the child's border (border_width 14) is never painted in it: with the background on the box,
+     * that border showed as a black frame around the sidebar, in light and dark mode alike. */
     GtkWidget *sidebar_scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_style_context_add_class(gtk_widget_get_style_context(sidebar_scroll), "sidebar");
     gtk_widget_set_size_request(sidebar_scroll, 250, -1);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sidebar_scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     sidebar = make_sidebar();

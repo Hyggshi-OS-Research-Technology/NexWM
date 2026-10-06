@@ -44,6 +44,7 @@
 #include "hde-powersave.h"
 #include "hde-flyout.h"
 #include "hde-run.h"
+#include "hde-measure.h"
 #ifdef HAVE_WAYLAND_TASKBAR
 #include "hde-wltaskbar.h"
 #endif
@@ -750,6 +751,10 @@ static void bell_clicked(GtkWidget *bell, gpointer d) { (void)d; open_cc(bell, H
 /* ---------- command channel: X ClientMessage (hde-ipc.h) and D-Bus ---------- */
 typedef struct { long cmd, arg; guint32 time; } PanelCmd;
 
+static guint place_id;                /* a pending panel_place() */
+static char *last_measured;           /* the last "measured: ... fits" line (not written twice) */
+static gboolean panel_place(gpointer d);
+
 static gboolean run_panel_cmd(gpointer p)
 {
     PanelCmd *c = p;
@@ -779,6 +784,12 @@ static gboolean run_panel_cmd(gpointer p)
                      hde_control_page() == HDE_CC_MAIN);
         break;
     case HDE_CMD_BATTERY: open_battery(NULL); break;
+    case HDE_CMD_PLACE:                         /* Settings > Panel > Screen: Measure again; hde-panel --measure */
+        if (place_id) g_source_remove(place_id);
+        place_id = 0;
+        g_clear_pointer(&last_measured, g_free);    /* write the measurement even if nothing changed */
+        panel_place((gpointer)"asked to measure again");
+        break;
     default: break;
     }
     g_free(c);
@@ -977,10 +988,37 @@ static void log_panel_window(int x, int y, int w, int h, gboolean with_position)
     else DBG("window: %dx%d", w, h);
 }
 
+/* ---------- measuring: is the panel really where it belongs? (X11) ----------
+ * After every placement the panel measures the screen (straight from the X server: hde-measure.c) and its own window
+ * the way the X server has it, and corrects what is wrong: a window manager that put it elsewhere, a window higher than
+ * asked for (then all of it goes on the screen, that much higher up, and all of it is reserved, so that maximized
+ * windows keep clear of it), a reserved space that does not cover it. At most 4 corrections in a row (then it stays
+ * where it is, with the space it takes reserved). Configure events start a measurement whenever the window is not
+ * where it was put: a window manager that moves it later on is noticed as well. */
+static guint measure_id;
+static int measure_round;          /* corrections in a row (since the panel last fitted, or was placed) */
+static int height_asks;            /* times the right height was asked for since it last had it */
+static int unmapped_tries;         /* measurements put off because the window was not shown yet */
+static int accepted_h;             /* device px: a height the panel had to accept (0: the one of Settings > Panel) */
+static GdkRectangle panel_want;    /* where the panel was put: application px, root coordinates */
+
+static gboolean panel_measure(gpointer d);
+
+static void measure_soon(guint ms)
+{
+    if (!panel_win || !hde_is_x11() || hde_wl_is_layer(GTK_WINDOW(panel_win))) return;
+    if (measure_id) g_source_remove(measure_id);
+    measure_id = g_timeout_add(ms, panel_measure, NULL);
+}
+
 static gboolean on_panel_configure(GtkWidget *w, GdkEventConfigure *e, gpointer d)
 {
     (void)w; (void)d;
-    if (!hde_wl_is_layer(GTK_WINDOW(panel_win))) log_panel_window(e->x, e->y, e->width, e->height, TRUE);
+    if (hde_wl_is_layer(GTK_WINDOW(panel_win))) return FALSE;
+    log_panel_window(e->x, e->y, e->width, e->height, TRUE);
+    if (panel_want.width && (e->x != panel_want.x || e->y != panel_want.y || e->width != panel_want.width ||
+                             e->height != panel_want.height))
+        measure_soon(300);              /* moved or resized by someone else, or not there yet: have a look */
     return FALSE;
 }
 
@@ -991,33 +1029,111 @@ static void on_panel_allocate(GtkWidget *w, GdkRectangle *a, gpointer d)
 }
 
 /* ---------- strut: reserve space so windows do not cover the panel (X11) ---------- */
-static void set_strut(GtkWidget *win, GdkRectangle *mon)
+/* r: the panel window on screen s, device pixels (what window managers count in) */
+static void set_strut(const HdeScreen *s, const GdkRectangle *r)
 {
-    GdkWindow *gw = gtk_widget_get_window(win);
+    GdkWindow *gw = panel_win ? gtk_widget_get_window(panel_win) : NULL;
     if (!gw || !GDK_IS_X11_WINDOW(gw)) return;
-    GdkScreen *scr = gtk_widget_get_screen(win);
-    gulong st[12] = { 0 };
-    if (pcfg.top) {
-        st[2] = mon->y + pcfg.size;
-        st[8] = mon->x;
-        st[9] = mon->x + mon->width - 1;
-    } else {
-        st[3] = pcfg.size + (gdk_screen_get_height(scr) - (mon->y + mon->height));
-        st[10] = mon->x;
-        st[11] = mon->x + mon->width - 1;
+    long st[12];
+    hde_measure_strut(s, pcfg.top, r, st);
+    gulong v[12];
+    for (int i = 0; i < 12; i++) v[i] = (gulong)st[i];
+    gdk_property_change(gw, gdk_atom_intern("_NET_WM_STRUT_PARTIAL", FALSE), gdk_atom_intern("CARDINAL", FALSE), 32,
+                        GDK_PROP_MODE_REPLACE, (const guchar *)v, 12);
+    gulong s4[4] = { 0, 0, v[2], v[3] };
+    gdk_property_change(gw, gdk_atom_intern("_NET_WM_STRUT", FALSE), gdk_atom_intern("CARDINAL", FALSE), 32,
+                        GDK_PROP_MODE_REPLACE, (const guchar *)s4, 4);
+}
+
+/* put the panel window at r (device px) on screen s, and reserve that space */
+static void panel_put(const HdeScreen *s, const GdkRectangle *r)
+{
+    panel_want = (GdkRectangle){ r->x / s->scale, r->y / s->scale, r->width / s->scale, r->height / s->scale };
+    gtk_widget_set_size_request(panel_win, panel_want.width, pcfg.size);
+    gtk_window_resize(GTK_WINDOW(panel_win), panel_want.width, panel_want.height);
+    gtk_window_move(GTK_WINDOW(panel_win), panel_want.x, panel_want.y);
+    set_strut(s, r);
+}
+
+static gboolean panel_measure(gpointer d)
+{
+    (void)d;
+    measure_id = 0;
+    GdkWindow *gw = panel_win ? gtk_widget_get_window(panel_win) : NULL;
+    if (!gw || !GDK_IS_X11_WINDOW(gw) || !gtk_widget_get_mapped(panel_win)) return G_SOURCE_REMOVE;
+    HdeScreen s;
+    hde_measure_screen(&s);
+    HdePanelGeo p;
+    if (!hde_measure_panel(GDK_WINDOW_XID(gw), &p)) return G_SOURCE_REMOVE;
+    if (!p.mapped) {                    /* not on the screen yet (the window manager is about to show it): wait */
+        if (unmapped_tries++ < 20) measure_soon(500);
+        return G_SOURCE_REMOVE;
     }
-    gdk_property_change(gw, gdk_atom_intern("_NET_WM_STRUT_PARTIAL", FALSE),
-                        gdk_atom_intern("CARDINAL", FALSE), 32, GDK_PROP_MODE_REPLACE,
-                        (const guchar *)st, 12);
-    gulong s4[4] = { 0, 0, st[2], st[3] };
-    gdk_property_change(gw, gdk_atom_intern("_NET_WM_STRUT", FALSE),
-                        gdk_atom_intern("CARDINAL", FALSE), 32, GDK_PROP_MODE_REPLACE,
-                        (const guchar *)s4, 4);
+    unmapped_tries = 0;
+    int want_h = accepted_h ? accepted_h : pcfg.size * s.scale;
+    GdkRectangle want = hde_measure_panel_rect(&s, pcfg.top, want_h);
+    long need[12];
+    hde_measure_strut(&s, pcfg.top, &p.win, need);
+    gboolean pos_ok = p.win.x == want.x && p.win.y == want.y && p.win.width == want.width;
+    gboolean h_ok = p.win.height == want_h;
+    long have = p.have_strut ? hde_measure_strut_size(p.strut, pcfg.top) : 0;
+    gboolean strut_ok = p.have_strut && have >= hde_measure_strut_size(need, pcfg.top);
+    char *scr = hde_measure_screen_text(&s, "x");
+    if (pos_ok && h_ok && strut_ok) {
+        measure_round = height_asks = 0;
+        char *line = g_strdup_printf("screen %s at %d,%d (from %s, X screen %dx%d); panel %d,%d %dx%d, %ld px reserved "
+                                     "at the %s: fits%s", scr, s.mon_px.x, s.mon_px.y, s.source, s.root_w, s.root_h,
+                                     p.win.x, p.win.y, p.win.width, p.win.height, have, pcfg.top ? "top" : "bottom",
+                                     accepted_h ? " (at the height it keeps)" : "");
+        if (g_strcmp0(line, last_measured)) {
+            fprintf(stderr, "hde-panel: measured: %s\n", line);
+            g_free(last_measured);
+            last_measured = line;
+        } else g_free(line);
+        g_free(scr);
+        return G_SOURCE_REMOVE;
+    }
+    g_clear_pointer(&last_measured, g_free);
+    GString *what = g_string_new(NULL);
+    if (!pos_ok || !h_ok)
+        g_string_append_printf(what, "the panel window is at %d,%d %dx%d instead of %d,%d %dx%d", p.win.x, p.win.y,
+                               p.win.width, p.win.height, want.x, want.y, want.width, want.height);
+    if (!strut_ok)
+        g_string_append_printf(what, "%sonly %ld px are reserved for it, it needs %ld", what->len ? "; " : "", have,
+                               hde_measure_strut_size(need, pcfg.top));
+    if (measure_round >= 4) {
+        /* it cannot be put right: at least keep the windows clear of the panel where it is (and do not start over
+         * at its next configure event) */
+        set_strut(&s, &p.win);
+        panel_want = (GdkRectangle){ p.win.x / s.scale, p.win.y / s.scale, p.win.width / s.scale, p.win.height / s.scale };
+        fprintf(stderr, "hde-panel: measured: %s (screen %s at %d,%d): left there after %d corrections, the space it "
+                "takes reserved\n", what->str, scr, s.mon_px.x, s.mon_px.y, measure_round);
+    } else {
+        measure_round++;
+        const char *how = "moved back";
+        if (!h_ok && height_asks >= 2 && p.win.height > 0 && p.win.height <= s.mon_px.height / 2) {
+            /* it keeps another height (the window manager insists, or the contents need it): take it, with all of it
+             * on the screen and all of it reserved */
+            accepted_h = p.win.height;
+            want = hde_measure_panel_rect(&s, pcfg.top, accepted_h);
+            how = "placed for the height it keeps";
+        } else if (!h_ok) {
+            /* GTK asks the window manager for a size only when it wants another one: ask directly */
+            height_asks++;
+            gdk_window_move_resize(gw, want.x / s.scale, want.y / s.scale, want.width / s.scale, want.height / s.scale);
+            how = "asked for the right height again";
+        } else if (pos_ok) how = "its space reserved again";
+        panel_put(&s, &want);
+        fprintf(stderr, "hde-panel: measured: %s (screen %s at %d,%d): %s (correction %d)\n", what->str, scr, s.mon_px.x,
+                s.mon_px.y, how, measure_round);
+        measure_soon(700);
+    }
+    g_string_free(what, TRUE);
+    g_free(scr);
+    return G_SOURCE_REMOVE;
 }
 
 /* ---------- where the panel goes: top or bottom of the primary screen (F8, a monitor plugged in, Settings) ---------- */
-static guint place_id;
-
 /* d: why ("screens changed", "settings changed", "started"), written in the log */
 static gboolean panel_place(gpointer d)
 {
@@ -1042,13 +1158,21 @@ static gboolean panel_place(gpointer d)
         return G_SOURCE_REMOVE;
     }
     if (!gtk_widget_get_window(panel_win)) return G_SOURCE_REMOVE;
-    int y = pcfg.top ? geo.y : geo.y + geo.height - pcfg.size;
-    gtk_widget_set_size_request(panel_win, geo.width, pcfg.size);
-    gtk_window_resize(GTK_WINDOW(panel_win), geo.width, pcfg.size);
-    gtk_window_move(GTK_WINDOW(panel_win), geo.x, y);
-    set_strut(panel_win, &geo);
+    HdeScreen s;
+    hde_measure_screen(&s);             /* GTK's main screen, checked against the X server */
+    geo = s.mon;
+    accepted_h = 0;
+    measure_round = height_asks = unmapped_tries = 0;
+    GdkRectangle r = hde_measure_panel_rect(&s, pcfg.top, pcfg.size * s.scale);
+    panel_put(&s, &r);
     fprintf(stderr, "hde-panel: %s: panel at %d,%d %dx%d (primary screen %dx%d+%d+%d, %d screen(s))\n",
-            why, geo.x, y, geo.width, pcfg.size, geo.width, geo.height, geo.x, geo.y, gdk_display_get_n_monitors(dpy));
+            why, panel_want.x, panel_want.y, panel_want.width, pcfg.size, geo.width, geo.height, geo.x, geo.y,
+            gdk_display_get_n_monitors(dpy));
+    if (strcmp(s.source, "GTK"))
+        fprintf(stderr, "hde-panel: measured: the screen is %dx%d at %d,%d (from %s; GTK said %dx%d at %d,%d)\n",
+                s.mon_px.width, s.mon_px.height, s.mon_px.x, s.mon_px.y, s.source, s.gtk_px.width, s.gtk_px.height,
+                s.gtk_px.x, s.gtk_px.y);
+    measure_soon(600);
     return G_SOURCE_REMOVE;
 }
 
@@ -1640,7 +1764,47 @@ static void usage(void)
            "       hde-panel --control-center[=PAGE]   open / close the Control Center (Super+A); PAGE: wifi,\n"
            "                                 bluetooth, sound or notifications\n"
            "       hde-panel --notifications the Control Center at its notifications (Super+N)\n"
-           "       hde-panel --battery       open / close the battery panel\n");
+           "       hde-panel --battery       open / close the battery panel\n"
+           "       hde-panel --measure       measure the screen and the panel (the panel puts itself right first);\n"
+           "                                 exit status 0: it fits, 1: it does not, 2: no panel\n");
+}
+
+/* hde-panel --measure: the running panel measures the screen again and puts itself right, then this prints what the
+ * X server says: the screen, the panel window, the space reserved for it and the room the window manager leaves to
+ * windows. Exit status: 0 = the panel fits, 1 = it does not, 2 = no panel running. */
+static int measure_cli(int argc, char **argv)
+{
+    if (!gtk_init_check(&argc, &argv)) {
+        fprintf(stderr, "hde-panel: cannot open the display\n");
+        return 2;
+    }
+    hde_panel_config_load(&pcfg);
+    HdeScreen s;
+    hde_measure_screen(&s);
+    if (!s.x11) {
+        char *t = hde_measure_screen_text(&s, "x");
+        printf("Screen:      %s\nPanel:       %s, %d px: on Wayland the compositor fits it to the screen (layer shell)\n", t,
+               pcfg.top ? "top" : "bottom", pcfg.size);
+        g_free(t);
+        return 0;
+    }
+    Display *x = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
+    gboolean asked = hde_ipc_send(x, HDE_CMD_PLACE, 0, CurrentTime) == 0;
+    XFlush(x);
+    HdePanelGeo p;
+    gboolean found = FALSE;
+    /* the panel puts itself at once and measures 0.6 s later; corrections, if any, follow 0.7 s apart */
+    for (int i = 0; i < (asked ? 45 : 1); i++) {
+        if (asked) g_usleep(100000);
+        hde_measure_screen(&s);
+        found = hde_measure_panel(0, &p);
+        if (i >= 14 && found && !hde_measure_check(&s, &p, pcfg.top, pcfg.size, NULL)) break;
+    }
+    char *rep = hde_measure_report(&s, &p, pcfg.top, pcfg.size);
+    fputs(rep, stdout);
+    g_free(rep);
+    if (!found) return 2;
+    return hde_measure_check(&s, &p, pcfg.top, pcfg.size, NULL) ? 1 : 0;
 }
 
 int main(int argc, char **argv)
@@ -1652,6 +1816,7 @@ int main(int argc, char **argv)
         { "--notifications", HDE_CMD_NOTIFICATIONS }, { "--battery", HDE_CMD_BATTERY },
     };
     for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--measure")) return measure_cli(argc, argv);
         for (guint k = 0; k < G_N_ELEMENTS(cli); k++)
             if (!strcmp(argv[i], cli[k].opt)) return send_cli_command(cli[k].cmd, 0);
         if (g_str_has_prefix(argv[i], "--control-center")) {
@@ -1802,7 +1967,6 @@ int main(int argc, char **argv)
     g_timeout_add_seconds(1, update_clock, NULL);
 
     if (!hde_wl_is_layer(GTK_WINDOW(win))) {
-        set_strut(win, &geo);
         publish_panel_window();
         gdk_window_raise(gtk_widget_get_window(win));   /* never covered by hde-desktop if they start in the wrong order */
     }

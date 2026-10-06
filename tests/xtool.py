@@ -14,6 +14,10 @@
                                is running" (prints "ready" once it owns it)
   xtool.py geometry XID        print "X Y WIDTH HEIGHT" of window XID as the X server has it (X, Y: on the screen)
   xtool.py cardinals XID PROP  print the numbers in property PROP of window XID, e.g. _NET_WM_STRUT_PARTIAL
+  xtool.py frame XID           print "X Y WIDTH HEIGHT" of window XID with the frame the window manager drew around it
+                               (_NET_FRAME_EXTENTS): where its title bar begins
+  xtool.py maximize XID        ask the window manager to maximize window XID (_NET_WM_STATE, as a pager does)
+  xtool.py wm-state XID        print the _NET_WM_STATE of window XID (e.g. _NET_WM_STATE_MAXIMIZED_VERT ...)
 """
 import ctypes
 import ctypes.util
@@ -89,6 +93,7 @@ x.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
 x.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
 x.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 x.XSetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+x.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.c_void_p]
 
 
 class XButtonEvent(ctypes.Structure):
@@ -144,6 +149,29 @@ def geometry(win):
     if not x.XTranslateCoordinates(d, win, root, 0, 0, ctypes.byref(rx), ctypes.byref(ry), ctypes.byref(child)):
         return None
     return rx.value, ry.value, a.width, a.height
+
+
+def frame(win):
+    g = geometry(win)
+    if g is None:
+        return None
+    raw, fmt = get_prop(win, "_NET_FRAME_EXTENTS")
+    left, right, top, bottom = (list(raw) + [0, 0, 0, 0])[:4] if raw and fmt == 32 else (0, 0, 0, 0)
+    return g[0] - left, g[1] - top, g[2] + left + right, g[3] + top + bottom
+
+
+def maximize(win):
+    ev = (ctypes.c_long * 24)()          # XClientMessageEvent on LP64: type, serial, send_event, display, window,
+    ev[0] = 33                           # message_type, format, data.l[0..4]; 33 = ClientMessage
+    ev[4] = win
+    ev[5] = x.XInternAtom(d, b"_NET_WM_STATE", 0)
+    ev[6] = 32
+    ev[7] = 1                            # _NET_WM_STATE_ADD
+    ev[8] = x.XInternAtom(d, b"_NET_WM_STATE_MAXIMIZED_VERT", 0)
+    ev[9] = x.XInternAtom(d, b"_NET_WM_STATE_MAXIMIZED_HORZ", 0)
+    ev[10] = 2                           # source: a pager
+    x.XSendEvent(d, root, 0, (1 << 19) | (1 << 20), ev)     # SubstructureNotify | SubstructureRedirect
+    x.XSync(d, 0)
 
 
 def popups():
@@ -314,6 +342,17 @@ if __name__ == "__main__":
     elif cmd == "cardinals":
         raw, fmt = get_prop(int(sys.argv[2], 0), sys.argv[3])
         print(" ".join(str(v) for v in raw) if raw and fmt == 32 else "")
+    elif cmd == "frame":
+        g = frame(int(sys.argv[2], 0))
+        if g is None:
+            print("NO-WINDOW")
+            sys.exit(1)
+        print("%d %d %d %d" % g)
+    elif cmd == "maximize":
+        maximize(int(sys.argv[2], 0))
+    elif cmd == "wm-state":
+        raw, fmt = get_prop(int(sys.argv[2], 0), "_NET_WM_STATE")
+        print(" ".join(atom_name(a) for a in raw) if raw and fmt == 32 else "")
     elif cmd == "selection-targets":
         t = selection_targets(sys.argv[2])
         if t is None:

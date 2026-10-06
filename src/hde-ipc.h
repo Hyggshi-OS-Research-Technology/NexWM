@@ -30,7 +30,9 @@ enum {
     HDE_CMD_SHOW_DESKTOP = 9,    /* show the desktop / bring the windows back (Wayland: no _NET_SHOWING_DESKTOP) */
     HDE_CMD_CONTROL_CENTER = 10, /* open / close the Control Center (Super+A), argument = page (hde-control.h) */
     HDE_CMD_BATTERY = 11,        /* open / close the battery panel */
-    HDE_CMD_NOTIFICATIONS = 12   /* the Control Center at its notifications (Super+N) */
+    HDE_CMD_NOTIFICATIONS = 12,  /* the Control Center at its notifications (Super+N) */
+    HDE_CMD_PLACE = 13           /* measure the screen again and put the panel back in place (Settings > Panel > Screen,
+                                  * hde-panel --measure) */
 };
 
 static int hde_ipc_ignore_x_error(Display *d, XErrorEvent *e) { (void)d; (void)e; return 0; }

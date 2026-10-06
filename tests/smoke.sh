@@ -144,6 +144,43 @@ pgeo() {
     pgeo_g=$($XT geometry "$($XT root-window _HDE_PANEL_WINDOW)" 2>/dev/null)
     if [ "$pgeo_g" = "$1" ]; then pass "$2 (window $pgeo_g)"; else fail "$2 (window ${pgeo_g:-?}, expected $1)"; fi
 }
+# maxwin WHAT top|bottom LIMIT: the Settings window, maximized, keeps clear of the panel, all of its title bar visible
+# (the bug: with the panel at the top the title bar of a maximized window was under the panel). The frame the window
+# manager drew around it: _NET_FRAME_EXTENTS. top: the frame starts at y >= LIMIT; bottom: it ends at y <= LIMIT.
+maxwin() {
+    mw=$(xdotool search --onlyvisible --name "^Hyggshi Settings$" 2>/dev/null | head -n 1)
+    if [ -z "$mw" ]; then fail "$1: a maximized window keeps clear of the panel (no Settings window)"; return; fi
+    case "$($XT wm-state "$mw")" in *_NET_WM_STATE_MAXIMIZED_VERT*) ;; *) $XT maximize "$mw"; sleep 1.5 ;; esac
+    mf=$($XT frame "$mw")
+    if [ "$2" = top ]; then
+        mv=$(echo "$mf" | awk '{ print $2 }')
+        if [ -n "$mv" ] && [ "$mv" -ge "$3" ]; then pass "$1: a maximized window stays below the panel, its title bar from y=$mv (frame $mf)"
+        else fail "$1: a maximized window stays below the panel (frame ${mf:-?}, must begin at y >= $3; $($XT wm-state "$mw"))"; fi
+    else
+        mv=$(echo "$mf" | awk '{ print $2 + $4 }')
+        if [ -n "$mv" ] && [ "$mv" -le "$3" ]; then pass "$1: a maximized window stays above the panel, down to y=$mv (frame $mf)"
+        else fail "$1: a maximized window stays above the panel (frame ${mf:-?}, must end at y <= $3; $($XT wm-state "$mw"))"; fi
+    fi
+}
+# sidebar WHAT: no black frame around the sidebar of Settings (the bug: the 14 px border of the box of buttons was never
+# painted, GtkViewport keeping an opaque cache for a child with a background of its own). 3 points of that border.
+sidebar() {
+    sw=$(xdotool search --onlyvisible --name "^Hyggshi Settings$" 2>/dev/null | head -n 1)
+    sg=$($XT geometry "$sw" 2>/dev/null)
+    if [ -z "$sw" ] || [ -z "$sg" ]; then fail "Settings: no black frame around the sidebar ($1): no Settings window"; return; fi
+    # shellcheck disable=SC2086  # "X Y W H" -> four arguments
+    set -- "$1" $sg
+    nb=0; cols=""
+    for pt in "$(($2 + 5)) $(($3 + 300))" "$(($2 + 120)) $(($3 + 5))" "$(($2 + 243)) $(($3 + 300))"; do
+        # shellcheck disable=SC2086  # "X Y" -> two arguments
+        c=$($XT pixel $pt)
+        cols="$cols ${pt% *},${pt#* }: $c;"
+        [ "$(echo "$c" | awk '{ print $1 + $2 + $3 }')" -gt 60 ] || nb=$((nb + 1))
+    done
+    if [ "$nb" = 0 ]; then pass "Settings: no black frame around the sidebar ($1;${cols%;})"
+    else fail "Settings: no black frame around the sidebar ($1: $nb black point(s);${cols%;})"; fi
+}
+ncorr() { grep -c "^hde-panel: measured: the panel window is at" "$OUT/session.log"; }
 running() { pgrep -x "$1" >/dev/null 2>&1; }       # by process name (never matches the shell doing the check)
 SETTINGS_INI="$XDG_CONFIG_HOME/hde/settings.ini"
 
@@ -198,6 +235,23 @@ if command -v metacity >/dev/null 2>&1; then
 fi
 check "panel publishes _HDE_PANEL_WINDOW" sh -c "[ \"\$($XT root-window _HDE_PANEL_WINDOW)\" != 0 ]"
 pgeo "0 766 1280 34" "the panel: 34 px high, its bottom edge on the bottom of the screen"
+l=$(grep "^hde-panel: measured: " "$OUT/session.log" | tail -n 1)
+case "$l" in
+    *"panel 0,766 1280x34, 34 px reserved at the bottom: fits") pass "the panel measures the screen and its own window: ${l#hde-panel: measured: }" ;;
+    *) fail "the panel measures the screen and its own window (${l:-nothing logged})" ;;
+esac
+"$B/hde-panel" --measure > "$OUT/measure.txt" 2>&1; rc=$?
+if [ "$rc" = 0 ] && grep -q "^Result: *fits" "$OUT/measure.txt" && grep -q "^  window: *1280x34 at 0,766$" "$OUT/measure.txt"; then
+    pass "hde-panel --measure: the panel fits; windows get $(sed -n 's/^Windows get: *//p' "$OUT/measure.txt")"
+else fail "hde-panel --measure (exit $rc): $(tr '\n' '|' < "$OUT/measure.txt")"; fi
+sed 's/^/INFO:   /' "$OUT/measure.txt" >> "$OUT/results.txt"
+# someone else (a window manager, xdotool) moves the panel or makes it higher: it measures that and puts itself right
+PW=$($XT root-window _HDE_PANEL_WINDOW)
+c0=$(ncorr); xdotool windowmove "$PW" 0 520 2>/dev/null; sleep 2.5; c1=$(ncorr)
+pgeo "0 766 1280 34" "the panel moved away by someone else is back at the bottom edge ($([ "$c1" -gt "$c0" ] && echo "it measured that and moved back" || echo "the window manager did not move it"))"
+xdotool windowsize "$PW" 1280 64 2>/dev/null; sleep 2.5; c2=$(ncorr)
+pgeo "0 766 1280 34" "the panel made higher by someone else is 34 px again ($([ "$c2" -gt "$c1" ] && echo "it measured that and put itself right" || echo "the window manager did not resize it"))"
+grep "^hde-panel: measured: the panel window is at" "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' >> "$OUT/results.txt"
 check "hde-xsettings owns _XSETTINGS_S0" $XT xsettings
 check "hde-xsettings runs HDE's input service (_HDE_INPUT_S0)" sh -c "[ \"\$($XT selection-owner _HDE_INPUT_S0)\" != 0 ]"
 check "the session log starts with the HDE build (commit) that runs" grep -q "^hde-session: HDE build " "$OUT/session.log"
@@ -232,6 +286,16 @@ if [ -x "$B/power-test" ]; then
     done < "$OUT/power-test.txt"
 else
     skip "power-test not built (make build/power-test)"
+fi
+
+# measuring the screen and the panel (src/hde-measure.c): where it belongs, what is wrong when it is not there
+if [ -x "$B/measure-test" ]; then
+    "$B/measure-test" > "$OUT/measure-test.txt" 2>&1
+    while IFS= read -r l; do
+        case "$l" in PASS:*) pass "${l#PASS: }" ;; FAIL:*) fail "${l#FAIL: }" ;; esac
+    done < "$OUT/measure-test.txt"
+else
+    skip "measure-test not built (make build/measure-test)"
 fi
 
 # ---------- 2. Super key -> Start menu (the modern layout, like Linux Mint: the default) ----------
@@ -827,6 +891,7 @@ else
     skip "touchpad settings (needs xinput)"
 fi
 "$B/hde-settings" appearance; sleep 2; shot 09-settings-appearance-light
+sidebar "Light mode"
 "$B/hde-settings" display; sleep 2.5; shot 09b-settings-display
 "$B/hde-settings" about; sleep 3.5; shot 09c-settings-about
 xdotool mousemove 760 520; for i in 1 2 3 4 5 6 7; do xdotool click 5; done; sleep 1; shot 09d-settings-about-memory
@@ -855,6 +920,7 @@ check "Dark mode writes gtk-3.0/settings.ini" grep -q "gtk-application-prefer-da
 check "an Adwaita-dark GTK theme is available" sh -c "[ -f '$XDG_DATA_HOME/themes/Adwaita-dark/gtk-3.0/gtk.css' ] || [ -d /usr/share/themes/Adwaita-dark ]"
 shot 10-dark-mode
 "$B/hde-settings" windows; sleep 2.5; shot 11-settings-windows-dark
+sidebar "Dark mode"
 "$B/hde-settings" network; sleep 2.5; shot 12-settings-wifi-dark
 xdotool key super; sleep 1.2; shot 13-start-menu-dark; xdotool key Escape; sleep 0.5
 "$B/hde-settings" --style light > "$OUT/style-light.log" 2>&1
@@ -931,6 +997,21 @@ sed -i '/^menu_style=/d' "$SETTINGS_INI"; sleep 2.5
 "$B/hde-settings" panel > "$OUT/settings-panel.log" 2>&1 &
 SETTINGS=$!
 sleep 3.5; shot 16a-settings-panel
+l=$(grep "^hde-settings: panel measured: " "$OUT/settings-panel.log" | tail -n 1)
+case "$l" in
+    *"panel 0,766 1280x34, 34 px reserved at the bottom; windows get 1280x766 at 0,0: fits")
+        pass "Settings > Panel > Screen: ${l#hde-settings: panel measured: }" ;;
+    *) fail "Settings > Panel > Screen measures the screen and the panel (${l:-nothing logged})" ;;
+esac
+wait_popups
+c0=$(grep -c "^hde-settings: panel measured: .*: fits" "$OUT/settings-panel.log")
+if click_widget panel-measure "$OUT/settings-panel.log"; then
+    sleep 2.8
+    c1=$(grep -c "^hde-settings: panel measured: .*: fits" "$OUT/settings-panel.log")
+    if grep -q "^hde-panel: asked to measure again: panel at 0,766 1280x34" "$OUT/session.log" && [ "$c1" -gt "$c0" ]; then
+        pass "Settings > Panel > Screen > Measure again: the panel measures the screen again, Settings shows the result ($c0 -> $c1)"
+    else fail "Settings > Panel > Screen > Measure again ($(grep -h 'measure again' "$OUT/session.log" "$OUT/settings-panel.log" | tail -n 2 | tr '\n' '|') $c0 -> $c1)"; fi
+else fail "Settings > Panel > Screen: the Measure again button (not found in the log)"; fi
 xdotool mousemove 760 500; for i in 1 2 3 4 5 6 7 8; do xdotool click 5; done; sleep 0.6; shot 16b-settings-panel-more
 "$B/hde-settings" startmenu; sleep 2.5; shot 16c-settings-startmenu
 xdotool mousemove 760 500; for i in 1 2 3 4 5 6 7 8; do xdotool click 5; done; sleep 0.6; shot 16d-settings-startmenu-more
@@ -967,6 +1048,11 @@ if command -v notify-send >/dev/null 2>&1; then
     notify-send -a "Smoke test" "Panel at the top" "Notifications come from the top right now"; sleep 1.2
     shot 16g-notification-top-panel
 fi
+"$B/hde-settings" display > "$OUT/settings-max.log" 2>&1 &
+SMAX=$!
+sleep 3.5
+maxwin "panel at the top, 40 px" top 40
+shot 16g2-maximized-under-top-panel
 python3 - "$SETTINGS_INI" <<'EOF'
 import sys
 p = sys.argv[1]
@@ -978,6 +1064,7 @@ sleep 3
 check "panel_size=28: a thin panel" grep -q "hde-panel: settings changed: panel at 0,0 1280x28" "$OUT/session.log"
 pgeo "0 0 1280 28" "... its window really is 28 px high (a lower panel shrinks: it used to stay 40 px)"
 check "... the clock on one line" grep -q "hde-panel: clock: time and date on one line (a thin panel, 28 px)" "$OUT/session.log"
+maxwin "panel at the top, 28 px" top 28
 shot 16h-panel-thin-top
 # The bug of the screenshot: a panel made higher, then lower again, kept its height and hung below the bottom of the
 # screen (libwnck's workspace switcher keeps the height it last had as its minimum). 56 px at the bottom, then 34.
@@ -990,7 +1077,9 @@ open(p, "w").write(s)
 EOF
 sleep 3
 pgeo "0 744 1280 56" "panel_size=56 at the bottom: 56 px high, its bottom edge on the bottom of the screen"
+maxwin "panel at the bottom, 56 px" bottom 744
 shot 16i-panel-high-bottom
+kill "$SMAX" 2>/dev/null; sleep 0.5
 python3 - "$SETTINGS_INI" <<'EOF'
 import sys, re
 p = sys.argv[1]
@@ -1345,6 +1434,21 @@ if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; th
         | tee -a "$OUT/results.txt"
     check "live WM switch: Metacity has stopped" sh -c "! pgrep -x metacity"
     check "panel survives the WM switch" running hde-panel
+    pgeo "0 766 1280 34" "Openbox: the panel at the bottom edge, 34 px high"
+    echo "INFO: with Openbox: $(grep "^hde-panel: measured: " "$OUT/session.log" | tail -n 1)" | tee -a "$OUT/results.txt"
+    # the setup of the bug report: Openbox, the panel at the top, a maximized window (its title bar was under the panel)
+    sed -i 's/^\[settings\]$/[settings]\npanel_position=top/' "$SETTINGS_INI"; sleep 3
+    pgeo "0 0 1280 34" "Openbox: the panel at the top"
+    "$B/hde-settings" display > "$OUT/settings-openbox.log" 2>&1 &
+    SOB=$!
+    sleep 3.5
+    maxwin "Openbox, panel at the top" top 34
+    shot 20a-openbox-maximized-top-panel
+    sed -i '/^panel_position=top$/d' "$SETTINGS_INI"; sleep 3
+    pgeo "0 766 1280 34" "Openbox: the panel back at the bottom edge"
+    maxwin "Openbox, panel at the bottom" bottom 766
+    shot 20b-openbox-maximized-bottom-panel
+    kill "$SOB" 2>/dev/null; sleep 0.5
     if [ -f "$XDG_CONFIG_HOME/openbox/rc.xml" ]; then
         n0=$(nshots); xdotool key Print; sleep 3; n1=$(nshots)
         if [ -e "$OUT/wm-print-pressed" ]; then fail "Openbox: its own rc.xml Print binding fired (HDE must keep PrtSc)"
@@ -1380,6 +1484,7 @@ if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; th
     "$B/hde-session" wm >/dev/null 2>&1; sleep 7
     check "live WM switch back: Metacity is running" pgrep -x metacity
     check "live WM switch back: Openbox has stopped" sh -c "! pgrep -x openbox"
+    pgeo "0 766 1280 34" "Metacity again: the panel at the bottom edge, 34 px high"
 else
     skip "live WM switch (needs both openbox and metacity)"
 fi

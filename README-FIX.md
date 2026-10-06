@@ -605,3 +605,57 @@ resolutions with the screens beside / below moving along, Duplicate staying on t
 written, the wishes at login and in F8 layouts. `tests/display-test.sh` (real Xorg, dummy screens): `--display-set`,
 the Display page's list (reverted when nobody answers, kept and remembered with *Keep changes*), the resolution coming
 back at login, DDC/CI with a simulated `ddcutil`. CI also runs `scripts/test-nexde --check` and the Hyggshi OS script.
+
+## Maximized windows under a top panel, the panel below the screen again, a black frame in Settings (fix 16)
+
+**What was reported** (with two screenshots): with the panel at the top, a maximized window had no title bar and no
+window buttons — they were under the panel — so it had to be made smaller again; after choosing *Bottom* the panel
+sank below the edge of the screen again, with the wish that the panel measures the screen properly; and a black frame
+in Hyggshi Settings, in Light mode too.
+
+**Why:** the screenshots were taken with a build from before fix 14 (19:27 and 19:30 on 6 October; fix 14 is from
+19:54). There the panel window was about 60 px high while it was placed for 34 px and only 34 px were reserved for it:
+at the top it covered the title bars of maximized windows (the window manager kept 34 px free for it), at the bottom
+its lower part hung below the screen. Fix 14 makes the panel exactly as high as set; this fix makes the panel check
+where it really is by itself and put right whatever does not fit, whatever the cause.
+
+The black frame came from GTK: a `GtkViewport` draws its content through an opaque buffer as soon as that content has a
+background of its own, and the 14 px border around the sidebar's box (outside the box's background) was never painted
+in it — black, in Light and Dark mode alike.
+
+### Added
+
+- **The panel measures the screen and itself** (`src/hde-measure.c`). After every placement (login, Settings, a screen
+  plugged in, a new resolution, another window manager) it measures the screen straight from the X server — XRandR's
+  monitors and the size of the X screen, so a resolution GTK has not caught up with yet does not matter — and its own
+  window where the X server really has it, with the space it reserves (`_NET_WM_STRUT_PARTIAL`). Put elsewhere by the
+  window manager: it moves back. Not as high as set: it asks again, and if the window keeps another height it is placed
+  for that height (all of it on the screen) and that height is reserved, so maximized windows still keep clear of it.
+  Reserved space too small: set again. A panel moved or resized later on (by a window manager, a script) is noticed and
+  put back too. All in device pixels, so `GDK_SCALE=2` reserves the right space. The log tells what was measured:
+  `hde-panel: measured: screen 1920x1080 (eDP-1) at 0,0 (from GTK, X screen 1920x1080); panel 0,1046 1920x34, 34 px
+  reserved at the bottom: fits`.
+- **Settings → Panel → Position and size → Screen**: the screen (size, connector, text scale), where the panel really
+  is and how high, the space kept free for it and the room windows get; a warning in red when something does not fit,
+  and **Measure again**, which has the panel measure the screen and put itself right.
+- **`hde-panel --measure`** prints the same (screen, panel window, reserved space, `_NET_WORKAREA`) once the panel has
+  measured again; exit status 0 when it fits, 1 when not, 2 without a panel.
+
+### Fixed
+
+- **No black frame around the sidebar of Settings** any more: the sidebar's background is on the scrolled window
+  around it, and the box of buttons inside has none.
+
+To get it: `git pull`, `make && sudo make install`, then log out and back in (or `hde-session restart`, then reopen
+Settings).
+
+### Tests
+
+`make check`, under Metacity and under Openbox (after the live switch: the setup of the screenshots): a maximized window
+with the panel at the top (40 and 28 px; 34 px under Openbox) begins below the panel, with the panel at the bottom (56
+px; 34 px under Openbox) it ends above it (new `tests/xtool.py maximize` and `frame`: the frame from
+`_NET_FRAME_EXTENTS`); the panel moved away (`xdotool windowmove`) or made higher (`xdotool windowsize`) puts itself
+back; the measurement at login, `hde-panel --measure`, *Settings → Panel → Screen* and *Measure again*; the sidebar of
+Settings without black pixels in Light and Dark mode (`tests/xtool.py pixel`). `measure-test` checks the measuring
+without an X server: where the panel belongs, the reserved space on one or two screens and with scale 2, and what is
+wrong with a panel too high, too low, off to the side, or with too little or no space reserved.

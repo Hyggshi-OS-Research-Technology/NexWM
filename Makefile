@@ -48,7 +48,7 @@ HDE_HEADERS=$(wildcard src/*.h)
 PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-notify.c src/hde-search.c src/hde-theme.c \
           src/hde-input.c src/hde-startmenu.c src/hde-applets.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c \
           src/hde-wl.c src/hde-run.c src/hde-flyout.c src/hde-control.c src/hde-battery.c src/hde-power.c \
-          src/hde-profiles.c src/hde-powersave.c $(WLTASK_SRC)
+          src/hde-profiles.c src/hde-powersave.c src/hde-measure.c $(WLTASK_SRC)
 DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c src/hde-panel-config.c src/hde-wl.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
@@ -56,7 +56,7 @@ SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-blue
              src/hde-theme.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-sysinfo.c \
              src/hde-settings-panel.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c src/hde-wl.c \
              src/hde-settings-wayland.c src/hde-settings-power.c src/hde-power.c src/hde-profiles.c src/hde-run.c \
-             src/hde-settings-peripherals.c
+             src/hde-settings-peripherals.c src/hde-measure.c
 # Build stamp (commit + date) shown in Settings > About, by --version and at the top of the session log, to tell at a
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
@@ -75,8 +75,9 @@ $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
 $(BUILD)/hde-panel: $(PANEL_SRC) $(HDE_HEADERS) $(WLTASK_DEPS) | $(BUILD)
 	@[ -n "$(LAYER_CFLAGS)" ] || echo "NOTE: libgtk-layer-shell-dev (pkg-config gtk-layer-shell-0) not found: HDE for X11 only, no Wayland session"
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) $(XI_CFLAGS) $(LAYER_CFLAGS) $(WLTASK_CFLAGS) -o $@ \
-	    $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) $(WNCK_LIBS) $(XI_LIBS) $(X11_LIBS) $(WLTASK_LIBS) -lm
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) $(XI_CFLAGS) $(XRANDR_CFLAGS) $(LAYER_CFLAGS) \
+	    $(WLTASK_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) $(WNCK_LIBS) $(XI_LIBS) $(XRANDR_LIBS) $(X11_LIBS) \
+	    $(WLTASK_LIBS) -lm
 $(BUILD)/$(FTM)-client-protocol.h: protocols/$(FTM).xml | $(BUILD)
 	$(WAYLAND_SCANNER) client-header $< $@
 $(BUILD)/$(FTM)-protocol.c: protocols/$(FTM).xml | $(BUILD)
@@ -108,6 +109,11 @@ $(BUILD)/svgpath-test: tests/svgpath-test.c src/hde-svgpath.c src/hde-svgpath.h 
 # The batteries of src/hde-power.c with fake /sys/class/power_supply trees (tests/power-test.c): run by `make check`
 $(BUILD)/power-test: tests/power-test.c src/hde-power.c src/hde-power.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(GLIBX_CFLAGS) -o $@ $(filter %.c,$^) $(GLIBX_LIBS) -lm
+# Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
+# `make check`
+$(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(XRANDR_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(XRANDR_LIBS) \
+	    $(X11_LIBS) -lm
 $(BUILD):
 	mkdir -p $(BUILD)
 $(VERSION_H): FORCE | $(BUILD)
@@ -123,7 +129,7 @@ backend/x11/x11_backend.o: src/hde-commands.h
 backend/wayland/wayland_backend.o: src/hde-commands.h
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
-check: all $(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test
+check: all $(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test
 	BUILD=$(BUILD) sh tests/smoke.sh
 
 clean:
