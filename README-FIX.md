@@ -509,3 +509,36 @@ the power mode switched to Power Saver (simulated power-profiles-daemon); the ri
 Start button (choosing the HDE logo changes the button) and the volume icon; `power-test` (µWh / µAh batteries,
 charge limit, two batteries, a mouse, no battery). `tests/wayland-test.sh`: the Control Center and the battery panel
 as layer-shell surfaces, Esc, `Super+A` through labwc.
+
+## The panel sank below the bottom of the screen (fix 14)
+
+**What happened:** once the panel had been made higher (*Settings → Panel → Height*, or *Size* in the panel's
+right-click menu) and then lower again, it kept the bigger height but was still placed for the smaller one: its lower
+part (window titles, the date under the clock, the bottom of the Start button) hung below the edge of the screen.
+
+**Why:** libwnck's workspace switcher takes the height it was last given as its minimum height. After the panel had
+been 56 px high, the switcher kept asking for 50 px, so the panel window could not get back to 34 px, while hde-panel
+placed it at "screen height − 34 px" and reserved only 34 px for it. The test only checked what hde-panel *asked*
+for, so it did not notice (in the CI screenshots the "28 px" panel was still 40 px high).
+
+### Fixed
+
+- **The panel is always exactly as high as set.** A container between the window and the items asks for exactly the
+  panel's height and gives all of it to them (`HdeHeightBin` in `src/hde-panel.c`), so no item can make the panel
+  higher. The workspace switcher now follows the panel instead of holding it up. The position, the space reserved for
+  the panel (strut), the desktop icons and the pop-ups all use that height, so they now match the panel again.
+- **The items fit any height:** the theme's minimum button height (24 px + padding) does not apply in the panel, thin
+  panels (under 30 px) have no vertical padding, and the date goes under the time only when both lines fit with the
+  fonts in use (measured). Otherwise time and date share one line.
+- **Wayland:** a panel made lower shrinks too (the layer surface is resized).
+- With `HDE_DEBUG=1` the log tells where the panel window really is: `hde-panel: window: 0,1046 1920x34`.
+
+The fix takes effect when hde-panel restarts: `hde-session restart` (desktop + panel, no logout), or log out and back
+in.
+
+### Tests
+
+`make check` now checks the panel's window as the X server has it, not what hde-panel asked for (new
+`tests/xtool.py geometry`): 34 px at the bottom at login, 40 px and then 28 px at the top, 56 px at the bottom and then
+34 px again with its bottom edge on the bottom of the screen, 34 px reserved (`_NET_WM_STRUT_PARTIAL`), the clock on
+one line in 28 px and the date back under the time in 34 px. Before the fix the "28 px" panel stayed 40 px high.

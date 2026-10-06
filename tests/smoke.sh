@@ -139,6 +139,11 @@ skip() { echo "SKIP: $*" | tee -a "$OUT/results.txt"; }
 check() { desc=$1; shift; if "$@" >/dev/null 2>&1; then pass "$desc"; else fail "$desc"; fi; }
 shot() { command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-$1.png" 2>/dev/null; }
 popups() { $XT popups 2>/dev/null || echo 0; }
+# pgeo "X Y W H" WHAT: the panel's window as the X server has it (the log only tells what hde-panel asked for)
+pgeo() {
+    pgeo_g=$($XT geometry "$($XT root-window _HDE_PANEL_WINDOW)" 2>/dev/null)
+    if [ "$pgeo_g" = "$1" ]; then pass "$2 (window $pgeo_g)"; else fail "$2 (window ${pgeo_g:-?}, expected $1)"; fi
+}
 running() { pgrep -x "$1" >/dev/null 2>&1; }       # by process name (never matches the shell doing the check)
 SETTINGS_INI="$XDG_CONFIG_HOME/hde/settings.ini"
 
@@ -192,6 +197,7 @@ if command -v metacity >/dev/null 2>&1; then
     else fail "auto mode prefers a GTK window manager (got '$WM')"; fi
 fi
 check "panel publishes _HDE_PANEL_WINDOW" sh -c "[ \"\$($XT root-window _HDE_PANEL_WINDOW)\" != 0 ]"
+pgeo "0 766 1280 34" "the panel: 34 px high, its bottom edge on the bottom of the screen"
 check "hde-xsettings owns _XSETTINGS_S0" $XT xsettings
 check "hde-xsettings runs HDE's input service (_HDE_INPUT_S0)" sh -c "[ \"\$($XT selection-owner _HDE_INPUT_S0)\" != 0 ]"
 check "the session log starts with the HDE build (commit) that runs" grep -q "^hde-session: HDE build " "$OUT/session.log"
@@ -909,6 +915,7 @@ open(p, "w").write(s)
 EOF
 sleep 3
 check "panel_position=top, panel_size=40: the panel moves to the top, 40 px high" grep -q "hde-panel: settings changed: panel at 0,0 1280x40" "$OUT/session.log"
+pgeo "0 0 1280 40" "... its window really is there"
 check "... the desktop icons make room for it" grep -q "hde-desktop: panel now takes 40 px at the top, 0 px at the bottom" "$OUT/session.log"
 if grep "hde-panel: settings applied: top, 40px" "$OUT/session.log" | tail -n 1 | grep -q "items: menu desktop launchers taskbar"; then
     pass "panel_show_run=false hides the Run button"
@@ -938,7 +945,21 @@ open(p, "w").write(s)
 EOF
 sleep 3
 check "panel_size=28: a thin panel" grep -q "hde-panel: settings changed: panel at 0,0 1280x28" "$OUT/session.log"
+pgeo "0 0 1280 28" "... its window really is 28 px high (a lower panel shrinks: it used to stay 40 px)"
+check "... the clock on one line" grep -q "hde-panel: clock: time and date on one line (a thin panel, 28 px)" "$OUT/session.log"
 shot 16h-panel-thin-top
+# The bug of the screenshot: a panel made higher, then lower again, kept its height and hung below the bottom of the
+# screen (libwnck's workspace switcher keeps the height it last had as its minimum). 56 px at the bottom, then 34.
+python3 - "$SETTINGS_INI" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("panel_position=top\n", "panel_position=bottom\n", 1).replace("panel_size=28\n", "panel_size=56\n", 1)
+open(p, "w").write(s)
+EOF
+sleep 3
+pgeo "0 744 1280 56" "panel_size=56 at the bottom: 56 px high, its bottom edge on the bottom of the screen"
+shot 16i-panel-high-bottom
 python3 - "$SETTINGS_INI" <<'EOF'
 import sys, re
 p = sys.argv[1]
@@ -950,6 +971,18 @@ open(p, "w").write(s)
 EOF
 sleep 3
 check "back to the defaults: the panel returns to the bottom, 34 px" grep -q "hde-panel: settings changed: panel at 0,766 1280x34" "$OUT/session.log"
+pgeo "0 766 1280 34" "... 34 px high again after 56 px: nothing of it below the edge of the screen"
+st=$($XT cardinals "$($XT root-window _HDE_PANEL_WINDOW)" _NET_WM_STRUT_PARTIAL 2>/dev/null)
+case "$st" in
+    "0 0 0 34 "*) pass "... and it reserves 34 px at the bottom for itself (_NET_WM_STRUT_PARTIAL $st)" ;;
+    *) fail "... and it reserves 34 px at the bottom for itself (_NET_WM_STRUT_PARTIAL ${st:-none})" ;;
+esac
+l=$(grep "hde-panel: clock: " "$OUT/session.log" | tail -n 1)
+case "$l" in
+    *"the date under the time"*) pass "... the date under the time (${l#hde-panel: clock: the date under the time })" ;;
+    *) fail "... the date under the time (${l:-nothing logged})" ;;
+esac
+shot 16j-panel-default-again
 check "... and the desktop icons follow" grep -q "hde-desktop: panel now takes 0 px at the top, 34 px at the bottom" "$OUT/session.log"
 
 # labwc's configuration for the Wayland session, written from settings.ini (tests/wayland-test.sh runs it for real)

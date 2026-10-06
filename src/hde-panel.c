@@ -76,7 +76,7 @@ static const Category categories[] = {
 #define N_CATS G_N_ELEMENTS(categories)
 
 static HdePanelConfig pcfg;
-static GtkWidget *panel_win, *panel_box;
+static GtkWidget *panel_win, *panel_fit, *panel_box;
 static GtkWidget *menu_btn, *menu_btn_img, *menu_btn_lbl, *desk_btn, *run_btn, *launchers, *tasks, *pager, *tray,
                  *status_area, *notify_btn, *applets, *clock_btn, *clock_label, *date_label;
 static GtkWidget *app_menu;
@@ -92,17 +92,53 @@ static void on_run_command(GtkButton *btn, gpointer data);
 static gboolean panel_place(gpointer d);
 
 static int icon_px(void) { return CLAMP(pcfg.size * 10 / 17, 14, 36); }   /* 20 px icons in a 34 px panel */
+#define PANEL_BORDER 3                       /* px around the items: they have pcfg.size - 2 * PANEL_BORDER */
 
 /* ---------- clock + calendar ---------- */
 static GtkWidget *cal_win, *cal_title, *cal;
 
+/* height of one line of text in the font of a label (also when the label is hidden: GTK measures hidden widgets as 0) */
+static int line_height(GtkWidget *label)
+{
+    PangoLayout *l = gtk_widget_create_pango_layout(label, "0123456789/:");
+    int h = 0;
+    pango_layout_get_pixel_size(l, NULL, &h);
+    g_object_unref(l);
+    return h;
+}
+
+/* the date goes under the time only when both lines fit in the panel: fonts and their sizes differ between systems,
+ * and an item higher than the panel would be cut (the panel never grows, see HdeHeightBin) */
+static gboolean clock_two_lines_fit(int *need, int *room)
+{
+    GtkStyleContext *sc = gtk_widget_get_style_context(clock_btn);
+    GtkStateFlags st = gtk_style_context_get_state(sc);
+    GtkBorder pad, bd;
+    gtk_style_context_get_padding(sc, st, &pad);
+    gtk_style_context_get_border(sc, st, &bd);
+    *room = pcfg.size - 2 * PANEL_BORDER - pad.top - pad.bottom - bd.top - bd.bottom;
+    *need = line_height(clock_label) + line_height(date_label);
+    return *need <= *room;
+}
+
 static gboolean update_clock(gpointer data)
 {
     (void)data;
+    static int shown = -1, shown_size;           /* 2: the date under the time, 1: one line, 0: no date */
     GDateTime *now = g_date_time_new_now_local();
     const char *tf = pcfg.clock_24h ? (pcfg.clock_seconds ? "%H:%M:%S" : "%H:%M")
                                     : (pcfg.clock_seconds ? "%l:%M:%S %p" : "%l:%M %p");
-    gboolean two_lines = pcfg.clock_date && pcfg.size >= 30;
+    int need = 0, room = 0;
+    gboolean two_lines = pcfg.clock_date && pcfg.size >= 30 && clock_two_lines_fit(&need, &room);
+    int now_shown = !pcfg.clock_date ? 0 : two_lines ? 2 : 1;
+    if (now_shown != shown || pcfg.size != shown_size) {
+        shown = now_shown;
+        shown_size = pcfg.size;
+        if (shown == 2) DBG("clock: the date under the time (2 lines: %d px, the panel has %d)", need, room);
+        else if (shown == 1 && pcfg.size < 30) DBG("clock: time and date on one line (a thin panel, %d px)", pcfg.size);
+        else if (shown == 1) DBG("clock: time and date on one line (2 lines need %d px, the panel has %d)", need, room);
+        else DBG("clock: no date");
+    }
     char *time_s = g_date_time_format(now, tf);
     char *date_s = g_date_time_format(now, "%a  %d/%m/%Y");
     char *tip = g_date_time_format(now, "%A, %d %B %Y");
@@ -120,6 +156,16 @@ static gboolean update_clock(gpointer data)
     g_free(time_s); g_free(date_s); g_free(tip);
     g_date_time_unref(now);
     return G_SOURCE_CONTINUE;
+}
+
+/* the clock again once GTK has applied new CSS: its fonts decide whether the date fits under the time */
+static guint clock_css_id;
+static gboolean clock_after_css(gpointer d)
+{
+    (void)d;
+    clock_css_id = 0;
+    update_clock(NULL);
+    return G_SOURCE_REMOVE;
 }
 
 static gboolean cal_focus_out(GtkWidget *w, GdkEventFocus *e, gpointer d)
@@ -864,6 +910,85 @@ static gboolean panel_running(void)
     return owned;
 }
 
+/* ---------- the panel is exactly as high as Settings > Panel says, whatever its items ask for ----------
+ * It is placed at "bottom of the screen - panel_size" and that much room is reserved for it (the strut, the desktop
+ * icons, every pop-up), so a window higher than panel_size hangs below the edge of the screen. libwnck's workspace
+ * switcher did that: it keeps the height it was last given as its minimum height, so once the panel had been made
+ * higher (Settings > Panel, the right-click menu) it could not shrink back and sank below the screen. HdeHeightBin,
+ * between the window and the items, asks for exactly `height` px and gives all of it to the items, which are made
+ * to fit it (no minimum button height, the date under the time only when both lines fit). */
+typedef struct { GtkBin parent; int height; } HdeHeightBin;
+typedef struct { GtkBinClass parent_class; } HdeHeightBinClass;
+G_DEFINE_TYPE(HdeHeightBin, hde_height_bin, GTK_TYPE_BIN)
+
+static GtkSizeRequestMode height_bin_request_mode(GtkWidget *w) { (void)w; return GTK_SIZE_REQUEST_CONSTANT_SIZE; }
+
+static void height_bin_preferred_height(GtkWidget *w, int *min, int *nat)
+{
+    *min = *nat = ((HdeHeightBin *)w)->height;
+}
+
+static void height_bin_preferred_width(GtkWidget *w, int *min, int *nat)
+{
+    GtkWidget *c = gtk_bin_get_child(GTK_BIN(w));
+    *min = *nat = 0;
+    if (c && gtk_widget_get_visible(c)) gtk_widget_get_preferred_width(c, min, nat);
+}
+
+static void height_bin_size_allocate(GtkWidget *w, GtkAllocation *a)
+{
+    gtk_widget_set_allocation(w, a);
+    GtkWidget *c = gtk_bin_get_child(GTK_BIN(w));
+    if (c && gtk_widget_get_visible(c)) gtk_widget_size_allocate(c, a);
+}
+
+static void hde_height_bin_class_init(HdeHeightBinClass *k)
+{
+    GtkWidgetClass *wc = GTK_WIDGET_CLASS(k);
+    wc->get_request_mode = height_bin_request_mode;
+    wc->get_preferred_height = height_bin_preferred_height;
+    wc->get_preferred_width = height_bin_preferred_width;
+    wc->size_allocate = height_bin_size_allocate;
+}
+
+static void hde_height_bin_init(HdeHeightBin *b)
+{
+    gtk_widget_set_has_window(GTK_WIDGET(b), FALSE);
+    b->height = HDE_PANEL_SIZE_DEFAULT;
+}
+
+static void height_bin_set(GtkWidget *w, int height)
+{
+    HdeHeightBin *b = (HdeHeightBin *)w;
+    if (!b || b->height == height) return;
+    b->height = height;
+    gtk_widget_queue_resize(w);
+}
+
+/* where the panel really is and how high (HDE_DEBUG): what the X server or the compositor made of it, not what was
+ * asked for. X11: from the window's configure events (position and size); Wayland: the size of the layer surface. */
+static void log_panel_window(int x, int y, int w, int h, gboolean with_position)
+{
+    static int lx = G_MININT, ly, lw, lh;
+    if (x == lx && y == ly && w == lw && h == lh) return;
+    lx = x; ly = y; lw = w; lh = h;
+    if (with_position) DBG("window: %d,%d %dx%d", x, y, w, h);
+    else DBG("window: %dx%d", w, h);
+}
+
+static gboolean on_panel_configure(GtkWidget *w, GdkEventConfigure *e, gpointer d)
+{
+    (void)w; (void)d;
+    if (!hde_wl_is_layer(GTK_WINDOW(panel_win))) log_panel_window(e->x, e->y, e->width, e->height, TRUE);
+    return FALSE;
+}
+
+static void on_panel_allocate(GtkWidget *w, GdkRectangle *a, gpointer d)
+{
+    (void)w; (void)d;
+    if (hde_wl_is_layer(GTK_WINDOW(panel_win))) log_panel_window(0, 0, a->width, a->height, FALSE);
+}
+
 /* ---------- strut: reserve space so windows do not cover the panel (X11) ---------- */
 static void set_strut(GtkWidget *win, GdkRectangle *mon)
 {
@@ -903,10 +1028,14 @@ static gboolean panel_place(gpointer d)
     if (!m) return G_SOURCE_REMOVE;
     GdkRectangle geo;
     gdk_monitor_get_geometry(m, &geo);
+    height_bin_set(panel_fit, pcfg.size);
     if (hde_wl_is_layer(GTK_WINDOW(panel_win))) {
         hde_wl_layer_edges(GTK_WINDOW(panel_win), HDE_EDGE_LEFT | HDE_EDGE_RIGHT | (pcfg.top ? HDE_EDGE_TOP : HDE_EDGE_BOTTOM));
         hde_wl_layer_exclusive(GTK_WINDOW(panel_win), pcfg.size);
         gtk_widget_set_size_request(panel_win, -1, pcfg.size);
+        /* a GTK window does not shrink by itself when it may be smaller: a lower panel needs a resize */
+        if (gtk_widget_get_allocated_height(panel_win) > pcfg.size)
+            gtk_window_resize(GTK_WINDOW(panel_win), MAX(1, gtk_widget_get_allocated_width(panel_win)), pcfg.size);
         fprintf(stderr, "hde-panel: %s: panel at the %s, %dpx high (Wayland layer shell, %d screen(s), %dx%d)\n",
                 why, pcfg.top ? "top" : "bottom", pcfg.size, gdk_display_get_n_monitors(dpy), geo.width, geo.height);
         return G_SOURCE_REMOVE;
@@ -974,31 +1103,36 @@ static void load_css(void)
     const char *entry  = dark ? "#1b1f26" : "#f4f5f7";
     double alpha = pcfg.opacity / 100.0;
     if (panel_win && hde_is_x11() && !gdk_screen_is_composited(gtk_widget_get_screen(panel_win))) alpha = 1.0;
-    int big = pcfg.size >= 44, small = pcfg.size < 30;
+    int big = pcfg.size >= 44, small = pcfg.size < 30, vpad = small ? 0 : 2;
     GString *s = g_string_new(NULL);
     g_string_append_printf(s, ".hde-panel { background: rgba(%s, %.2f); color: %s; %s: 1px solid %s; }", bg, alpha, fg,
                            pcfg.top ? "border-bottom" : "border-top", border);
+    /* min-height: 0 — themes give buttons 24 px + padding, more than a thin panel has (the panel never grows) */
     g_string_append_printf(s, ".hde-panel button { background: transparent; background-image: none; border: none; border-radius: 4px;"
-                              "  padding: %dpx %dpx; color: %s; box-shadow: none; text-shadow: none; -gtk-icon-shadow: none; }",
-                           small ? 0 : 2, small ? 5 : 8, fg);
+                              "  padding: %dpx %dpx; min-height: 0; color: %s; box-shadow: none; text-shadow: none;"
+                              "  -gtk-icon-shadow: none; }",
+                           vpad, small ? 5 : 8, fg);
     g_string_append_printf(s, ".hde-panel button:hover { background: %s; }", hover);
     g_string_append_printf(s, ".hde-panel button:checked { background: %s; color: white; }", ti.accent);
     g_string_append_printf(s, ".hde-panel .menu-btn, .hde-panel .menu-btn label { font-weight: bold; background: %s; color: white; }", ti.accent);
     g_string_append_printf(s, ".hde-panel .menu-btn:hover { background: shade(%s, 1.15); }", ti.accent);
     g_string_append_printf(s, ".hde-panel .run-btn { background: %s; }", runbg);
     g_string_append_printf(s, ".hde-panel .run-btn:hover { background: %s; }", hover);
-    g_string_append(s, ".hde-panel .launcher { padding: 2px 5px; }");
-    g_string_append(s, ".hde-panel .applet { padding: 2px 6px; }");
-    g_string_append(s, ".hde-panel .icons-only button { padding: 2px 6px; }");
-    g_string_append_printf(s, ".hde-panel .wl-task { padding: 2px 8px; min-width: 24px; }"
+    g_string_append_printf(s, ".hde-panel .launcher { padding: %dpx 5px; }", vpad);
+    g_string_append_printf(s, ".hde-panel .applet { padding: %dpx 6px; }", vpad);
+    g_string_append_printf(s, ".hde-panel .icons-only button { padding: %dpx 6px; }", vpad);
+    /* the taskbar on one row: libwnck puts as many rows of buttons as fit above each other */
+    g_string_append_printf(s, ".hde-panel .taskbar button { min-height: %dpx; }",
+                           MAX(0, (pcfg.size - 2 * PANEL_BORDER) / 2 + 1 - 2 * vpad));
+    g_string_append_printf(s, ".hde-panel .wl-task { padding: %dpx 8px; min-width: 24px; }"
                               ".hde-panel .wl-task.active { background: alpha(%s, 0.28); box-shadow: inset 0 %s2px %s; }"
                               ".hde-panel .wl-task.minimized label { color: %s; }",
-                           ti.accent, pcfg.top ? "" : "-", ti.accent, sub);
+                           vpad, ti.accent, pcfg.top ? "" : "-", ti.accent, sub);
     g_string_append(s, ".hde-panel .clock-btn { padding: 0 8px; }");
     g_string_append_printf(s, ".hde-panel .clock-box { min-width: %dpx; }", pcfg.clock_seconds || !pcfg.clock_24h ? 120 : 100);
     g_string_append_printf(s, ".hde-panel .clock-time { font-weight: 700; font-size: %dpx; }", big ? 14 : 12);
     g_string_append_printf(s, ".hde-panel .clock-date { font-size: %dpx; color: %s; }", big ? 10 : 8, sub);
-    g_string_append(s, ".hde-panel .status-btn { padding: 2px 5px; }");
+    g_string_append_printf(s, ".hde-panel .status-btn { padding: %dpx 5px; }", vpad);
     g_string_append_printf(s, ".hde-panel .notif-count { background: %s; color: white; border-radius: 8px; padding: 0 5px;"
                               "  font-size: 9px; font-weight: bold; }", ti.accent);
     g_string_append_printf(s, ".hde-panel label { color: %s; }", fg);
@@ -1047,6 +1181,7 @@ static void load_css(void)
     }
     g_string_free(s, TRUE);
     hde_theme_info_clear(&ti);
+    if (clock_label && !clock_css_id) clock_css_id = g_timeout_add(150, clock_after_css, NULL);
 }
 
 /* ---------- the Start button: ☰ / logo of the system / HDE logo / an icon, and a label ---------- */
@@ -1457,7 +1592,6 @@ static void apply_config(gboolean first)
         g_strcmp0(old.menu_icon, pcfg.menu_icon))
         update_menu_button();
     apply_taskbar();
-    update_clock(NULL);
     hde_startmenu_set_config(&pcfg);
     if (!first && (old.top != pcfg.top || old.size != pcfg.size)) {
         if (place_id) g_source_remove(place_id);
@@ -1466,6 +1600,7 @@ static void apply_config(gboolean first)
     if (first || old.top != pcfg.top || old.size != pcfg.size || old.opacity != pcfg.opacity ||
         old.clock_24h != pcfg.clock_24h || old.clock_seconds != pcfg.clock_seconds)
         load_css();
+    update_clock(NULL);
     if (!first)
         DBG("settings applied: %s, %dpx, opacity %d%%, menu %s, items:%s%s%s%s%s%s%s%s%s%s", pcfg.top ? "top" : "bottom",
             pcfg.size, pcfg.opacity, hde_menu_style_id(pcfg.menu_style), pcfg.show_menu ? " menu" : "",
@@ -1586,9 +1721,15 @@ int main(int argc, char **argv)
     gtk_widget_add_events(win, GDK_BUTTON_PRESS_MASK);
     g_signal_connect(win, "button-press-event", G_CALLBACK(on_panel_button), NULL);
 
+    g_signal_connect(win, "configure-event", G_CALLBACK(on_panel_configure), NULL);
+    g_signal_connect(win, "size-allocate", G_CALLBACK(on_panel_allocate), NULL);
+
+    panel_fit = g_object_new(hde_height_bin_get_type(), NULL);
+    height_bin_set(panel_fit, pcfg.size);
+    gtk_container_add(GTK_CONTAINER(win), panel_fit);
     GtkWidget *box = panel_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_container_set_border_width(GTK_CONTAINER(box), 3);
-    gtk_container_add(GTK_CONTAINER(win), box);
+    gtk_container_set_border_width(GTK_CONTAINER(box), PANEL_BORDER);
+    gtk_container_add(GTK_CONTAINER(panel_fit), box);
 
     menu_btn = gtk_button_new();
     GtkWidget *mb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -1618,6 +1759,7 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(box), launchers, FALSE, FALSE, 0);
 
     tasks = make_taskbar();
+    gtk_style_context_add_class(gtk_widget_get_style_context(tasks), "taskbar");
     gtk_box_pack_start(GTK_BOX(box), tasks, TRUE, TRUE, 0);
 
     if (hde_is_x11()) {

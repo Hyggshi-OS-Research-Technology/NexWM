@@ -12,6 +12,8 @@
                                mapped, then "up=N down=N left=N right=N"
   xtool.py own-selection SEL SECONDS  own selection SEL for SECONDS, e.g. _XSETTINGS_S0 = "another XSETTINGS manager
                                is running" (prints "ready" once it owns it)
+  xtool.py geometry XID        print "X Y WIDTH HEIGHT" of window XID as the X server has it (X, Y: on the screen)
+  xtool.py cardinals XID PROP  print the numbers in property PROP of window XID, e.g. _NET_WM_STRUT_PARTIAL
 """
 import ctypes
 import ctypes.util
@@ -51,6 +53,9 @@ class XWindowAttributes(ctypes.Structure):
 
 
 x.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(XWindowAttributes)]
+x.XTranslateCoordinates.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                                    ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+                                    ctypes.POINTER(ctypes.c_ulong)]
 x.XCreateSimpleWindow.restype = ctypes.c_ulong
 x.XCreateSimpleWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.c_uint,
                                   ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulong]
@@ -129,6 +134,16 @@ def get_prop(win, name, req_type=0):
         raw = ctypes.string_at(data.value, n.value * 2)
     x.XFree(data)
     return raw, fmt
+
+
+def geometry(win):
+    a = XWindowAttributes()
+    if not x.XGetWindowAttributes(d, win, ctypes.byref(a)):
+        return None
+    rx, ry, child = ctypes.c_int(), ctypes.c_int(), ctypes.c_ulong()
+    if not x.XTranslateCoordinates(d, win, root, 0, 0, ctypes.byref(rx), ctypes.byref(ry), ctypes.byref(child)):
+        return None
+    return rx.value, ry.value, a.width, a.height
 
 
 def popups():
@@ -290,6 +305,15 @@ if __name__ == "__main__":
         if not own_selection(sys.argv[2], float(sys.argv[3])):
             print("NOT-OWNED")
             sys.exit(1)
+    elif cmd == "geometry":
+        g = geometry(int(sys.argv[2], 0))
+        if g is None:
+            print("NO-WINDOW")
+            sys.exit(1)
+        print("%d %d %d %d" % g)
+    elif cmd == "cardinals":
+        raw, fmt = get_prop(int(sys.argv[2], 0), sys.argv[3])
+        print(" ".join(str(v) for v in raw) if raw and fmt == 32 else "")
     elif cmd == "selection-targets":
         t = selection_targets(sys.argv[2])
         if t is None:

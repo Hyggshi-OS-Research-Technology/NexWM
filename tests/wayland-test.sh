@@ -225,6 +225,19 @@ printf '[settings]\npanel_position=top\n' > "$INI"
 if wait_log "hde-panel: settings changed: panel at the top, 34px high (Wayland layer shell" 50; then pass "panel_position=top moves the panel to the top"
 else fail "panel_position=top moves the panel to the top"; fi
 sleep 1; shot 12-panel-top
+# a panel made higher, then lower again, is as high as set again (on X11 it kept the bigger height and sank below
+# the screen; a GTK window does not shrink by itself)
+n0=$(nlog "panel at the top, 34px high")
+printf '[settings]\npanel_position=top\npanel_size=52\n' > "$INI"
+wait_log "hde-panel: settings changed: panel at the top, 52px high" 50; sleep 1.5
+l52=$(grep "hde-panel: window: " "$LOG" | tail -n 1)
+printf '[settings]\npanel_position=top\n' > "$INI"
+wait_more "panel at the top, 34px high" "$n0" 50; sleep 1.5
+l34=$(grep "hde-panel: window: " "$LOG" | tail -n 1)
+case "$l52|$l34" in
+    *x52\|*x34) pass "panel_size=52, then the default again: the panel's surface is 52 px, then 34 px high again" ;;
+    *) fail "panel_size=52, then the default again: 52 px, then 34 px high (${l52:-?} / ${l34:-?})" ;;
+esac
 r0=$(nlog "reloads it")
 printf '[settings]\npanel_position=top\nnatural_scroll=false\n' > "$INI"
 if wait_more "reloads it" "$r0" 50 && grep -q '<naturalScroll>no</naturalScroll>' "$RC"; then
