@@ -50,7 +50,11 @@ RUNTIME_FULL="network-manager pulseaudio-utils power-profiles-daemon labwc xwayl
 POLKIT_AGENTS="polkit-gnome policykit-1-gnome lxpolkit mate-polkit"
 
 installed() { dpkg-query -W -f='${Status}\n' "$1" 2>/dev/null | grep -q "install ok installed"; }
-available() { apt-cache show "$1" >/dev/null 2>&1; }
+# a package apt can install here (known names without a candidate, e.g. removed ones, do not count)
+available() {
+    c=$(apt-cache policy "$1" 2>/dev/null | sed -n 's/^ *Candidate: *//p' | head -n 1)
+    [ -n "$c" ] && [ "$c" != "(none)" ]
+}
 
 say "packages"
 apt-get update

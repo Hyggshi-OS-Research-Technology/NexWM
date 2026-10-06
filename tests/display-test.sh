@@ -402,21 +402,13 @@ set_ini display_modes ""
 # the Display page: another resolution from the list, nobody keeps it -> back by itself; then one that is kept
 pkill -x hde-settings 2>/dev/null; sleep 0.5
 SLOG="$OUT/settings-res.log"         # (not appended to the session log: hde-session's own writes would cover it)
-# pick_next SHOT: open the resolution list of the Display page and pick the entry below the one in use; 0 = the
-# "Keep these display settings?" window came
+# pick_next SHOT: open the resolution list of the Display page and pick the entry below the one in use (with the mouse:
+# the list is a menu that GTK may scroll, keys alone do not always reach it); 0 = "Keep these display settings?" came
 pick_next() {
-    pick_shot=$1
-    click_widget display-resolution "$SLOG"; sleep 1
-    shot "$pick_shot"
-    xdotool key Down; sleep 0.4; xdotool key Return
-    wait_win "^Keep these display settings\?$" 40 && return 0
-    info "the list did not take Down + Return (widget at $(widget display-resolution "$SLOG"), active window:" \
-         "$(xdotool getactivewindow getwindowname 2>/dev/null)); with the mouse instead"
-    xdotool key Escape; sleep 0.6
     # shellcheck disable=SC2046  # "X Y" -> two arguments
-    set -- $(widget display-resolution "$SLOG")
-    xdotool mousemove "$1" "$2" sleep 0.3 mousedown 1 sleep 0.2 mouseup 1; sleep 1
-    shot "$pick_shot-mouse"
+    set -- "$1" $(widget display-resolution "$SLOG")
+    xdotool mousemove "$2" "$3" sleep 0.3 mousedown 1 sleep 0.2 mouseup 1; sleep 1
+    shot "$1"
     xdotool mousemove_relative 0 32; sleep 0.5; xdotool click 1
     wait_win "^Keep these display settings\?$" 40
 }
