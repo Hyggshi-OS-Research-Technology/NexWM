@@ -979,7 +979,7 @@ case "$st" in
 esac
 l=$(grep "hde-panel: clock: " "$OUT/session.log" | tail -n 1)
 case "$l" in
-    *"the date under the time"*) pass "... the date under the time (${l#hde-panel: clock: the date under the time })" ;;
+    *"the date under the time"*) pass "... the date under the time ${l#hde-panel: clock: the date under the time }" ;;
     *) fail "... the date under the time (${l:-nothing logged})" ;;
 esac
 shot 16j-panel-default-again

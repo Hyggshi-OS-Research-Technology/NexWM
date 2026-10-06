@@ -912,6 +912,7 @@ GtkWidget *hde_notify_button_new(void)
     bell_img = gtk_image_new();
     bell_count = gtk_label_new("");
     gtk_style_context_add_class(gtk_widget_get_style_context(bell_count), "notif-count");
+    gtk_widget_set_valign(bell_count, GTK_ALIGN_CENTER);     /* a round badge, not a bar as high as the panel */
     gtk_box_pack_start(GTK_BOX(row), bell_img, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), bell_count, FALSE, FALSE, 0);
     gtk_container_add(GTK_CONTAINER(bell_btn), row);

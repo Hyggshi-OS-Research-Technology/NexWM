@@ -530,6 +530,8 @@ for, so it did not notice (in the CI screenshots the "28 px" panel was still 40 
 - **The items fit any height:** the theme's minimum button height (24 px + padding) does not apply in the panel, thin
   panels (under 30 px) have no vertical padding, and the date goes under the time only when both lines fit with the
   fonts in use (measured). Otherwise time and date share one line.
+- The number of notifications next to the bell is a round badge in any panel height (in a high panel it was stretched
+  into a bar as high as the panel).
 - **Wayland:** a panel made lower shrinks too (the layer surface is resized).
 - With `HDE_DEBUG=1` the log tells where the panel window really is: `hde-panel: window: 0,1046 1920x34`.
 

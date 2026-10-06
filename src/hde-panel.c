@@ -1134,7 +1134,7 @@ static void load_css(void)
     g_string_append_printf(s, ".hde-panel .clock-date { font-size: %dpx; color: %s; }", big ? 10 : 8, sub);
     g_string_append_printf(s, ".hde-panel .status-btn { padding: %dpx 5px; }", vpad);
     g_string_append_printf(s, ".hde-panel .notif-count { background: %s; color: white; border-radius: 8px; padding: 0 5px;"
-                              "  font-size: 9px; font-weight: bold; }", ti.accent);
+                              "  min-width: 6px; min-height: 16px; font-size: 9px; font-weight: bold; }", ti.accent);
     g_string_append_printf(s, ".hde-panel label { color: %s; }", fg);
     g_string_append_printf(s, ".hde-osd, .hde-notification, .hde-search, .hde-calendar { background: %s; color: %s;"
                               "  border: 1px solid %s; border-radius: 0; }", popbg, fg, popbd);
