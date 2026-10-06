@@ -420,12 +420,17 @@ static void project_refresh(void)
     gboolean ok = dpy && hde_randr_read(dpy, s, 0);
     pj.nconnected = ok ? hde_randr_n_connected(s) : 1;
     pj.current = ok ? hde_randr_mode_of(s) : HDE_PROJECT_PC;
-    int main = ok ? hde_randr_main_index(s) : -1, second = -1;
-    for (int i = 0; ok && i < s->n_out; i++)
-        if (i != main && s->out[i].connected && second < 0) second = i;
-    char lmain[128] = "This computer's screen", lsecond[128] = "Needs a second screen";
+    int main = ok ? hde_randr_main_index(s) : -1, others = 0;
+    char lmain[128] = "This computer's screen", lsecond[160] = "Needs a second screen";
     if (main >= 0) hde_randr_output_label(&s->out[main], lmain, sizeof lmain);
-    if (second >= 0) hde_randr_output_label(&s->out[second], lsecond, sizeof lsecond);
+    for (int i = 0; ok && i < s->n_out; i++) {
+        if (i == main || !s->out[i].connected) continue;
+        char l[128];
+        hde_randr_output_label(&s->out[i], l, sizeof l);
+        size_t len = others ? strlen(lsecond) : 0;
+        g_snprintf(lsecond + len, sizeof lsecond - len, "%s%s", others ? " + " : "", l);   /* all the other screens */
+        others++;
+    }
     const char *details[HDE_PROJECT_N] = { lmain, pj.nconnected >= 2 ? "The same picture on both" : "Needs a second screen",
                                            pj.nconnected >= 2 ? "One desktop on both" : "Needs a second screen",
                                            lsecond };
