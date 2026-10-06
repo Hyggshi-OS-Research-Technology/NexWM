@@ -62,12 +62,17 @@ typedef struct {
     unsigned long crtcs[HDE_RANDR_MAX]; /* the CRTCs that can drive it */
     int nmode;
     HdeRandrMode modes[HDE_RANDR_MAX_MODES];
+    /* the resolution / rotation chosen for it in Settings > Display (hde_randr_set_wishes), 0 = none: the layouts
+     * of F8 use them when they turn the screen on */
+    unsigned long want_mode;
+    int want_rot;
 } HdeRandrOutput;
 
 typedef struct {
     unsigned long id;                   /* RRCrtc */
     unsigned long mode;                 /* 0 = off */
     int x, y, width, height, rotation;
+    int rotations;                      /* the rotations it can do (HDE_ROT_* bits), 0 = unknown */
     int noutput;
     unsigned long outputs[HDE_RANDR_MAX];
     int gamma_size;
@@ -126,6 +131,27 @@ void hde_randr_describe(const HdeRandrState *s, char *buf, unsigned long len);
 void hde_randr_output_label(const HdeRandrOutput *o, char *buf, unsigned long len);
 /* Comma-separated names of the connected outputs, sorted ("DUMMY0,DUMMY1"): which screens a saved choice is for. */
 void hde_randr_connected_names(const HdeRandrState *s, char *buf, unsigned long len);
+
+/* ---- resolution and rotation of each screen (Settings > Display, hde-settings --display-set) ----
+ * Kept in settings.ini as display_modes = "NAME=WxH@HZ/ROTATION,...", e.g. "HDMI-1=1920x1080@74.97/normal,
+ * eDP-1=1280x800@59.91/left" (@HZ: the highest rate of that size when left out; /ROTATION: normal when left out);
+ * the display service applies them at login and the F8 layouts when they turn a screen on. */
+const char *hde_randr_rotation_id(int rot);            /* "normal" "left" "inverted" "right" (RandR's names) */
+int hde_randr_rotation_from_id(const char *id);        /* HDE_ROT_*, 0 if unknown */
+/* Fills want_mode / want_rot of the connected outputs named in list (modes they do not have are ignored); returns how
+ * many outputs got a wish. */
+int hde_randr_set_wishes(HdeRandrState *s, const char *list);
+/* "1920x1080@74.97/normal": one entry of display_modes for a mode of this output (without "NAME=") */
+void hde_randr_wish_text(const HdeRandrOutput *o, unsigned long mode, int rot, char *buf, unsigned long len);
+/* Change the resolution / rotation of screens that are on: mode_of[i] / rot_of[i] for output i, 0 = keep (either may
+ * be NULL). The screens beside or below a changed one move along, so the desktop gets neither a gap nor an overlap.
+ * 1 = possible (p filled), 0 = not possible (p->error). */
+int hde_randr_plan_modes(const HdeRandrState *s, const unsigned long *mode_of, const int *rot_of, HdeRandrPlan *p);
+/* The wishes of the screens that are on and show something else now: 1 = p is the plan to apply, 0 = nothing to
+ * change (p->error empty) or not possible (p->error). */
+int hde_randr_plan_wishes(const HdeRandrState *s, HdeRandrPlan *p);
+/* A mode of an output by id: its index in o->modes, -1 if it has no such mode */
+int hde_randr_mode_index(const HdeRandrOutput *o, unsigned long mode);
 
 /* ---- X server (return 0 when built without libXrandr or the server has no RandR 1.2) ---- */
 int hde_randr_supported(void);                         /* built with libXrandr */

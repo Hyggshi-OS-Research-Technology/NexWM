@@ -2163,7 +2163,12 @@ static GtkWidget *build(void)
     stack = gtk_stack_new();
     gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT_RIGHT);
     gtk_stack_set_transition_duration(GTK_STACK(stack), 180);
-    gtk_stack_set_homogeneous(GTK_STACK(stack), TRUE);
+    /* every page as wide as the Control Center, but only as tall as it needs: the Wi-Fi, Bluetooth and Sound pages used
+     * to be as tall as the main page (its notifications), with empty space under them. The frame follows the page
+     * (hde-flyout keeps it next to the panel), its height sliding along with the page. */
+    gtk_stack_set_hhomogeneous(GTK_STACK(stack), TRUE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(stack), FALSE);
+    gtk_stack_set_interpolate_size(GTK_STACK(stack), TRUE);
     GtkWidget *m = build_main_page();
     main_scroll = gtk_scrolled_window_new(NULL, NULL);       /* only scrolls on a small screen */
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(main_scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);

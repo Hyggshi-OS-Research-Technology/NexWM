@@ -54,14 +54,17 @@ GtkWidget *page_display_new(void);          /* hde-settings-display.c: brightnes
 GtkWidget *page_about_new(void);            /* hde-settings-about.c */
 GtkWidget *page_panel_new(void);            /* hde-settings-panel.c: Settings > Panel */
 GtkWidget *page_startmenu_new(void);        /* hde-settings-panel.c: Settings > Start Menu */
+GtkWidget *page_power_new(void);            /* hde-settings-power.c: battery, power mode, battery saver, sleep */
 
 /* ---- screens (hde-settings-display.c) and About (hde-settings-about.c) without the main window ---- */
 int display_project_main(int argc, char **argv);   /* hde-settings --project: the F8 window (after gtk_init) */
 int display_cli_displays(void);                    /* --displays */
 int display_cli_mode(const char *id);              /* --display-mode pc|duplicate|extend|second */
 int display_cli_brightness(const char *arg);       /* --brightness [+N|-N|N] */
+int display_cli_set(const char *name, const char *mode, const char *rot);   /* --display-set NAME MODE [ROTATION] */
 int display_cli_night_light(const char *arg);      /* --night-light [on|off|toggle] */
 int about_cli(void);                               /* --about */
+int power_cli(void);                               /* --power */
 int about_window_main(void);                       /* --about-window: the "About HDE" window (after gtk_init) */
 int wayland_config_cli(int argc, char **argv);     /* --wayland-config [DIR] [--reload]: labwc's configuration */
 
@@ -74,6 +77,9 @@ void apply_power_settings(void);
 /* Touchpad / mouse (natural scrolling, tap to click, speed) on every pointer device, see src/hde-input.h.
  * hde-xsettings does the same at login, on every settings.ini change and when a device is plugged in. */
 void apply_input_settings(void);
+/* org.gnome.desktop.peripherals.* / org.cinnamon.desktop.peripherals.* written like settings.ini says (only the keys
+ * that differ; nothing without the schemas or dconf), see hde-settings-peripherals.c. Part of apply_input_settings(). */
+void gsettings_sync_input(void);
 /* Settings > Input: show the devices again (after a change made elsewhere, e.g. in the Touchpad scrolling window). */
 void input_page_refresh(void);
 

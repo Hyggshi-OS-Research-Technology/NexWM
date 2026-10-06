@@ -1,366 +1,193 @@
-```sh
 #!/bin/sh
-
-# test-nexde — Launch NexDE inside a Xephyr window
+# test-nexde — try the HDE you just built (formerly NexDE) in a window: a nested X server (Xephyr) with a whole HDE
+# session inside (window manager, desktop, panel, hotkeys, XSETTINGS, notifications), on its own D-Bus session bus,
+# so nothing touches the desktop you are working in. Close the Xephyr window or press Ctrl+C to stop it.
 #
-# Usage:
-#   ./scripts/test-nexde
-#   ./scripts/test-nexde 1920x1080
-#   ./scripts/test-nexde 1280x720 :2
+# Usage: scripts/test-nexde [options] [WIDTHxHEIGHT] [:DISPLAY]
+#   scripts/test-nexde                  1280x720 on the first free display from :2
+#   scripts/test-nexde 1920x1080 :3
+#   scripts/test-nexde --wm openbox     another window manager (default: wm= of Settings, else the first one found)
+#   scripts/test-nexde --fresh          an empty configuration: what a new user sees at the first login
+#   scripts/test-nexde --shared         your real configuration (~/.config/hde): changes made inside apply to your
+#                                       desktop too. Default: a copy of it, thrown away at the end
+#   scripts/test-nexde --check          start, wait for the panel, report, stop (for scripts and CI; also works
+#                                       inside Xvfb: DISPLAY=:99 scripts/test-nexde --check)
+#   scripts/test-nexde --keep-logs      keep the logs of the session (they are printed at the end)
 #
-# Requirements:
-#   - Xephyr
-#   - xdpyinfo
-#   - NexDE binaries built in bin/
-#
-# Components:
-#   nexwm
-#   nex-wallpaper
-#   nex-desktop
-#   nex-panel
-#   nex-notify
+# Needs: Xephyr (sudo apt install xserver-xephyr), dbus-run-session (dbus), and a build: make
+# Programs come from build/ (BUILD=dir to use another build directory).
+set -u
 
-set -eu
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+BINDIR=$(CDPATH='' cd -- "${BUILD:-$ROOT_DIR/build}" 2>/dev/null && pwd) || BINDIR=""
 
-# ─────────────────────────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────────────────────────
+SCREEN=1280x720
+DISP=""
+WM=""
+CONFIG=copy
+CHECK=0
+KEEP_LOGS=0
 
-SCREEN="${1:-1280x720}"
-DISPLAY_NUM="${2:-:1}"
+info() { printf '[test-nexde] %s\n' "$*"; }
+die() { printf '[test-nexde] error: %s\n' "$*" >&2; exit 1; }
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
-BINDIR="$ROOT_DIR/build"
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
 
-XEphyr_PID=""
-CHILD_PIDS=""
-CLEANED_UP=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --wm) [ $# -ge 2 ] || die "--wm needs a name (metacity, openbox, xfwm4, ...)"; WM=$2; shift ;;
+        --wm=*) WM=${1#--wm=} ;;
+        --fresh) CONFIG=fresh ;;
+        --shared) CONFIG=shared ;;
+        --check) CHECK=1 ;;
+        --keep-logs) KEEP_LOGS=1 ;;
+        :[0-9]*) DISP=$1 ;;
+        [0-9]*x[0-9]*) SCREEN=$1 ;;
+        *) die "unknown argument: $1 (see --help)" ;;
+    esac
+    shift
+done
 
-# ─────────────────────────────────────────────────────────────
-# Logging
-# ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------- checks
+[ -n "$BINDIR" ] && [ -x "$BINDIR/hde-session" ] || die "no HDE build in ${BUILD:-$ROOT_DIR/build}: run make first"
+for p in hde-panel hde-desktop hde-settings; do
+    [ -x "$BINDIR/$p" ] || die "$BINDIR/$p is missing: install libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev, then make"
+done
+command -v Xephyr >/dev/null 2>&1 || die "Xephyr not found: sudo apt install xserver-xephyr"
+command -v dbus-run-session >/dev/null 2>&1 || die "dbus-run-session not found: sudo apt install dbus"
+[ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || die "run it from a graphical session (Xephyr opens a window)"
 
-info()
-{
-    printf '%s\n' "[NexDE] $*"
+display_free() {
+    n=${1#:}
+    [ ! -e "/tmp/.X11-unix/X$n" ] && [ ! -e "/tmp/.X$n-lock" ]
 }
+if [ -z "$DISP" ]; then
+    for n in 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if display_free ":$n"; then DISP=":$n"; break; fi
+    done
+    [ -n "$DISP" ] || die "no free X display between :2 and :20"
+elif ! display_free "$DISP"; then
+    die "display $DISP is already in use: give another one, e.g. scripts/test-nexde $SCREEN :$(( ${DISP#:} + 1 ))"
+fi
 
-error()
-{
-    printf '%s\n' "[NexDE] Error: $*" >&2
+# ---------------------------------------------------------------- a configuration for the nested session
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/test-nexde.XXXXXX") || die "mktemp failed"
+XEPHYR_PID=""
+SESSION_PID=""
+# shellcheck disable=SC2329  # called by the EXIT trap
+cleanup() {
+    trap - EXIT INT TERM
+    if [ -n "$SESSION_PID" ] && kill -0 "$SESSION_PID" 2>/dev/null; then
+        # hde-session (a child of dbus-run-session) logs out properly on SIGTERM: components first, then the bus
+        command -v pkill >/dev/null 2>&1 && pkill -TERM -P "$SESSION_PID" -x hde-session 2>/dev/null
+        i=0
+        while [ "$i" -lt 30 ] && pgrep -P "$SESSION_PID" -x hde-session >/dev/null 2>&1; do sleep 0.1; i=$((i + 1)); done
+        kill -TERM "$SESSION_PID" 2>/dev/null
+        i=0
+        while [ "$i" -lt 30 ] && kill -0 "$SESSION_PID" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+        kill -KILL "$SESSION_PID" 2>/dev/null
+    fi
+    if [ -n "$XEPHYR_PID" ] && kill -0 "$XEPHYR_PID" 2>/dev/null; then
+        kill -TERM "$XEPHYR_PID" 2>/dev/null
+        i=0
+        while [ "$i" -lt 20 ] && kill -0 "$XEPHYR_PID" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+        kill -KILL "$XEPHYR_PID" 2>/dev/null
+    fi
+    wait 2>/dev/null
+    if [ "$KEEP_LOGS" = 1 ]; then
+        info "logs kept in $WORK (session.log, xephyr.log)"
+    else
+        rm -rf "$WORK"
+    fi
 }
-
-# ─────────────────────────────────────────────────────────────
-# Cleanup
-# ─────────────────────────────────────────────────────────────
-
-cleanup()
-{
-    # Prevent cleanup from running twice.
-    if [ "$CLEANED_UP" -eq 1 ]; then
-        return
-    fi
-
-    CLEANED_UP=1
-
-    echo ""
-    info "Stopping NexDE..."
-
-    # Stop NexDE components.
-    if [ -n "$CHILD_PIDS" ]; then
-        for pid in $CHILD_PIDS; do
-            if kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
-            fi
-        done
-    fi
-
-    # Give applications a moment to terminate normally.
-    sleep 0.2
-
-    # Force remaining components if necessary.
-    if [ -n "$CHILD_PIDS" ]; then
-        for pid in $CHILD_PIDS; do
-            if kill -0 "$pid" 2>/dev/null; then
-                kill -KILL "$pid" 2>/dev/null || true
-            fi
-        done
-    fi
-
-    # Stop Xephyr.
-    if [ -n "$XEphyr_PID" ]; then
-        if kill -0 "$XEphyr_PID" 2>/dev/null; then
-            kill "$XEphyr_PID" 2>/dev/null || true
-        fi
-
-        sleep 0.2
-
-        if kill -0 "$XEphyr_PID" 2>/dev/null; then
-            kill -KILL "$XEphyr_PID" 2>/dev/null || true
-        fi
-    fi
-
-    # Reap child processes.
-    if [ -n "$CHILD_PIDS" ]; then
-        for pid in $CHILD_PIDS; do
-            wait "$pid" 2>/dev/null || true
-        done
-    fi
-
-    if [ -n "$XEphyr_PID" ]; then
-        wait "$XEphyr_PID" 2>/dev/null || true
-    fi
-
-    info "NexDE test session stopped."
-}
-
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# ─────────────────────────────────────────────────────────────
-# Sanity checks
-# ─────────────────────────────────────────────────────────────
+REAL_CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}
+case "$CONFIG" in
+    shared)
+        CONF_DIR=$REAL_CONFIG
+        info "configuration: your real one ($REAL_CONFIG/hde): changes made inside apply to your desktop too" ;;
+    fresh)
+        CONF_DIR=$WORK/config
+        mkdir -p "$CONF_DIR/hde"
+        info "configuration: empty (first login)" ;;
+    *)
+        CONF_DIR=$WORK/config
+        mkdir -p "$CONF_DIR"
+        for d in hde gtk-3.0 gtk-4.0 fontconfig; do
+            [ -d "$REAL_CONFIG/$d" ] && cp -R "$REAL_CONFIG/$d" "$CONF_DIR/" 2>/dev/null
+        done
+        mkdir -p "$CONF_DIR/hde"
+        info "configuration: a copy of yours, thrown away at the end (--shared: use yours, --fresh: empty)" ;;
+esac
 
-if ! command -v Xephyr >/dev/null 2>&1; then
-    error "Xephyr not found."
-    echo ""
-    echo "Install with:"
-    echo "  sudo apt install xserver-xephyr"
-    exit 1
-fi
-
-if ! command -v xdpyinfo >/dev/null 2>&1; then
-    error "xdpyinfo not found."
-    echo ""
-    echo "Install with:"
-    echo "  sudo apt install x11-utils"
-    exit 1
-fi
-
-if [ ! -d "$BINDIR" ]; then
-    error "bin directory not found:"
-    echo "  $BINDIR"
-    echo ""
-    echo "Run 'make' first."
-    exit 1
-fi
-
-# ─────────────────────────────────────────────────────────────
-# Verify binaries
-# ─────────────────────────────────────────────────────────────
-
-REQUIRED_COMPONENTS="
-nexwm
-nex-wallpaper
-nex-desktop
-nex-panel
-nex-notify
-"
-
-for component in $REQUIRED_COMPONENTS; do
-    if [ ! -x "$BINDIR/$component" ]; then
-        error "bin/$component not found or not executable."
-        echo ""
-        echo "Run 'make' first."
-        exit 1
-    fi
-done
-
-# ─────────────────────────────────────────────────────────────
-# Check whether display is already in use
-# ─────────────────────────────────────────────────────────────
-
-if xdpyinfo -display "$DISPLAY_NUM" >/dev/null 2>&1; then
-    error "Display $DISPLAY_NUM is already running."
-    echo ""
-    echo "Try another display:"
-    echo "  ./scripts/test-nexde 1280x720 :2"
-    exit 1
-fi
-
-# ─────────────────────────────────────────────────────────────
-# Start Xephyr
-# ─────────────────────────────────────────────────────────────
-
-info "Starting Xephyr on $DISPLAY_NUM at $SCREEN..."
-
-Xephyr \
-    "$DISPLAY_NUM" \
-    -ac \
-    -br \
-    -noreset \
-    -screen "$SCREEN" &
-
-XEphyr_PID=$!
-
-info "Xephyr PID: $XEphyr_PID"
-
-# ─────────────────────────────────────────────────────────────
-# Wait for X server
-# ─────────────────────────────────────────────────────────────
-
-info "Waiting for X server..."
-
-X_READY=0
-
+# ---------------------------------------------------------------- Xephyr
+info "starting Xephyr on $DISP ($SCREEN)"
+Xephyr "$DISP" -ac -br -noreset -resizeable -title "HDE test session ($DISP)" -screen "$SCREEN" \
+    > "$WORK/xephyr.log" 2>&1 &
+XEPHYR_PID=$!
 i=0
-
-while [ "$i" -lt 50 ]; do
-    if ! kill -0 "$XEphyr_PID" 2>/dev/null; then
-        error "Xephyr terminated unexpectedly."
-        exit 1
-    fi
-
-    if xdpyinfo -display "$DISPLAY_NUM" >/dev/null 2>&1; then
-        X_READY=1
-        break
-    fi
-
+while [ "$i" -lt 100 ]; do
+    kill -0 "$XEPHYR_PID" 2>/dev/null || { cat "$WORK/xephyr.log" >&2; die "Xephyr stopped right away"; }
+    [ -e "/tmp/.X11-unix/X${DISP#:}" ] && break
     sleep 0.1
     i=$((i + 1))
 done
+[ -e "/tmp/.X11-unix/X${DISP#:}" ] || die "Xephyr did not start on $DISP"
+sleep 0.3
 
-if [ "$X_READY" -ne 1 ]; then
-    error "Xephyr failed to start on $DISPLAY_NUM."
-    exit 1
+# ---------------------------------------------------------------- the session
+# Nested in Xephyr on a Wayland desktop, GTK gets no real clicks through XInput 2: core events (README-FIX, fix 4).
+CORE=""
+[ -n "${WAYLAND_DISPLAY:-}" ] && CORE=1
+info "starting the HDE session from $BINDIR"
+(
+    unset WAYLAND_DISPLAY HDE_SESSION_PID DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP \
+          DESKTOP_SESSION SESSION_MANAGER GDK_BACKEND HDE_WM
+    export DISPLAY="$DISP" XDG_CONFIG_HOME="$CONF_DIR" XDG_CACHE_HOME="$WORK/cache" XDG_SESSION_TYPE=x11
+    [ -n "$WM" ] && export HDE_WM="$WM"
+    [ -n "$CORE" ] && export HDE_CORE_EVENTS=1
+    [ "$CHECK" = 1 ] && export HDE_DEBUG=1 HDE_NO_AUTOSTART=1
+    export PATH="$BINDIR:$PATH"
+    exec dbus-run-session -- "$BINDIR/hde-session"
+) > "$WORK/session.log" 2>&1 &
+SESSION_PID=$!
+
+panel_up() {
+    command -v xprop >/dev/null 2>&1 || return 1
+    xprop -display "$DISP" -root _HDE_PANEL_WINDOW 2>/dev/null | grep -q "window id"
+}
+
+if [ "$CHECK" = 1 ]; then
+    rc=1
+    i=0
+    while [ "$i" -lt 200 ]; do
+        kill -0 "$SESSION_PID" 2>/dev/null || break
+        if panel_up; then rc=0; break; fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    sleep 1
+    if [ $rc = 0 ] && kill -0 "$SESSION_PID" 2>/dev/null; then
+        wm=$(sed -n 's/^hde-session: starting window manager \([A-Za-z0-9_-]*\).*/\1/p' "$WORK/session.log" | head -n 1)
+        info "OK: the HDE session runs on $DISP (window manager: ${wm:-none}, panel: up)"
+    else
+        rc=1
+        command -v xprop >/dev/null 2>&1 || info "xprop is needed for --check: sudo apt install x11-utils"
+        info "FAIL: the panel did not come up; the session log:"
+        sed 's/^/    /' "$WORK/session.log" | tail -n 40
+    fi
+    exit $rc
 fi
 
-info "X server is ready."
-
-# ─────────────────────────────────────────────────────────────
-# Environment
-# ─────────────────────────────────────────────────────────────
-
-export DISPLAY="$DISPLAY_NUM"
-export PATH="$BINDIR:$PATH"
-export NEXDE_BINDIR="$BINDIR"
-
-# Optional XDG environment for the test session.
-export XDG_CURRENT_DESKTOP="NexDE"
-export XDG_SESSION_DESKTOP="NexDE"
-
-info "X11 display      : $DISPLAY"
-info "Screen           : $SCREEN"
-info "NexDE binaries   : $BINDIR"
-info "Desktop          : $XDG_CURRENT_DESKTOP"
-
-# ─────────────────────────────────────────────────────────────
-# Start wallpaper
-# ─────────────────────────────────────────────────────────────
-
-info "Starting wallpaper..."
-
-"$BINDIR/nex-wallpaper" \
-    --color 0x1a1a2e &
-
-CHILD_PIDS="$CHILD_PIDS $!"
-
-sleep 0.1
-
-# ─────────────────────────────────────────────────────────────
-# Start desktop
-# ─────────────────────────────────────────────────────────────
-
-info "Starting desktop..."
-
-"$BINDIR/nex-desktop" &
-
-CHILD_PIDS="$CHILD_PIDS $!"
-
-sleep 0.1
-
-# ─────────────────────────────────────────────────────────────
-# Start panel
-# ─────────────────────────────────────────────────────────────
-
-info "Starting panel..."
-
-"$BINDIR/nex-panel" &
-
-CHILD_PIDS="$CHILD_PIDS $!"
-
-sleep 0.1
-
-# ─────────────────────────────────────────────────────────────
-# Start notification
-# ─────────────────────────────────────────────────────────────
-
-info "Starting welcome notification..."
-
-"$BINDIR/nex-notify" \
-    "NexDE" \
-    "Test session ready" \
-    2500 &
-
-CHILD_PIDS="$CHILD_PIDS $!"
-
-sleep 0.5
-
-# ─────────────────────────────────────────────────────────────
-# Test session information
-# ─────────────────────────────────────────────────────────────
-
-echo ""
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║                  NexDE TEST SESSION                     ║"
-echo "╠══════════════════════════════════════════════════════════╣"
-printf "║ Display : %-44s ║\n" "$DISPLAY"
-printf "║ Screen  : %-44s ║\n" "$SCREEN"
-printf "║ WM      : %-44s ║\n" "NexWM"
-echo "╠══════════════════════════════════════════════════════════╣"
-echo "║ Components                                             ║"
-echo "║   • nex-wallpaper                                      ║"
-echo "║   • nex-desktop                                        ║"
-echo "║   • nex-panel                                          ║"
-echo "║   • nex-notify                                         ║"
-echo "║   • nexwm                                              ║"
-echo "╠══════════════════════════════════════════════════════════╣"
-echo "║ Close NexWM or press Ctrl+C to quit.                  ║"
-echo "╚══════════════════════════════════════════════════════════╝"
-echo ""
-
-# ─────────────────────────────────────────────────────────────
-# Start NexWM
-# ─────────────────────────────────────────────────────────────
-
-info "Starting NexWM..."
-
-"$BINDIR/nexwm" &
-
-NEXWM_PID=$!
-CHILD_PIDS="$CHILD_PIDS $NEXWM_PID"
-
-# ─────────────────────────────────────────────────────────────
-# Wait for NexWM
-# ─────────────────────────────────────────────────────────────
-
-wait "$NEXWM_PID" 2>/dev/null || true
-
-info "NexWM exited."
-
-# Cleanup is automatically executed by EXIT trap.
+info "running: close the Xephyr window or press Ctrl+C to stop"
+while kill -0 "$XEPHYR_PID" 2>/dev/null && kill -0 "$SESSION_PID" 2>/dev/null; do sleep 0.5; done
+if ! kill -0 "$SESSION_PID" 2>/dev/null; then
+    info "the session ended (logged out); the end of its log:"
+    tail -n 15 "$WORK/session.log" | sed 's/^/    /'
+fi
 exit 0
-```
-
-### Run
-
-```bash
-chmod +x scripts/test-nexde
-./scripts/test-nexde
-```
-
-Or:
-
-```bash
-./scripts/test-nexde 1920x1080
-```
-
-Another display:
-
-```bash
-./scripts/test-nexde 1280x720 :2
-```
-
-This version deliberately avoids `pkill -P $$`, so it **never touches NexDE processes running outside the test session by mistake**. When `nexwm` exits or you press `Ctrl+C`, the script stops the components it started itself and then closes Xephyr.

@@ -8,14 +8,16 @@
  *                             touchpad, until a direction is chosen; run by hde-session)
  *   hde-settings --project    the Project window of F8 / Super+P (PC screen only, Duplicate, Extend, Second screen only)
  *   hde-settings --display-mode pc|duplicate|extend|second    --displays    --brightness [+N|-N|N]
+ *   hde-settings --display-set NAME WxH[@HZ]|auto [normal|left|right|inverted]
  *   hde-settings --night-light [on|off|toggle]
+ *   hde-settings --power      the battery, the battery saver and the low-battery warnings, as text
  *   hde-settings --about      this computer, the system and the memory HDE uses, as text
  *   hde-settings --about-window   the "About HDE" window (logo of the system, HDE version, credits)
  *   hde-settings --wayland-config [DIR] [--reload]   the labwc configuration of the "HDE (Wayland)" session
  *   hde-settings --version
  *
  * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound,touchpad,
- * display,about,panel}.c
+ * display,about,panel,power}.c
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
@@ -58,7 +60,7 @@ static const SettingItem items[] = {
     { "windows", "preferences-system-windows-symbolic|focus-windows-symbolic|view-dual-symbolic|window-maximize-symbolic",
       "Window Management", "Window manager used by the desktop" },
     { "notifications", "preferences-system-notifications-symbolic|notification-symbolic", "Notifications", "Alerts and Do Not Disturb" },
-    { "power", "battery-good-symbolic|battery-full-symbolic", "Power", "Sleep, screen timeout and battery" },
+    { "power", "battery-good-symbolic|battery-full-symbolic", "Power", "Battery, power mode, battery saver and sleep" },
     { "keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat, Super key, sound and display keys" },
     { "users", "system-users-symbolic|avatar-default-symbolic", "Users", "Accounts and administrator" },
     { "about", "help-about-symbolic", "About", "Hyggshi Desktop Environment and this computer" },
@@ -527,6 +529,7 @@ void apply_input_settings(void)
 {
     HdeInputPrefs p;
     hde_input_prefs_load(&p);
+    gsettings_sync_input();                 /* Mutter / Muffin apply GNOME's values themselves: the same ones */
     Display *dpy = hde_input_open();
     if (!dpy) return;
     hde_input_apply(dpy, -1, &p, "hde-settings: input");
@@ -824,28 +827,6 @@ static GtkWidget *make_notifications_page(void)
     return box;
 }
 
-static void cb_screen_timeout(GtkComboBox *c, gpointer x)
-{
-    (void)x;
-    cfg_set_int("screen_timeout", gtk_combo_box_get_active(c));
-    apply_power_settings();
-}
-
-static GtkWidget *make_power_page(void)
-{
-    GtkWidget *box = page_base();
-    const char *times[] = { "Never", "5 minutes", "10 minutes", "15 minutes", "30 minutes", "1 hour" };
-    gtk_box_pack_start(GTK_BOX(box), section("Power saving"), FALSE, FALSE, 0);
-    GtkWidget *screen = combo_with(times, 6, cfg_get_int("screen_timeout", 2));
-    g_signal_connect(screen, "changed", G_CALLBACK(cb_screen_timeout), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Screen timeout", "Turn off the display after inactivity.", screen), FALSE, FALSE, 0);
-    GtkWidget *sleep = combo_with(times, 6, cfg_get_int("sleep_timeout", 3));
-    g_signal_connect(sleep, "changed", G_CALLBACK(cb_int_combo), "sleep_timeout");
-    gtk_box_pack_start(GTK_BOX(box), row_box("Automatic suspend", "Suspend the computer after inactivity (needs a power manager such as xfce4-power-manager).", sleep), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Battery saver", "Reduce background activity when enabled.", switch_with("battery_saver", FALSE)), FALSE, FALSE, 0);
-    return box;
-}
-
 static void cb_user_settings(GtkButton *b, gpointer x)
 {
     (void)b; (void)x;
@@ -886,7 +867,7 @@ static GtkWidget *make_page(const char *id)
     if (!strcmp(id, "bluetooth")) return page_bluetooth_new();
     if (!strcmp(id, "windows")) return page_windows_new();
     if (!strcmp(id, "notifications")) return make_notifications_page();
-    if (!strcmp(id, "power")) return make_power_page();
+    if (!strcmp(id, "power")) return page_power_new();
     if (!strcmp(id, "keyboard")) return page_keyboard_new();
     if (!strcmp(id, "users")) return make_users_page();
     return page_about_new();
@@ -1131,11 +1112,14 @@ int main(int argc, char **argv)
         return about_window_main();
     }
     if (argc > 1 && !strcmp(argv[1], "--displays")) return display_cli_displays();
+    if (argc > 1 && !strcmp(argv[1], "--power")) return power_cli();
     if (argc > 1 && (!strcmp(argv[1], "--display-mode") || g_str_has_prefix(argv[1], "--display-mode="))) {
         const char *m = argv[1][14] == '=' ? argv[1] + 15 : argc > 2 ? argv[2] : NULL;
         if (!m) { fprintf(stderr, "hde-settings: --display-mode expects pc, duplicate, extend or second\n"); return 2; }
         return display_cli_mode(m);
     }
+    if (argc > 1 && !strcmp(argv[1], "--display-set"))
+        return display_cli_set(argc > 2 ? argv[2] : NULL, argc > 3 ? argv[3] : NULL, argc > 4 ? argv[4] : NULL);
     if (argc > 1 && (!strcmp(argv[1], "--brightness") || g_str_has_prefix(argv[1], "--brightness="))) {
         const char *v = argv[1][12] == '=' ? argv[1] + 13 : argc > 2 ? argv[2] : NULL;
         return display_cli_brightness(v);
@@ -1197,8 +1181,11 @@ int main(int argc, char **argv)
                "                                       Second screen only\n"
                "       hde-settings --display-mode pc|duplicate|extend|second   the same without a window\n"
                "       hde-settings --displays         the screens, the layout in use and the brightness method\n"
+               "       hde-settings --display-set NAME WxH[@HZ]|auto [normal|left|right|inverted]\n"
+               "                                       the resolution / rotation of a screen (kept for next time)\n"
                "       hde-settings --brightness [+N|-N|N]   show or change the screen brightness\n"
                "       hde-settings --night-light [on|off|toggle]   show or switch Night Light (X11)\n"
+               "       hde-settings --power            the battery, the battery saver and the low-battery warnings\n"
                "       hde-settings --about            this computer, the system and the memory HDE uses\n"
                "       hde-settings --about-window     the About HDE window\n"
                "       hde-settings --wayland-config [DIR] [--reload]   write labwc's configuration (Wayland session)\n"

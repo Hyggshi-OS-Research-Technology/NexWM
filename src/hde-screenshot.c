@@ -11,6 +11,8 @@
  *             --clipboard       only copy the image to the clipboard, do not save a file
  *             --no-clipboard    do not copy the image to the clipboard
  *             --no-notify       do not show a notification
+ *             --pointer, --no-pointer   with / without the mouse pointer in the picture (default: settings.ini
+ *                               screenshot_pointer, off; the Screenshot window has a check box for it)
  *
  * hde-hotkeys runs it for Print / Shift+Print / Alt+Print (Settings > Keyboard can pick another tool) and, with
  * --clipboard, for Ctrl+Print / Ctrl+Shift+Print / Ctrl+Alt+Print.
@@ -26,6 +28,9 @@
 #include <gdk/gdkx.h>
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#ifdef HAVE_XFIXES
+#include <X11/extensions/Xfixes.h>
+#endif
 #include <glib/gstdio.h>
 #include <math.h>
 #include <stdio.h>
@@ -39,6 +44,7 @@ static Mode mode = MODE_FULL;
 static int opt_delay;
 static char *opt_file;
 static gboolean opt_no_clip, opt_no_notify, opt_clip_only, opt_ui;
+static int opt_pointer = -1;            /* -1: settings.ini screenshot_pointer */
 
 static int exit_code = 2;
 static GdkPixbuf *result;               /* the final image (also served on the clipboard) */
@@ -92,7 +98,78 @@ static void fail(const char *what)
     quit_if_idle();
 }
 
+/* ---------------------------------------------------------------- settings.ini */
+static char *settings_path(void) { return g_build_filename(g_get_user_config_dir(), "hde", "settings.ini", NULL); }
+
+static gboolean setting_bool(const char *key, gboolean def)
+{
+    char *path = settings_path();
+    GKeyFile *kf = g_key_file_new();
+    gboolean v = def;
+    if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL) && g_key_file_has_key(kf, "settings", key, NULL))
+        v = g_key_file_get_boolean(kf, "settings", key, NULL);
+    g_key_file_free(kf);
+    g_free(path);
+    return v;
+}
+
+static void setting_set_bool(const char *key, gboolean v)
+{
+    char *path = settings_path(), *dir = g_path_get_dirname(path);
+    g_mkdir_with_parents(dir, 0700);
+    GKeyFile *kf = g_key_file_new();
+    g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    if (!g_key_file_has_key(kf, "settings", key, NULL) || g_key_file_get_boolean(kf, "settings", key, NULL) != v) {
+        g_key_file_set_boolean(kf, "settings", key, v);
+        g_key_file_save_to_file(kf, path, NULL);
+    }
+    g_key_file_free(kf);
+    g_free(dir);
+    g_free(path);
+}
+
+static gboolean want_pointer(void) { return opt_pointer >= 0 ? opt_pointer : setting_bool("screenshot_pointer", FALSE); }
+
 /* ---------------------------------------------------------------- capture */
+/* The mouse pointer onto a picture of the screen whose top left corner is at ox, oy (XFixes: the X server draws the
+ * pointer on top, it is never in what programs read from the screen). */
+static void add_pointer(GdkPixbuf *pb, int ox, int oy)
+{
+#ifdef HAVE_XFIXES
+    GdkDisplay *gd = gdk_display_get_default();
+    if (!pb || !GDK_IS_X11_DISPLAY(gd)) return;
+    Display *dpy = GDK_DISPLAY_XDISPLAY(gd);
+    int evb, erb;
+    if (!XFixesQueryExtension(dpy, &evb, &erb)) return;
+    XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
+    if (!ci) return;
+    int x0 = ci->x - ci->xhot - ox, y0 = ci->y - ci->yhot - oy;
+    int w = gdk_pixbuf_get_width(pb), h = gdk_pixbuf_get_height(pb), nc = gdk_pixbuf_get_n_channels(pb);
+    int rs = gdk_pixbuf_get_rowstride(pb);
+    guchar *px = gdk_pixbuf_get_pixels(pb);
+    int drawn = 0;
+    for (int j = 0; j < ci->height; j++)
+        for (int i = 0; i < ci->width; i++) {
+            int x = x0 + i, y = y0 + j;
+            if (x < 0 || y < 0 || x >= w || y >= h) continue;
+            unsigned long v = ci->pixels[j * ci->width + i];  /* premultiplied ARGB in the low 32 bits of a long */
+            unsigned a = (v >> 24) & 0xff;
+            if (!a) continue;
+            guchar *d = px + y * rs + x * nc;
+            unsigned src[3] = { (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff };
+            for (int c = 0; c < 3; c++) d[c] = (guchar)MIN(255u, src[c] + d[c] * (255 - a) / 255);
+            if (nc == 4) d[3] = (guchar)MIN(255u, a + d[3] * (255 - a) / 255);
+            drawn++;
+        }
+    g_printerr("hde-screenshot: pointer at %d,%d (%dx%d) %s\n", ci->x, ci->y, ci->width, ci->height,
+               drawn ? "drawn into the picture" : "outside the picture");
+    XFree(ci);
+#else
+    (void)pb; (void)ox; (void)oy;
+    g_printerr("hde-screenshot: built without libxfixes-dev: no mouse pointer in the picture\n");
+#endif
+}
+
 static GdkPixbuf *grab_root(int x, int y, int w, int h)
 {
     GdkWindow *root = gdk_get_default_root_window();
@@ -106,6 +183,14 @@ static GdkPixbuf *grab_root(int x, int y, int w, int h)
     return gdk_pixbuf_get_from_window(root, x, y, w, h);
 }
 
+/* the whole screen or a window, with the pointer when wanted */
+static GdkPixbuf *grab_shot(int x, int y, int w, int h)
+{
+    GdkPixbuf *pb = grab_root(x, y, w, h);
+    if (pb && want_pointer()) add_pointer(pb, w < 0 || h < 0 ? 0 : MAX(0, x), w < 0 || h < 0 ? 0 : MAX(0, y));
+    return pb;
+}
+
 /* ---------------------------------------------------------------- Wayland: grim, slurp */
 static GdkPixbuf *grim_capture(const char *geometry, GError **err)
 {
@@ -115,7 +200,19 @@ static GdkPixbuf *grim_capture(const char *geometry, GError **err)
                             "Screenshots on Wayland need grim: sudo apt install grim");
         return NULL;
     }
-    const char *argv[] = { grim, "-t", "png", geometry ? "-g" : "-", geometry ? geometry : NULL, geometry ? "-" : NULL, NULL };
+    /* -c: with the pointer */
+    const char *argv[8];
+    int k = 0;
+    argv[k++] = grim;
+    if (want_pointer()) argv[k++] = "-c";
+    argv[k++] = "-t";
+    argv[k++] = "png";
+    if (geometry) {
+        argv[k++] = "-g";
+        argv[k++] = geometry;
+    }
+    argv[k++] = "-";
+    argv[k] = NULL;
     char *out = NULL;
     gsize len = 0;
     int status = 0;
@@ -744,10 +841,10 @@ static gboolean start_capture(gpointer data)
         break;
     case MODE_WINDOW:
         /* no usable active window (e.g. the desktop has the focus): take the whole screen */
-        finish(active_window_rect(&r) ? grab_root(r.x, r.y, r.width, r.height) : grab_root(0, 0, -1, -1));
+        finish(active_window_rect(&r) ? grab_shot(r.x, r.y, r.width, r.height) : grab_shot(0, 0, -1, -1));
         break;
     default:
-        finish(grab_root(0, 0, -1, -1));
+        finish(grab_shot(0, 0, -1, -1));
         break;
     }
     return G_SOURCE_REMOVE;
@@ -755,7 +852,7 @@ static gboolean start_capture(gpointer data)
 
 /* ---------------------------------------------------------------- the Screenshot window (--ui) */
 static struct {
-    GtkWidget *win, *stack, *modes[3], *delay, *take, *preview, *saved, *error;
+    GtkWidget *win, *stack, *modes[3], *delay, *pointer, *take, *preview, *saved, *error;
     gboolean closed;                    /* the user closed the window (it is also hidden while taking a picture) */
 } ui;
 
@@ -814,7 +911,11 @@ static void on_ui_take(GtkButton *b, gpointer d)
     mode = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.modes[1])) ? MODE_WINDOW
          : gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.modes[2])) ? MODE_AREA : MODE_FULL;
     int delay = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ui.delay));
-    g_printerr("hde-screenshot: window: taking %s in %d s\n", mode == MODE_AREA ? "an area" : mode == MODE_WINDOW ? "the active window" : "the whole screen", delay);
+    gboolean ptr = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.pointer));
+    opt_pointer = ptr;
+    setting_set_bool("screenshot_pointer", ptr);           /* remembered, also for PrtSc */
+    g_printerr("hde-screenshot: window: taking %s in %d s%s\n", mode == MODE_AREA ? "an area" : mode == MODE_WINDOW ?
+               "the active window" : "the whole screen", delay, ptr && mode != MODE_AREA ? ", with the pointer" : "");
     gtk_widget_hide(ui.win);                  /* not in the picture */
     gdk_display_flush(gdk_display_get_default());
     g_timeout_add(MAX(delay * 1000, mode == MODE_WINDOW ? 600 : 400), ui_capture, NULL);
@@ -938,6 +1039,11 @@ static void ui_build(void)
     gtk_label_set_mnemonic_widget(GTK_LABEL(dl), ui.delay);
     gtk_box_pack_start(GTK_BOX(drow), dl, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(drow), ui.delay, FALSE, FALSE, 0);
+    ui.pointer = gtk_check_button_new_with_mnemonic("Show the mouse _pointer");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.pointer), want_pointer());
+    gtk_widget_set_tooltip_text(ui.pointer, "For the whole screen and a window (also for the Print key)");
+    gtk_widget_set_margin_start(ui.pointer, 12);
+    gtk_box_pack_start(GTK_BOX(drow), ui.pointer, FALSE, FALSE, 0);
     ui.take = gtk_button_new_with_mnemonic("_Take Screenshot");
     gtk_style_context_add_class(gtk_widget_get_style_context(ui.take), "suggested-action");
     gtk_widget_set_can_default(ui.take, TRUE);
@@ -985,7 +1091,8 @@ static void ui_build(void)
 static void usage(FILE *f)
 {
     fprintf(f,
-            "Usage: hde-screenshot [--area | --window] [--delay N] [--file PATH | --clipboard] [--no-clipboard] [--no-notify]\n"
+            "Usage: hde-screenshot [--area | --window] [--delay N] [--file PATH | --clipboard] [--pointer] [--no-clipboard]\n"
+            "                      [--no-notify]\n"
             "  (no option)      the whole screen\n"
             "  -a, --area       drag a rectangle (Esc or right click cancels)\n"
             "  -w, --window     the active window\n"
@@ -993,6 +1100,7 @@ static void usage(FILE *f)
             "  -f, --file P     save to P (default: ~/Pictures/Screenshots/Screenshot_<date>_<time>.png)\n"
             "  -c, --clipboard  only copy to the clipboard, save no file\n"
             "  -i, --ui         the Screenshot window (mode, delay, then Copy / Save As / Open / Show in Folder)\n"
+            "  -p, --pointer    with the mouse pointer (--no-pointer: without; default: screenshot_pointer in settings.ini)\n"
             "  --no-clipboard, --no-notify\n");
 }
 
@@ -1010,6 +1118,8 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "-c") || !strcmp(a, "--clipboard")) opt_clip_only = TRUE;
         else if (!strcmp(a, "--no-clipboard")) opt_no_clip = TRUE;
         else if (!strcmp(a, "--no-notify")) opt_no_notify = TRUE;
+        else if (!strcmp(a, "-p") || !strcmp(a, "--pointer")) opt_pointer = 1;
+        else if (!strcmp(a, "--no-pointer")) opt_pointer = 0;
         else if (!strcmp(a, "-i") || !strcmp(a, "--ui") || !strcmp(a, "--interactive")) opt_ui = TRUE;
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(stdout); return 0; }
         else { fprintf(stderr, "hde-screenshot: unknown option %s\n", a); usage(stderr); return 2; }

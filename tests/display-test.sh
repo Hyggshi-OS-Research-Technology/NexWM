@@ -334,6 +334,107 @@ if echo "$out" | grep -q "software dimming" && echo "$out" | grep -q "could not 
 else fail "an unwritable backlight falls back to software dimming ($out)"; fi
 "$B/hde-settings" --brightness 100 > /dev/null 2>&1
 
+# ---------- 10b. desktop monitors: their own brightness over DDC/CI (a fake ddcutil) ----------
+mkdir -p "$OUT/fakebin"
+cat > "$OUT/fakebin/ddcutil" <<'DDC'
+#!/bin/sh
+# fake ddcutil: one monitor that answers DDC/CI on /dev/i2c-7, one that does not
+st=$HDE_FAKE_DDC
+echo "ARGS: $*" >> "$st.log"
+case "$*" in
+    "detect --terse") printf 'Display 1\n   I2C bus:  /dev/i2c-7\n   Monitor:  DEL:DELL U2415:CFV9N7\n\nInvalid display\n   I2C bus:  /dev/i2c-8\n' ;;
+    "--bus 7 getvcp 10 --terse") printf 'VCP 10 C %s 100\n' "$(cat "$st" 2>/dev/null || echo 50)" ;;
+    "--bus 7 setvcp 10 "*" --noverify") echo "$5" > "$st" ;;
+    *) exit 1 ;;
+esac
+DDC
+chmod +x "$OUT/fakebin/ddcutil"
+export HDE_FAKE_DDC="$OUT/ddc-brightness"
+rm -f "$XDG_RUNTIME_DIR/hde-ddc.cache"
+out=$(PATH="$OUT/fakebin:$PATH" "$B/hde-settings" --brightness 40 2>&1)
+if [ "$(cat "$HDE_FAKE_DDC" 2>/dev/null)" = 40 ] && echo "$out" | grep -q "DDC/CI DELL U2415: 40%"; then
+    pass "no backlight, ddcutil installed: the monitor's own brightness over DDC/CI ($out)"
+else fail "the monitor's own brightness over DDC/CI ($out; $(tr '\n' ';' < "$HDE_FAKE_DDC.log" 2>/dev/null))"; fi
+out=$(PATH="$OUT/fakebin:$PATH" "$B/hde-settings" --brightness -10 2>&1)
+if [ "$(cat "$HDE_FAKE_DDC" 2>/dev/null)" = 30 ]; then pass "... a step down: 30% ($out)"; else fail "... a step down: 30% ($out)"; fi
+n=$(grep -c '^ARGS: detect' "$HDE_FAKE_DDC.log" 2>/dev/null)
+if [ "$n" = 1 ]; then pass "... the monitors are looked for once (cached for these screens)"
+else fail "... the monitors are looked for once (cached for these screens): $n times"; fi
+b0=$(verbose_field DUMMY0 Brightness)
+if [ "$(pct "$b0")" = 100 ]; then pass "... and no software dimming on top of it (gamma $b0)"
+else fail "... and no software dimming on top of it (gamma $b0)"; fi
+out=$(PATH="$OUT/fakebin:$PATH" HDE_DDC=0 "$B/hde-settings" --brightness 2>&1)
+case "$out" in "software dimming"*) pass "HDE_DDC=0: software dimming again" ;; *) fail "HDE_DDC=0: software dimming again ($out)" ;; esac
+rm -f "$XDG_RUNTIME_DIR/hde-ddc.cache"
+
+# ---------- 10c. the resolution of a screen (Settings > Display > Resolution, hde-settings --display-set) ----------
+"$B/hde-settings" --display-mode extend > /dev/null 2>&1; sleep 1
+info "screens now: DUMMY0 $(geom DUMMY0), DUMMY1 $(geom DUMMY1), desktop $(screen_size); DUMMY0 can: $(xrandr 2>/dev/null | awk '/^DUMMY0 /{on=1;next} /^[A-Za-z]/{on=0} on{printf "%s ", $1}')"
+out=$("$B/hde-settings" --display-set DUMMY0 1024x768 2>&1)
+if wait_geom DUMMY0 "1024x768\+0\+0" 30 && wait_geom DUMMY1 "[0-9]+x[0-9]+\+1024\+0" 20; then
+    pass "--display-set DUMMY0 1024x768: smaller, and DUMMY1 on its right moves along (DUMMY1 $(geom DUMMY1), desktop $(screen_size))"
+else fail "--display-set DUMMY0 1024x768 (DUMMY0 $(geom DUMMY0), DUMMY1 $(geom DUMMY1): $out)"; fi
+check "... remembered for the next logins (display_modes=DUMMY0=1024x768@...)" grep -q "^display_modes=DUMMY0=1024x768@" "$INI"
+"$B/hde-settings" --display-set DUMMY1 1024x768 left > "$OUT/display-set-left.txt" 2>&1
+if xrandr 2>/dev/null | grep -q "^DUMMY1 .*(normal left"; then
+    if wait_geom DUMMY1 "768x1024\+1024\+0" 30; then pass "--display-set DUMMY1 1024x768 left: portrait ($(geom DUMMY1), desktop $(screen_size))"
+    else fail "--display-set DUMMY1 1024x768 left: portrait (DUMMY1 $(geom DUMMY1): $(tr '\n' ' ' < "$OUT/display-set-left.txt"))"; fi
+elif grep -q "cannot be turned" "$OUT/display-set-left.txt"; then
+    pass "--display-set DUMMY1 ... left: this driver cannot rotate, and HDE says so ($(tr '\n' ' ' < "$OUT/display-set-left.txt"))"
+else fail "--display-set DUMMY1 ... left on a driver that cannot rotate ($(tr '\n' ' ' < "$OUT/display-set-left.txt"))"; fi
+"$B/hde-settings" --display-set DUMMY1 auto normal > /dev/null 2>&1
+"$B/hde-settings" --display-set DUMMY0 auto > /dev/null 2>&1
+if wait_geom DUMMY0 "1280x800\+0\+0" 30 && wait_geom DUMMY1 "[0-9]+x[0-9]+\+1280\+0" 20; then
+    pass "--display-set ... auto: the native resolution again (DUMMY0 $(geom DUMMY0), DUMMY1 $(geom DUMMY1))"
+else fail "--display-set ... auto: the native resolution again (DUMMY0 $(geom DUMMY0), DUMMY1 $(geom DUMMY1))"; fi
+check "... and the choice is forgotten" sh -c "! grep -q '^display_modes=.*DUMMY0=' '$INI'"
+"$B/hde-settings" --display-mode pc > /dev/null 2>&1; sleep 1
+# at login: the resolution chosen in Settings comes back
+set_ini display_modes "DUMMY0=1024x768@60.00/normal"
+pkill -x hde-xsettings; sleep 0.5
+"$B/hde-xsettings" > "$OUT/xsettings-login2.log" 2>&1 &
+if wait_geom DUMMY0 "1024x768\+0\+0" 60; then pass "at login the resolution chosen in Settings comes back (DUMMY0 $(geom DUMMY0))"
+else fail "at login the resolution chosen in Settings comes back (DUMMY0 $(geom DUMMY0))"; fi
+check "... and hde-xsettings logs it" grep -q "hde-xsettings: displays: the resolutions chosen in Settings: DUMMY0 1024x768@" "$OUT/xsettings-login2.log"
+set_ini display_modes ""
+"$B/hde-settings" --display-set DUMMY0 auto > /dev/null 2>&1; sleep 1
+# the Display page: another resolution from the list, nobody keeps it -> back by itself; then one that is kept
+pkill -x hde-settings 2>/dev/null; sleep 0.5
+"$B/hde-settings" display >> "$LOG" 2>&1 &      # (its widget positions go to the session log, see widget())
+SRES=$!
+if wait_win "Hyggshi Settings" 60; then
+    sleep 2
+    shot 13-settings-display-resolution
+    if [ -n "$(widget display-resolution)" ]; then
+        click_widget display-resolution; sleep 0.8
+        xdotool key Down; sleep 0.3; xdotool key Return
+        if wait_win "^Keep these display settings\?$" 40 && ! wait_geom DUMMY0 "1280x800\+0\+0" 5; then
+            pass "a new resolution from the list applies at once and asks to keep it (DUMMY0 $(geom DUMMY0))"
+            sleep 1; shot 14-keep-resolution
+            if wait_geom DUMMY0 "1280x800\+0\+0" 90; then pass "... nobody answers: back to 1280x800 after the countdown"
+            else fail "... nobody answers: back to 1280x800 after the countdown (DUMMY0 $(geom DUMMY0))"; fi
+            check "... and not remembered" sh -c "! grep -q '^display_modes=.*DUMMY0=' '$INI'"
+            sleep 1.5
+            click_widget display-resolution; sleep 0.8
+            xdotool key Down; sleep 0.3; xdotool key Return
+            if wait_win "^Keep these display settings\?$" 40; then
+                sleep 1.5
+                n0=$(nlog "hde-settings: project: kept")
+                click_widget project-keep
+                wait_more "hde-settings: project: kept" "$n0" 30
+                sleep 1
+                g=$(geom DUMMY0)
+                if [ -n "$g" ] && [ "$g" != "1280x800+0+0" ] && grep -q "^display_modes=DUMMY0=${g%%+*}@" "$INI"; then
+                    pass "'Keep changes' keeps it and remembers it for the next logins ($g)"
+                else fail "'Keep changes' keeps it and remembers it ($g; $(grep '^display_modes' "$INI"))"; fi
+            else fail "a second choice from the list asks again"; fi
+        else fail "a new resolution from the list applies and asks to keep it (DUMMY0 $(geom DUMMY0); $(grep 'hde-settings: display' "$LOG" | tail -n 2 | tr '\n' ' '))"; fi
+    else fail "the Display page has a resolution list (no widget position logged)"; fi
+else fail "Settings opens at the Display page"; fi
+kill "$SRES" 2>/dev/null; sleep 0.5
+set_ini display_modes ""
+"$B/hde-settings" --display-set DUMMY0 auto > /dev/null 2>&1; sleep 1
+
 # ---------- 11. Settings: Display and About ----------
 "$B/hde-settings" display > "$OUT/settings.log" 2>&1 &
 SETTINGS=$!

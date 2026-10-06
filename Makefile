@@ -21,6 +21,9 @@ X11_LIBS:=$(shell pkg-config --libs x11 2>/dev/null || echo -lX11)
 # software brightness for F6/F7 on screens without a backlight, Night Light. Without it: none of these.
 XRANDR_CFLAGS:=$(shell pkg-config --exists xrandr 2>/dev/null && echo "-DHAVE_XRANDR `pkg-config --cflags xrandr`")
 XRANDR_LIBS:=$(shell pkg-config --libs xrandr 2>/dev/null)
+# XFixes (libxfixes-dev, pulled in by libgtk-3-dev): the mouse pointer in screenshots (hde-screenshot --pointer)
+XFIXES_CFLAGS:=$(shell pkg-config --exists xfixes 2>/dev/null && echo "-DHAVE_XFIXES `pkg-config --cflags xfixes`")
+XFIXES_LIBS:=$(shell pkg-config --libs xfixes 2>/dev/null)
 # gtk-layer-shell (libgtk-layer-shell-dev): the "HDE (Wayland)" session — panel, desktop, Start menu and popups as
 # layer-shell surfaces. Without it HDE builds for X11 only. It must come before libwayland-client when linking.
 LAYER_CFLAGS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo "-DHAVE_GTK_LAYER_SHELL `pkg-config --cflags gtk-layer-shell-0`")
@@ -44,14 +47,16 @@ GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE -DHDE_DATADIR=\"$(PREFIX)/sh
 HDE_HEADERS=$(wildcard src/*.h)
 PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-notify.c src/hde-search.c src/hde-theme.c \
           src/hde-input.c src/hde-startmenu.c src/hde-applets.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c \
-          src/hde-wl.c src/hde-run.c src/hde-flyout.c src/hde-control.c src/hde-battery.c src/hde-power.c $(WLTASK_SRC)
+          src/hde-wl.c src/hde-run.c src/hde-flyout.c src/hde-control.c src/hde-battery.c src/hde-power.c \
+          src/hde-profiles.c src/hde-powersave.c $(WLTASK_SRC)
 DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c src/hde-panel-config.c src/hde-wl.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
              src/hde-settings-sound.c src/hde-settings-touchpad.c src/hde-settings-display.c src/hde-settings-about.c \
              src/hde-theme.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-sysinfo.c \
              src/hde-settings-panel.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c src/hde-wl.c \
-             src/hde-settings-wayland.c
+             src/hde-settings-wayland.c src/hde-settings-power.c src/hde-power.c src/hde-profiles.c src/hde-run.c \
+             src/hde-settings-peripherals.c
 # Build stamp (commit + date) shown in Settings > About, by --version and at the top of the session log, to tell at a
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
@@ -87,7 +92,7 @@ $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-brightness.c src/hde-randr.c src
 	    -lX11 -lm
 # Built-in screenshot tool (PrtSc / Shift+PrtSc / Alt+PrtSc via hde-hotkeys): no scrot & co. needed
 $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
-	$(CC) $(GUI_CFLAGS) $(GTK_CFLAGS) $(GLIBX_CFLAGS) -o $@ $< $(GTK_LIBS) $(GLIBX_LIBS) -lm
+	$(CC) $(GUI_CFLAGS) $(GTK_CFLAGS) $(GLIBX_CFLAGS) $(XFIXES_CFLAGS) -o $@ $< $(GTK_LIBS) $(GLIBX_LIBS) $(XFIXES_LIBS) -lm
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \
                         src/hde-randr.h src/hde-brightness.h src/hde-build.h $(VERSION_H) | $(BUILD)

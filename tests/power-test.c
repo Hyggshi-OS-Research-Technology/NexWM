@@ -145,6 +145,56 @@ int main(void)
     hde_power_read(&p);
     CHECK(p.n == 0 && p.ac == -1, "no power_supply directory at all");
 
+    /* 6. the decisions of the battery saver and the low-battery warnings (src/hde-powersave.c) */
+    HdePower q;
+    memset(&q, 0, sizeof q);
+    q.n = 1;
+    q.ac = 0;
+    q.state = HDE_BAT_DISCHARGING;
+    q.percent = 25;
+    CHECK(hde_power_on_battery(&q), "adapter unplugged: on battery");
+    CHECK(!hde_power_saver_wanted(&q, TRUE, 20, FALSE), "battery saver at 20%%: not yet at 25%%");
+    q.percent = 20;
+    CHECK(hde_power_saver_wanted(&q, TRUE, 20, FALSE), "... on at 20%%");
+    CHECK(!hde_power_saver_wanted(&q, FALSE, 20, FALSE), "... never when it is turned off");
+    q.percent = 22;
+    CHECK(hde_power_saver_wanted(&q, TRUE, 20, TRUE) && !hde_power_saver_wanted(&q, TRUE, 20, FALSE),
+          "at 22%% it stays on once on (no flapping around the level), but does not turn on");
+    q.percent = 23;
+    CHECK(!hde_power_saver_wanted(&q, TRUE, 20, TRUE), "... and goes off above level + 2%%");
+    q.percent = 90;
+    CHECK(hde_power_saver_wanted(&q, TRUE, 100, FALSE), "level 100 = always on battery (90%%)");
+    q.ac = 1;
+    q.state = HDE_BAT_CHARGING;
+    q.percent = 5;
+    CHECK(!hde_power_on_battery(&q) && !hde_power_saver_wanted(&q, TRUE, 100, TRUE), "plugged in: never (even at 5%%)");
+    q.ac = -1;
+    q.state = HDE_BAT_DISCHARGING;
+    CHECK(hde_power_on_battery(&q), "no adapter to ask: a discharging battery means on battery");
+    q.percent = -1;
+    q.n = 0;
+    CHECK(!hde_power_on_battery(&q) && !hde_power_saver_wanted(&q, TRUE, 100, FALSE), "no battery: never");
+    int warned = 0;
+    q.n = 1;
+    q.ac = 0;
+    q.percent = 11;
+    CHECK(hde_power_warning_due(&q, &warned) == 0, "11%%: no warning");
+    q.percent = 10;
+    CHECK(hde_power_warning_due(&q, &warned) == 1 && warned == 1, "10%%: 'Battery low'");
+    q.percent = 9;
+    CHECK(hde_power_warning_due(&q, &warned) == 0, "9%%: not again");
+    q.percent = 5;
+    CHECK(hde_power_warning_due(&q, &warned) == 2, "5%%: 'Battery critically low'");
+    q.percent = 4;
+    CHECK(hde_power_warning_due(&q, &warned) == 0, "4%%: not again");
+    q.ac = 1;
+    q.state = HDE_BAT_CHARGING;
+    CHECK(hde_power_warning_due(&q, &warned) == 0 && warned == 0, "plugged in: the warnings start over");
+    q.ac = 0;
+    q.state = HDE_BAT_DISCHARGING;
+    q.percent = 3;
+    CHECK(hde_power_warning_due(&q, &warned) == 2, "unplugged again at 3%%: 'Battery critically low' at once");
+
     rm_rf(root);
     g_free(root);
     printf("%d passed, %d failed\n", passes, fails);

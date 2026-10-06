@@ -8,11 +8,14 @@
  *   hde-settings --display-mode pc|duplicate|extend|second   apply a layout without a window
  *   hde-settings --displays                                   the screens, the layout in use, the brightness method
  *   hde-settings --brightness [+N|-N|N]                       show or change the screen brightness
+ *   hde-settings --display-set NAME WxH[@HZ]|auto [normal|left|right|inverted]   resolution / rotation of a screen
  *
  * "Second screen only" turns the computer's own screen off: a "Keep these display settings?" window then goes back to
  * the previous layout by itself after 15 seconds (HDE_DISPLAY_CONFIRM_SECONDS), in case the other screen shows
  * nothing. The choice is remembered (display_mode / display_outputs) and restored at login by hde-xsettings when the
  * same screens are connected.
+ * A new resolution, refresh rate or orientation (the Resolution section of the Display page) asks the same question;
+ * kept, it goes into display_modes (see hde-randr.h), which hde-xsettings applies at every login.
  */
 #include "hde-settings.h"
 #include "hde-randr.h"
@@ -62,6 +65,55 @@ static void log_state(const char *what, Display *dpy)
         fprintf(stderr, "hde-settings: project: %s: %s\n", what, desc);
     }
     g_free(s);
+}
+
+/* display_modes (hde-randr.h): the resolutions / rotations chosen for the screens */
+static void read_wishes(HdeRandrState *s)
+{
+    char *w = cfg_get_string("display_modes", "");
+    hde_randr_set_wishes(s, w);
+    g_free(w);
+}
+
+/* the entry of one screen replaced (entry: "1920x1080@60.00/normal"), or removed (entry NULL) */
+static void wishes_store(const char *name, const char *entry)
+{
+    char *cur = cfg_get_string("display_modes", "");
+    char **items = g_strsplit(cur, ",", -1);
+    GString *out = g_string_new(NULL);
+    size_t nl = strlen(name);
+    for (int i = 0; items[i]; i++) {
+        const char *it = g_strstrip(items[i]);
+        if (!*it || (!strncmp(it, name, nl) && it[nl] == '=')) continue;
+        g_string_append_printf(out, "%s%s", out->len ? "," : "", it);
+    }
+    if (entry) g_string_append_printf(out, "%s%s=%s", out->len ? "," : "", name, entry);
+    cfg_set_string("display_modes", out->str);
+    g_string_free(out, TRUE);
+    g_strfreev(items);
+    g_free(cur);
+}
+
+static int output_by_name(const HdeRandrState *s, const char *name)
+{
+    for (int i = 0; i < s->n_out; i++)
+        if (s->out[i].connected && !strcmp(s->out[i].name, name)) return i;
+    return -1;
+}
+
+/* the screen's native resolution (its preferred mode), else its largest one */
+static unsigned long native_mode(const HdeRandrOutput *o)
+{
+    int best = -1;
+    for (int i = 0; i < o->nmode; i++) {
+        const HdeRandrMode *m = &o->modes[i];
+        if (best < 0) { best = i; continue; }
+        const HdeRandrMode *b = &o->modes[best];
+        if (m->preferred != b->preferred) { if (m->preferred) best = i; continue; }
+        long am = (long)m->width * m->height, ab = (long)b->width * b->height;
+        if (am > ab || (am == ab && m->refresh > b->refresh)) best = i;
+    }
+    return best >= 0 ? o->modes[best].id : 0;
 }
 
 /* ================================================================= pictures of the four layouts */
@@ -163,6 +215,7 @@ typedef struct {
     guint timer;
     ConfirmDone done;
     gpointer data;
+    char *why;                          /* "The computer's own screen is off now." */
 } Confirm;
 static Confirm *confirm_open;
 
@@ -237,13 +290,14 @@ static void confirm_finish(Confirm *c, gboolean keep)
     gtk_widget_destroy(c->win);
     if (c->done) c->done(keep, c->data);
     g_free(c->before);
+    g_free(c->why);
     g_free(c);
 }
 
 static void confirm_update(Confirm *c)
 {
-    char *t = g_strdup_printf("The computer's own screen is off now. Going back to the previous layout in %d second%s, "
-                              "unless you keep these settings.", c->left, c->left == 1 ? "" : "s");
+    char *t = g_strdup_printf("%s Going back to the previous settings in %d second%s, unless you keep these.", c->why,
+                              c->left, c->left == 1 ? "" : "s");
     gtk_label_set_text(GTK_LABEL(c->label), t);
     g_free(t);
 }
@@ -271,11 +325,12 @@ static gboolean on_confirm_key(GtkWidget *w, GdkEventKey *e, gpointer p)
 }
 static gboolean on_confirm_delete(GtkWidget *w, GdkEvent *e, gpointer p) { (void)w; (void)e; confirm_finish(p, FALSE); return TRUE; }
 
-/* before: the layout to go back to (taken over). */
-static void confirm_show(HdeRandrState *before, ConfirmDone done, gpointer data)
+/* before: the layout to go back to (taken over); why: what may have gone wrong, in one sentence. */
+static void confirm_show(HdeRandrState *before, const char *why, ConfirmDone done, gpointer data)
 {
     Confirm *c = g_new0(Confirm, 1);
     c->before = before;
+    c->why = g_strdup(why);
     c->done = done;
     c->data = data;
     c->left = confirm_seconds();
@@ -335,7 +390,7 @@ static int apply_layout(HdeProjectMode mode, ConfirmDone done, gpointer data, ch
     if (!dpy || !hde_randr_read(dpy, now, 0)) {
         *error = g_strdup(hde_randr_supported() ? "This X server cannot change screens (no RandR 1.2)."
                                                 : "HDE was built without libxrandr-dev: install it and rebuild HDE.");
-    } else if (!hde_randr_plan(now, mode, p)) {
+    } else if (read_wishes(now), !hde_randr_plan(now, mode, p)) {
         *error = g_strdup(p->error);
     } else {
         fprintf(stderr, "hde-settings: project: applying %s\n", hde_project_label(mode));
@@ -362,7 +417,7 @@ static int apply_layout(HdeProjectMode mode, ConfirmDone done, gpointer data, ch
     remember_layout(now, mode);
     g_free(p);
     if (mode == HDE_PROJECT_SECOND && hde_randr_mode_of(now) != HDE_PROJECT_SECOND) {
-        confirm_show(now, done, data);      /* takes now */
+        confirm_show(now, "The computer's own screen is off now.", done, data);      /* takes now */
     } else {
         g_free(now);
         if (done) done(TRUE, data);
@@ -779,6 +834,9 @@ int display_cli_displays(void)
             printf("\n");
         }
         printf("Desktop: %dx%d (largest possible %dx%d)\n", s->screen_w, s->screen_h, s->max_w, s->max_h);
+        char *dm = cfg_get_string("display_modes", "");
+        if (*dm) printf("Resolutions chosen in Settings: %s\n", dm);
+        g_free(dm);
     }
     HdeBrightness b;
     hde_brightness_get(d, &b);
@@ -806,7 +864,7 @@ int display_cli_mode(const char *id)
     char err[256] = "";
     int rc = 1;
     if (!hde_randr_read(d, s, 1)) fprintf(stderr, "hde-settings: the screens cannot be changed (no RandR 1.2 / libxrandr)\n");
-    else if (!hde_randr_plan(s, m, p)) fprintf(stderr, "hde-settings: %s: %s\n", hde_project_label(m), p->error);
+    else if (read_wishes(s), !hde_randr_plan(s, m, p)) fprintf(stderr, "hde-settings: %s: %s\n", hde_project_label(m), p->error);
     else if (!hde_randr_apply(d, s, p, err, sizeof err)) fprintf(stderr, "hde-settings: %s: %s\n", hde_project_label(m), err);
     else {
         rc = 0;
@@ -817,6 +875,73 @@ int display_cli_mode(const char *id)
         hde_randr_describe(s, desc, sizeof desc);
         printf("%s: %s\n", hde_project_label(m), desc);
         fprintf(stderr, "hde-settings: display mode %s applied: %s\n", hde_project_id(m), desc);
+    }
+    g_free(p);
+    g_free(s);
+    XCloseDisplay(d);
+    return rc;
+}
+
+/* hde-settings --display-set NAME WxH[@HZ]|auto [ROTATION]: applied at once (no question: it was typed on purpose) and
+ * remembered in display_modes for the next logins; auto = the screen's native resolution (forgets the choice). */
+int display_cli_set(const char *name, const char *mode, const char *rot)
+{
+    int want_rot = rot ? hde_randr_rotation_from_id(rot) : 0;
+    if (!name || !mode || (rot && !want_rot)) {
+        fprintf(stderr, "hde-settings: --display-set NAME WxH[@HZ]|auto [normal|left|right|inverted]\n");
+        return 2;
+    }
+    Display *d = cli_display();
+    if (!d) return 2;
+    HdeRandrState *s = g_new0(HdeRandrState, 1);
+    HdeRandrPlan *p = g_new0(HdeRandrPlan, 1);
+    unsigned long mode_of[HDE_RANDR_MAX] = { 0 };
+    int rot_of[HDE_RANDR_MAX] = { 0 }, rc = 1, i = -1;
+    char err[256] = "";
+    gboolean native = !g_ascii_strcasecmp(mode, "auto");
+    if (!hde_randr_read(d, s, 1)) {
+        fprintf(stderr, "hde-settings: the screens cannot be changed (no RandR 1.2 / libxrandr)\n");
+    } else if ((i = output_by_name(s, name)) < 0) {
+        fprintf(stderr, "hde-settings: no connected screen is called %s (hde-settings --displays lists them)\n", name);
+    } else {
+        HdeRandrOutput *o = &s->out[i];
+        unsigned long m = 0;
+        if (native) m = native_mode(o);
+        else {
+            char *item = g_strdup_printf("%s=%s", name, mode);
+            hde_randr_set_wishes(s, item);
+            g_free(item);
+            m = o->want_mode;
+        }
+        if (!m) {
+            GString *have = g_string_new(NULL);
+            for (int k = 0; k < o->nmode; k++) {
+                char sz[32];
+                g_snprintf(sz, sizeof sz, "%dx%d", o->modes[k].width, o->modes[k].height);
+                if (!strstr(have->str, sz)) g_string_append_printf(have, "%s%s", have->len ? " " : "", sz);
+            }
+            fprintf(stderr, "hde-settings: %s cannot show %s (it can: %s)\n", name, mode, have->str);
+            g_string_free(have, TRUE);
+        } else {
+            mode_of[i] = m;
+            rot_of[i] = want_rot;
+            int r = want_rot ? want_rot : o->rotation ? o->rotation : HDE_ROT_0;
+            char entry[64];
+            hde_randr_wish_text(o, m, r, entry, sizeof entry);
+            if (!hde_randr_plan_modes(s, mode_of, rot_of, p)) fprintf(stderr, "hde-settings: %s: %s\n", name, p->error);
+            else if (!hde_randr_apply(d, s, p, err, sizeof err)) fprintf(stderr, "hde-settings: %s: %s\n", name, err);
+            else {
+                rc = 0;
+                if (native && r == HDE_ROT_0) wishes_store(name, NULL);
+                else wishes_store(name, entry);
+                hde_gamma_apply(d, 0);
+                hde_randr_read(d, s, 0);
+                char desc[768];
+                hde_randr_describe(s, desc, sizeof desc);
+                printf("%s: %s%s: %s\n", name, entry, native ? " (native)" : "", desc);
+                fprintf(stderr, "hde-settings: display: %s %s applied: %s\n", name, entry, desc);
+            }
+        }
     }
     g_free(p);
     g_free(s);
@@ -888,6 +1013,233 @@ static gboolean dp_bright_updating;
 
 static void dp_refresh(void);
 
+/* ---- a new resolution / refresh rate / orientation for one screen ---- */
+typedef struct { char name[32], entry[64], label[128]; } OutChange;
+
+static void out_change_done(gboolean kept, gpointer d)
+{
+    OutChange *oc = d;
+    if (kept) {
+        wishes_store(oc->name, oc->entry);
+        settings_status("%s: %s kept", oc->label, oc->entry);
+        fprintf(stderr, "hde-settings: display: %s %s kept (display_modes)\n", oc->name, oc->entry);
+    } else {
+        settings_status("Back to the previous resolution of %s", oc->label);
+    }
+    g_free(oc);
+    dp_refresh();
+}
+
+/* mode / rot: 0 = keep. Applied, then "Keep these display settings?" (back by itself after 15 s); kept: remembered in
+ * display_modes. FALSE + *error (g_free) when it cannot be done. */
+static gboolean apply_output_change(const char *name, unsigned long mode, int rot, char **error)
+{
+    Display *dpy = xdisplay();
+    HdeRandrState *now = g_new0(HdeRandrState, 1);
+    HdeRandrPlan *p = g_new0(HdeRandrPlan, 1);
+    unsigned long mode_of[HDE_RANDR_MAX] = { 0 };
+    int rot_of[HDE_RANDR_MAX] = { 0 }, i = -1;
+    char err[256] = "";
+    *error = NULL;
+    if (confirm_open) confirm_finish(confirm_open, TRUE);   /* a new change while the question is open: keep the last */
+    if (!dpy || !hde_randr_read(dpy, now, 0)) *error = g_strdup("This X server cannot change screens (no RandR 1.2).");
+    else if ((i = output_by_name(now, name)) < 0 || !now->out[i].crtc) *error = g_strdup_printf("%s is not on.", name);
+    else {
+        mode_of[i] = mode;
+        rot_of[i] = rot;
+        if (!hde_randr_plan_modes(now, mode_of, rot_of, p)) *error = g_strdup(p->error);
+        else if (!hde_randr_apply(dpy, now, p, err, sizeof err)) {
+            *error = g_strdup_printf("%s could not be changed: %s", name, err);
+            HdeRandrPlan *back = g_new0(HdeRandrPlan, 1);
+            HdeRandrState *cur = g_new0(HdeRandrState, 1);
+            if (hde_randr_read(dpy, cur, 0) && hde_randr_plan_restore(cur, now, back))
+                hde_randr_apply(dpy, cur, back, err, sizeof err);
+            g_free(cur);
+            g_free(back);
+        }
+    }
+    if (*error) {
+        fprintf(stderr, "hde-settings: display: %s\n", *error);
+        g_free(p);
+        g_free(now);
+        return FALSE;
+    }
+    hde_gamma_apply(dpy, 0);
+    const HdeRandrOutput *o = &now->out[i];
+    OutChange *oc = g_new0(OutChange, 1);
+    g_strlcpy(oc->name, name, sizeof oc->name);
+    int r = rot ? rot : o->rotation ? o->rotation : HDE_ROT_0;
+    hde_randr_wish_text(o, mode ? mode : o->mode, r, oc->entry, sizeof oc->entry);
+    hde_randr_output_label(o, oc->label, sizeof oc->label);
+    char what[160];
+    g_snprintf(what, sizeof what, "%s %s applied", name, oc->entry);
+    log_state(what, dpy);
+    char *why = g_strdup_printf("The %s of %s changed.", mode ? "resolution" : "orientation", oc->label);
+    confirm_show(now, why, out_change_done, oc);    /* takes now */
+    g_free(why);
+    g_free(p);
+    return TRUE;
+}
+
+/* ---- the Resolution section: one screen at a time ---- */
+static GtkWidget *res_box, *res_screen_row, *res_screen, *res_size, *res_rate, *res_rot, *res_note;
+static gboolean res_updating;
+static char res_output[32];             /* the screen shown */
+static const struct { int rot; const char *label; } rot_choices[] = {
+    { HDE_ROT_0, "Landscape" }, { HDE_ROT_270, "Portrait (right)" }, { HDE_ROT_90, "Portrait (left)" },
+    { HDE_ROT_180, "Landscape (flipped)" },
+};
+
+static int cmp_area_desc(const void *a, const void *b)
+{
+    const HdeRandrMode *x = *(const HdeRandrMode *const *)a, *y = *(const HdeRandrMode *const *)b;
+    long ax = (long)x->width * x->height, ay = (long)y->width * y->height;
+    if (ax != ay) return ax < ay ? 1 : -1;
+    if (x->width != y->width) return x->width < y->width ? 1 : -1;
+    return x->refresh < y->refresh ? 1 : x->refresh > y->refresh ? -1 : 0;
+}
+
+static void res_fill(const HdeRandrState *s, gboolean ok)
+{
+    if (!res_box) return;
+    int on[HDE_RANDR_MAX], non = 0, sel = -1;
+    for (int i = 0; ok && i < s->n_out; i++)
+        if (s->out[i].connected && s->out[i].crtc) on[non++] = i;
+    gtk_widget_set_visible(res_box, non > 0);
+    gtk_widget_set_visible(res_note, non == 0);
+    if (!non) {
+        gtk_label_set_text(GTK_LABEL(res_note), !ok && !xdisplay() ? "Resolutions are set by the compositor in a Wayland "
+                           "session (e.g. wlr-randr or kanshi)." : "No screen can be changed here (no RandR 1.2).");
+        return;
+    }
+    res_updating = TRUE;
+    for (int k = 0; k < non; k++)
+        if (!strcmp(s->out[on[k]].name, res_output)) sel = on[k];
+    if (sel < 0) {
+        int m = hde_randr_main_index(s);
+        sel = m >= 0 && s->out[m].crtc ? m : on[0];
+    }
+    g_strlcpy(res_output, s->out[sel].name, sizeof res_output);
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(res_screen));
+    for (int k = 0; k < non; k++) {
+        char l[128];
+        hde_randr_output_label(&s->out[on[k]], l, sizeof l);
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(res_screen), s->out[on[k]].name, l);
+    }
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(res_screen), res_output);
+    gtk_widget_set_visible(res_screen_row, non > 1);
+
+    const HdeRandrOutput *o = &s->out[sel];
+    int cur = hde_randr_mode_index(o, o->mode);
+    const HdeRandrMode *sorted[HDE_RANDR_MAX_MODES];
+    for (int k = 0; k < o->nmode; k++) sorted[k] = &o->modes[k];
+    qsort(sorted, (size_t)o->nmode, sizeof sorted[0], cmp_area_desc);
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(res_size));
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(res_rate));
+    char cur_id[32] = "";
+    if (cur >= 0) g_snprintf(cur_id, sizeof cur_id, "%dx%d", o->modes[cur].width, o->modes[cur].height);
+    GString *seen = g_string_new(",");
+    for (int k = 0; k < o->nmode; k++) {
+        const HdeRandrMode *m = sorted[k];
+        char id[32], key[40];
+        g_snprintf(id, sizeof id, "%dx%d", m->width, m->height);
+        g_snprintf(key, sizeof key, ",%s,", id);
+        if (strstr(seen->str, key)) continue;
+        g_string_append_printf(seen, "%s,", id);
+        gboolean pref = FALSE;
+        for (int j = 0; j < o->nmode; j++)
+            pref |= o->modes[j].preferred && o->modes[j].width == m->width && o->modes[j].height == m->height;
+        char *t = g_strdup_printf("%d × %d%s", m->width, m->height, pref ? " (recommended)" : "");
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(res_size), id, t);
+        g_free(t);
+        if (cur >= 0 && m->width == o->modes[cur].width && m->height == o->modes[cur].height) {
+            char mid[32], *rt = g_strdup_printf("%.2f Hz", m->refresh);
+            g_snprintf(mid, sizeof mid, "%lu", m->id);
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(res_rate), mid, rt);
+            g_free(rt);
+        }
+    }
+    g_string_free(seen, TRUE);
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(res_size), cur_id);
+    char mid[32];
+    g_snprintf(mid, sizeof mid, "%lu", o->mode);
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(res_rate), mid);
+    gtk_widget_set_sensitive(res_rate, gtk_tree_model_iter_n_children(gtk_combo_box_get_model(GTK_COMBO_BOX(res_rate)), NULL) > 1);
+    int r = o->rotation ? o->rotation : HDE_ROT_0, can = 0;
+    for (guint k = 0; k < G_N_ELEMENTS(rot_choices); k++)
+        if (rot_choices[k].rot == r) gtk_combo_box_set_active(GTK_COMBO_BOX(res_rot), (int)k);
+    for (int c = 0; c < s->n_crtc; c++)
+        if (s->crtc[c].id == o->crtc) can = s->crtc[c].rotations;
+    gboolean rotates = !can || (can & ~HDE_ROT_0) != 0;
+    gtk_widget_set_sensitive(res_rot, rotates);
+    gtk_widget_set_tooltip_text(res_rot, rotates ? NULL : "The graphics driver of this screen does not rotate the picture");
+    res_updating = FALSE;
+}
+
+static void res_apply(unsigned long mode, int rot)
+{
+    char *error = NULL;
+    if (!apply_output_change(res_output, mode, rot, &error)) {
+        settings_status("%s", error);
+        message_dialog(GTK_MESSAGE_WARNING, "The screen could not be changed", error);
+        g_free(error);
+    }
+    dp_refresh();
+}
+
+static void on_res_screen(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    const char *id = gtk_combo_box_get_active_id(c);
+    if (res_updating || !id) return;
+    g_strlcpy(res_output, id, sizeof res_output);
+    dp_refresh();
+}
+
+static void on_res_size(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    const char *id = gtk_combo_box_get_active_id(c);
+    int w = 0, h = 0;
+    if (res_updating || !id || sscanf(id, "%dx%d", &w, &h) != 2) return;
+    Display *dpy = xdisplay();
+    HdeRandrState *s = g_new0(HdeRandrState, 1);
+    unsigned long mode = 0;
+    int i;
+    if (dpy && hde_randr_read(dpy, s, 0) && (i = output_by_name(s, res_output)) >= 0) {
+        const HdeRandrOutput *o = &s->out[i];
+        unsigned long nat = native_mode(o);
+        int ni = hde_randr_mode_index(o, nat);
+        if (ni >= 0 && o->modes[ni].width == w && o->modes[ni].height == h) mode = nat;     /* the recommended one */
+        else {
+            double best = -1;
+            for (int k = 0; k < o->nmode; k++)
+                if (o->modes[k].width == w && o->modes[k].height == h && o->modes[k].refresh > best) {
+                    best = o->modes[k].refresh;
+                    mode = o->modes[k].id;
+                }
+        }
+    }
+    g_free(s);
+    if (mode) res_apply(mode, 0);
+}
+
+static void on_res_rate(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    const char *id = gtk_combo_box_get_active_id(c);
+    if (res_updating || !id) return;
+    res_apply(strtoul(id, NULL, 10), 0);
+}
+
+static void on_res_rot(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    int k = gtk_combo_box_get_active(c);
+    if (res_updating || k < 0 || k >= (int)G_N_ELEMENTS(rot_choices)) return;
+    res_apply(0, rot_choices[k].rot);
+}
+
 static void dp_layout_done(gboolean kept, gpointer d)
 {
     (void)d;
@@ -916,9 +1268,14 @@ static void dp_bright_describe(const HdeBrightness *b)
     char *t;
     if (b->method == HDE_BRIGHTNESS_BACKLIGHT)
         t = g_strdup_printf("Backlight of the built-in screen (%s). Keys: F6 darker · F7 brighter.", b->device);
+    else if (b->method == HDE_BRIGHTNESS_DDC)
+        t = g_strdup_printf("The monitor's own brightness, over the video cable (DDC/CI, %s). Keys: F6 darker · F7 "
+                            "brighter.", b->device);
     else if (b->method == HDE_BRIGHTNESS_SOFTWARE)
         t = g_strdup_printf("Software dimming: this screen has no backlight a program can change (desktop monitor or "
-                            "virtual machine). Keys: F6 darker · F7 brighter.");
+                            "virtual machine). Keys: F6 darker · F7 brighter.%s", have_program("ddcutil") ? "" :
+                            " Most desktop monitors can change their own brightness when ddcutil is installed "
+                            "(sudo apt install ddcutil).");
     else
         t = g_strdup_printf("Cannot be changed: %s.", b->note);
     gtk_label_set_text(GTK_LABEL(d), t);
@@ -991,6 +1348,8 @@ static void dp_refresh(void)
                 if (o->modes[k].id == o->mode) hz = o->modes[k].refresh;
             g_string_append_printf(d, "%d × %d at %d,%d", o->width, o->height, o->x, o->y);
             if (hz > 1) g_string_append_printf(d, " · %.0f Hz", hz);
+            for (guint k = 1; k < G_N_ELEMENTS(rot_choices); k++)
+                if (o->rotation == rot_choices[k].rot) g_string_append_printf(d, " · %s", rot_choices[k].label);
         } else {
             g_string_append(d, "Connected, turned off");
         }
@@ -1015,6 +1374,7 @@ static void dp_refresh(void)
         if (!nm) gtk_container_add(GTK_CONTAINER(dp_screens), card_placeholder("No screens found"));
     }
     gtk_widget_show_all(dp_screens);
+    res_fill(s, ok);
     g_free(s);
     dp_bright_refresh();
 }
@@ -1028,6 +1388,7 @@ static void on_dp_destroy(GtkWidget *w, gpointer d)
     if (dp_bright_timer) g_source_remove(dp_bright_timer);
     dp_bright_timer = 0;
     dp_screens = dp_bright = dp_bright_row = dp_layout_note = NULL;
+    res_box = res_screen_row = res_screen = res_size = res_rate = res_rot = res_note = NULL;
 }
 
 static void on_dp_map(GtkWidget *w, gpointer d) { (void)w; (void)d; dp_refresh(); }
@@ -1081,6 +1442,38 @@ GtkWidget *page_display_new(void)
     dp_bright_row = row_box("Screen brightness", " ", dp_bright);
     gtk_box_pack_start(GTK_BOX(box), dp_bright_row, FALSE, FALSE, 0);
 
+    gtk_box_pack_start(GTK_BOX(box), section("Resolution"), FALSE, FALSE, 0);
+    res_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    res_screen = gtk_combo_box_text_new();
+    g_signal_connect(res_screen, "changed", G_CALLBACK(on_res_screen), NULL);
+    debug_geometry_watch(res_screen, "display-screen");
+    res_screen_row = row_box("Screen", "The screen these settings are for.", res_screen);
+    gtk_widget_show_all(res_screen_row);        /* (show_all does nothing to a no-show-all widget: first) */
+    gtk_widget_set_no_show_all(res_screen_row, TRUE);
+    gtk_box_pack_start(GTK_BOX(res_box), res_screen_row, FALSE, FALSE, 0);
+    res_size = gtk_combo_box_text_new();
+    g_signal_connect(res_size, "changed", G_CALLBACK(on_res_size), NULL);
+    debug_geometry_watch(res_size, "display-resolution");
+    gtk_box_pack_start(GTK_BOX(res_box), row_box("Display resolution", "Asks to keep it; goes back by itself after 15 "
+                       "seconds otherwise. Kept for the next logins.", res_size), FALSE, FALSE, 0);
+    res_rate = gtk_combo_box_text_new();
+    g_signal_connect(res_rate, "changed", G_CALLBACK(on_res_rate), NULL);
+    debug_geometry_watch(res_rate, "display-refresh");
+    gtk_box_pack_start(GTK_BOX(res_box), row_box("Refresh rate", "Higher is smoother.", res_rate), FALSE, FALSE, 0);
+    res_rot = gtk_combo_box_text_new();
+    for (guint k = 0; k < G_N_ELEMENTS(rot_choices); k++)
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(res_rot), rot_choices[k].label);
+    g_signal_connect(res_rot, "changed", G_CALLBACK(on_res_rot), NULL);
+    debug_geometry_watch(res_rot, "display-orientation");
+    gtk_box_pack_start(GTK_BOX(res_box), row_box("Orientation", "Portrait for a screen turned on its side.", res_rot),
+                       FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), res_box, FALSE, FALSE, 0);
+    gtk_widget_show_all(res_box);
+    gtk_widget_set_no_show_all(res_box, TRUE);
+    res_note = info_label("");
+    gtk_widget_set_no_show_all(res_note, TRUE);
+    gtk_box_pack_start(GTK_BOX(box), res_note, FALSE, FALSE, 0);
+
     gtk_box_pack_start(GTK_BOX(box), section("Multiple screens"), FALSE, FALSE, 0);
     GtkWidget *tiles = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_set_homogeneous(GTK_BOX(tiles), TRUE);
@@ -1131,7 +1524,7 @@ GtkWidget *page_display_new(void)
     g_signal_connect(night, "state-set", G_CALLBACK(on_dp_night), NULL);
     gtk_box_pack_start(GTK_BOX(box), row_box("Night Light", "Warmer screen colours with less blue light, easier on the "
                                              "eyes in the evening.", night), FALSE, FALSE, 0);
-    GtkWidget *btn = gtk_button_new_with_label("Open advanced display settings (resolution, rotation, arrangement)");
+    GtkWidget *btn = gtk_button_new_with_label("Open advanced display settings (arrangement of the screens)");
     gtk_widget_set_halign(btn, GTK_ALIGN_START);
     g_signal_connect(btn, "clicked", G_CALLBACK(on_dp_advanced), NULL);
     gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 10);

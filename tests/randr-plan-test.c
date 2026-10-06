@@ -314,6 +314,58 @@ int main(void)
           "... and refused when it fits neither way (%s)", p.error);
     free(s);
 
+    /* ---- resolution and rotation of one screen (Settings > Display) ---- */
+    s = laptop_with_projector();
+    HdeRandrOutput *lap = &s->out[0], *pro = &s->out[1];
+    unsigned long mode_of[HDE_RANDR_MAX] = { 0 };
+    int rot_of[HDE_RANDR_MAX] = { 0 };
+    mode_of[0] = mode_of_size(lap, 1280, 720);
+    CHECK(hde_randr_plan_modes(s, mode_of, NULL, &p) && is_on(&p, s, "eDP-1", 0, 0, 1280, 720) && p.screen_w == 1280 &&
+          p.screen_h == 720 && p.n == 1, "the laptop screen alone: 1920x1080 -> 1280x720, the desktop follows");
+    mode_of[0] = 0;
+    CHECK(hde_randr_plan(s, HDE_PROJECT_EXTEND, &p), "Extend first");
+    apply(s, &p);
+    mode_of[0] = mode_of_size(lap, 1280, 720);
+    CHECK(hde_randr_plan_modes(s, mode_of, NULL, &p) && is_on(&p, s, "eDP-1", 0, 0, 1280, 720) &&
+          is_on(&p, s, "HDMI-1", 1280, 0, 1280, 1024) && p.screen_w == 2560 && p.screen_h == 1024,
+          "Extend: the laptop screen gets smaller, the projector on its right moves left with it (no gap)");
+    mode_of[0] = 0;
+    rot_of[1] = HDE_ROT_90;
+    CHECK(hde_randr_plan_modes(s, NULL, rot_of, &p) && is_on(&p, s, "HDMI-1", 1920, 0, 1024, 1280) &&
+          target(&p, s, "HDMI-1")->rotation == HDE_ROT_90 && p.screen_w == 2944 && p.screen_h == 1280,
+          "the projector turned to portrait (left): 1024x1280, the desktop grows to 2944x1280");
+    rot_of[1] = 0;
+    CHECK(hde_randr_plan(s, HDE_PROJECT_DUPLICATE, &p), "Duplicate");
+    apply(s, &p);
+    mode_of[0] = mode_of_size(lap, 1280, 720);
+    CHECK(hde_randr_plan_modes(s, mode_of, NULL, &p) && is_on(&p, s, "eDP-1", 0, 0, 1280, 720) &&
+          target(&p, s, "HDMI-1")->x == 0 && target(&p, s, "HDMI-1")->y == 0,
+          "Duplicate: a new resolution on one screen, the other stays on top of it at 0,0");
+    mode_of[0] = 0;
+    CHECK(hde_randr_plan(s, HDE_PROJECT_PC, &p), "PC screen only");
+    apply(s, &p);
+    mode_of[1] = mode_of_size(pro, 1024, 768);
+    CHECK(!hde_randr_plan_modes(s, mode_of, NULL, &p) && strstr(p.error, "turned off"),
+          "a screen that is off cannot get a resolution (%s)", p.error);
+    mode_of[1] = 0;
+    int nw = hde_randr_set_wishes(s, "eDP-1=1280x720@60.00/left,HDMI-1=auto/inverted,DP-1=1920x1080,bogus");
+    CHECK(nw == 2 && lap->want_mode == mode_of_size(lap, 1280, 720) && lap->want_rot == HDE_ROT_90 &&
+          pro->want_mode == 0 && pro->want_rot == HDE_ROT_180,
+          "display_modes is read: a resolution + rotation, a rotation alone, an unplugged screen ignored (%d)", nw);
+    char wt[64];
+    hde_randr_wish_text(lap, lap->want_mode, lap->want_rot, wt, sizeof wt);
+    CHECK(!strcmp(wt, "1280x720@60.00/left"), "... and written back the same way (%s)", wt);
+    CHECK(hde_randr_plan_wishes(s, &p) && is_on(&p, s, "eDP-1", 0, 0, 720, 1280) &&
+          target(&p, s, "eDP-1")->rotation == HDE_ROT_90, "at login the chosen resolution and rotation are applied");
+    apply(s, &p);
+    s->out[0].rotation = HDE_ROT_90;
+    CHECK(!hde_randr_plan_wishes(s, &p) && !p.error[0], "... and nothing more once they are in use");
+    hde_randr_set_wishes(s, "HDMI-1=1024x768");
+    CHECK(hde_randr_plan(s, HDE_PROJECT_EXTEND, &p) && target(&p, s, "HDMI-1") &&
+          target(&p, s, "HDMI-1")->width == 1024 && target(&p, s, "HDMI-1")->height == 768,
+          "F8 Extend turns the projector on at the resolution chosen for it (1024x768, not its native 1280x1024)");
+    free(s);
+
     /* ---- Night Light colours ---- */
     double r, g, b;
     hde_randr_temperature_rgb(0, &r, &g, &b);

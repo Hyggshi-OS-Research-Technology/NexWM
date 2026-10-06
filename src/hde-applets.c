@@ -240,10 +240,30 @@ static void on_applet_clicked(GtkButton *b, gpointer d)
     }
 }
 
+static GList *live;                     /* Applet* on the panel now */
+static int slow_factor = 1;             /* 3 while the battery saver is on */
+
+static void applet_schedule(Applet *a)
+{
+    if (a->timer) g_source_remove(a->timer);
+    a->timer = g_timeout_add_seconds((guint)(MAX(1, a->def.interval) * slow_factor), applet_tick, a);
+}
+
+void hde_applets_set_slow(gboolean slow)
+{
+    int f = slow ? 3 : 1;
+    if (f == slow_factor) return;
+    slow_factor = f;
+    for (GList *l = live; l; l = l->next) applet_schedule(l->data);
+    DBG("extensions: refreshed %s (%u running)", slow ? "3 times less often (battery saver)" : "at their own pace again",
+        g_list_length(live));
+}
+
 static void on_applet_destroy(GtkWidget *w, gpointer d)
 {
     (void)w;
     Applet *a = d;
+    live = g_list_remove(live, a);
     a->dead = TRUE;
     if (a->timer) g_source_remove(a->timer);
     a->timer = 0;
@@ -284,7 +304,8 @@ void hde_applets_update(GtkWidget *box)
         g_signal_connect(a->button, "destroy", G_CALLBACK(on_applet_destroy), a);
         gtk_box_pack_start(GTK_BOX(box), a->button, FALSE, FALSE, 0);
         applet_tick(a);
-        a->timer = g_timeout_add_seconds(a->def.interval, applet_tick, a);
+        live = g_list_prepend(live, a);
+        applet_schedule(a);
     }
     hde_applets_free(defs, n);
     gtk_widget_show_all(box);

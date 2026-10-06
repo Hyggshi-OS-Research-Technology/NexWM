@@ -41,6 +41,7 @@
 #include "hde-wl.h"
 #include "hde-control.h"
 #include "hde-battery.h"
+#include "hde-powersave.h"
 #include "hde-flyout.h"
 #include "hde-run.h"
 #ifdef HAVE_WAYLAND_TASKBAR
@@ -1601,6 +1602,7 @@ static void apply_config(gboolean first)
         old.clock_24h != pcfg.clock_24h || old.clock_seconds != pcfg.clock_seconds)
         load_css();
     update_clock(NULL);
+    if (!first) hde_powersave_reload();
     if (!first)
         DBG("settings applied: %s, %dpx, opacity %d%%, menu %s, items:%s%s%s%s%s%s%s%s%s%s", pcfg.top ? "top" : "bottom",
             pcfg.size, pcfg.opacity, hde_menu_style_id(pcfg.menu_style), pcfg.show_menu ? " menu" : "",
@@ -1680,6 +1682,7 @@ int main(int argc, char **argv)
     const HdeControlActions cc_acts = { menu_power, hde_open_settings, cc_show_battery };
     hde_control_init(&cc_acts, debug_on);
     hde_battery_init(hde_open_settings, debug_on);
+    hde_powersave_init(debug_on);         /* battery saver, low-battery warnings (fed by the status area) */
     const HdeStatusActions st_acts = { open_cc, open_battery };
     hde_status_set_actions(&st_acts);
     hde_notify_set_bell_action(bell_clicked, NULL);

@@ -22,9 +22,10 @@
  * And HDE's display service (src/hde-randr.c, XRandR): when a screen is plugged in it opens the Project window of F8
  * (settings.ini display_connect=ask, or applies extend / duplicate / second / nothing); when the screen in use is
  * unplugged it turns the PC screen back on, and an unplugged screen never stays part of the desktop; at login it
- * restores the layout chosen with F8 for the same screens (display_mode / display_outputs); it puts software
- * brightness (F6/F7 without a backlight) and Night Light (night_light, night_light_temperature) back on every screen
- * after a change.
+ * restores the layout chosen with F8 for the same screens (display_mode / display_outputs) and the resolutions chosen
+ * in Settings > Display (display_modes); it puts software brightness (F6/F7 without a backlight) and Night Light
+ * (night_light, night_light_temperature) back on every screen after a change, and the software brightness of the
+ * last session at login ($XDG_STATE_HOME/hde/state.ini).
  *
  * Usage: hde-xsettings [--replace]   (started by hde-session; exits if another hde-xsettings is already running,
  *                                     unless --replace is given)
@@ -317,10 +318,19 @@ static void spawn_detached(char *const argv[])
     if (p > 0) waitpid(p, NULL, 0);
 }
 
+/* the resolutions / rotations chosen in Settings > Display (display_modes) onto a state just read */
+static void read_wishes(HdeRandrState *st)
+{
+    char *w = settings_string("display_modes", "");
+    hde_randr_set_wishes(st, w);
+    g_free(w);
+}
+
 static int apply_layout(HdeRandrState *st, HdeProjectMode mode, const char *why)
 {
     HdeRandrPlan *p = g_new0(HdeRandrPlan, 1);
     char err[256] = "";
+    read_wishes(st);
     int ok = hde_randr_plan(st, mode, p) && hde_randr_apply(dpy, st, p, err, sizeof err);
     if (ok) fprintf(stderr, "hde-xsettings: displays: %s (%s applied)\n", why, hde_project_label(mode));
     else fprintf(stderr, "hde-xsettings: displays: %s: %s failed: %s\n", why, hde_project_label(mode), p->error[0] ? p->error : err);
@@ -355,6 +365,85 @@ static void apply_night_light(void)
     else fprintf(stderr, "hde-xsettings: night light off\n");
 }
 
+/* ===================== software brightness, kept for the next session =====================
+ * F6/F7 without a backlight dim the screens through their gamma ramps (_HDE_BRIGHTNESS on the root window), which the
+ * X server forgets at logout. The display service keeps the level in $XDG_STATE_HOME/hde/state.ini ([display]
+ * soft_brightness; not in settings.ini, which every HDE program reloads when it changes) and puts it back at login. */
+static Atom soft_atom;
+static gint64 soft_save_at;             /* monotonic time to write the level down (1.5 s after the last change) */
+static int soft_saved = -1;             /* the level in state.ini */
+
+static char *state_path(void)
+{
+    const char *x = g_getenv("XDG_STATE_HOME");
+    if (x && *x) return g_build_filename(x, "hde", "state.ini", NULL);
+    return g_build_filename(g_get_home_dir(), ".local", "state", "hde", "state.ini", NULL);
+}
+
+static int soft_load(void)
+{
+    char *path = state_path();
+    GKeyFile *kf = g_key_file_new();
+    int v = -1;
+    if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL) &&
+        g_key_file_has_key(kf, "display", "soft_brightness", NULL))
+        v = g_key_file_get_integer(kf, "display", "soft_brightness", NULL);
+    g_key_file_free(kf);
+    g_free(path);
+    return v;
+}
+
+static void soft_store(int v)
+{
+    char *path = state_path(), *dir = g_path_get_dirname(path);
+    g_mkdir_with_parents(dir, 0700);
+    GKeyFile *kf = g_key_file_new();
+    g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_set_integer(kf, "display", "soft_brightness", v);
+    GError *e = NULL;
+    if (!g_key_file_save_to_file(kf, path, &e)) {
+        fprintf(stderr, "hde-xsettings: cannot write %s: %s\n", path, e ? e->message : "?");
+        g_clear_error(&e);
+    }
+    g_key_file_free(kf);
+    g_free(dir);
+    g_free(path);
+}
+
+static gboolean root_has_property(Atom a)
+{
+    Atom type = None;
+    int fmt = 0;
+    unsigned long n = 0, after = 0;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(dpy, DefaultRootWindow(dpy), a, 0, 1, False, AnyPropertyType, &type, &fmt, &n, &after,
+                           &data) == Success && data)
+        XFree(data);
+    return type != None;
+}
+
+/* At login (the display service starts): the level of the last session, unless this X server has one already
+ * (hde-xsettings restarted in the same session) or there is a backlight. */
+static void soft_restore(void)
+{
+    soft_atom = XInternAtom(dpy, "_HDE_BRIGHTNESS", False);
+    soft_saved = soft_load();
+    if (root_has_property(soft_atom) || soft_saved < HDE_BRIGHTNESS_SOFT_MIN || soft_saved >= 100) return;
+    if (hde_brightness_backlight_present()) return;
+    hde_gamma_set_soft_percent(dpy, soft_saved);
+    fprintf(stderr, "hde-xsettings: software brightness %d%% (as in the last session)\n", soft_saved);
+}
+
+static void soft_store_now(void)
+{
+    soft_save_at = 0;
+    int v = hde_gamma_soft_percent(dpy);
+    if (v == soft_saved) return;
+    soft_store(v);
+    soft_saved = v;
+    fprintf(stderr, "hde-xsettings: software brightness %d%% kept for the next session\n", v);
+}
+
 static char display_names[512];         /* connected screens at the last look */
 static gint64 fix_window_start;
 static int fix_count;
@@ -378,6 +467,27 @@ static void display_start(void)
     }
     g_free(mode);
     g_free(outs);
+    /* the resolutions / rotations chosen in Settings > Display for the screens that are on */
+    HdeRandrPlan *p = g_new0(HdeRandrPlan, 1);
+    char err[256] = "";
+    if (hde_randr_read(dpy, st, 0)) {
+        read_wishes(st);
+        if (hde_randr_plan_wishes(st, p)) {
+            if (hde_randr_apply(dpy, st, p, err, sizeof err)) {
+                GString *what = g_string_new(NULL);
+                for (int k = 0; k < p->n; k++) {
+                    const HdeRandrOutput *o = &st->out[p->t[k].out];
+                    char t[64];
+                    hde_randr_wish_text(o, p->t[k].mode, p->t[k].rotation, t, sizeof t);
+                    g_string_append_printf(what, "%s%s %s", what->len ? ", " : "", o->name, t);
+                }
+                fprintf(stderr, "hde-xsettings: displays: the resolutions chosen in Settings: %s\n", what->str);
+                g_string_free(what, TRUE);
+                log_displays(" now");
+            } else fprintf(stderr, "hde-xsettings: displays: the resolutions chosen in Settings: %s\n", err);
+        } else if (p->error[0]) fprintf(stderr, "hde-xsettings: displays: the resolutions chosen in Settings: %s\n", p->error);
+    }
+    g_free(p);
     g_free(st);
 }
 
@@ -634,6 +744,8 @@ int main(int argc, char **argv)
     gint64 display_at = 0;
     if (rr) {
         display_start();
+        soft_restore();
+        XSelectInput(dpy, root, PropertyChangeMask);      /* _HDE_BRIGHTNESS changes: written down for next time */
         apply_night_light();
         hde_gamma_apply(dpy, 0);
     } else if (input_owner) {
@@ -657,6 +769,10 @@ int main(int argc, char **argv)
                 if (!display_at) display_at = g_get_monotonic_time() + 500 * 1000;
                 continue;
             }
+            if (ev.type == PropertyNotify && ev.xproperty.window == root) {
+                if (rr && ev.xproperty.atom == soft_atom) soft_save_at = g_get_monotonic_time() + 1500 * 1000;
+                continue;
+            }
             int r = xi ? hde_input_handle_event(dpy, &ev, &iprefs, ITAG) : -1;
             if (r >= 0) {
                 if (r & HDE_INPUT_EV_ADDED) recheck_at = time(NULL) + 2;
@@ -675,6 +791,7 @@ int main(int argc, char **argv)
                 changed_at = 0;
                 recheck_at = 0;
                 display_at = 0;
+                soft_save_at = 0;
             }
             if (!xs_owner && !xi && !rr) {
                 fprintf(stderr, "hde-xsettings: nothing left to do; exiting\n");
@@ -687,6 +804,7 @@ int main(int argc, char **argv)
         FD_SET(fd, &fds);
         struct timeval tv = { 1, 0 };
         gint64 next_at = changed_at && (!display_at || changed_at < display_at) ? changed_at : display_at;
+        if (soft_save_at && (!next_at || soft_save_at < next_at)) next_at = soft_save_at;
         if (next_at) {
             gint64 wait = next_at - g_get_monotonic_time();
             if (wait < 0) wait = 0;
@@ -715,6 +833,7 @@ int main(int argc, char **argv)
             display_at = 0;
             display_check();
         }
+        if (rr && soft_save_at && g_get_monotonic_time() >= soft_save_at) soft_store_now();
         if (xi && changed_at && g_get_monotonic_time() >= changed_at) {
             changed_at = 0;
             hde_input_apply_changed(dpy, &iprefs, CTAG);

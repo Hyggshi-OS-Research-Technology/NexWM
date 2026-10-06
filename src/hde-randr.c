@@ -117,9 +117,16 @@ static int find_size(const HdeRandrOutput *o, int w, int h)
     return best;
 }
 
-/* Native resolution (the preferred mode), else the largest one; keep_current: the mode in use if it is on. */
+int hde_randr_mode_index(const HdeRandrOutput *o, unsigned long mode) { return mode_index(o, mode); }
+
+/* The resolution chosen in Settings > Display; else the native resolution (the preferred mode), else the largest one;
+ * keep_current: the mode in use if it is on. */
 static int best_mode(const HdeRandrOutput *o, int keep_current)
 {
+    if (o->want_mode) {
+        int i = mode_index(o, o->want_mode);
+        if (i >= 0) return i;
+    }
     if (keep_current && o->crtc && o->mode) {
         int i = mode_index(o, o->mode);
         if (i >= 0) return i;
@@ -243,7 +250,9 @@ int hde_randr_plan(const HdeRandrState *s, HdeProjectMode mode, HdeRandrPlan *p)
 
     for (int k = 0; k < no; k++) {
         const HdeRandrOutput *o = &s->out[ord[k]];
-        if (on[ord[k]] && o->crtc && mode != HDE_PROJECT_DUPLICATE) rot[ord[k]] = o->rotation ? o->rotation : HDE_ROT_0;
+        if (!on[ord[k]] || mode == HDE_PROJECT_DUPLICATE) continue;
+        if (o->want_rot) rot[ord[k]] = o->want_rot;                   /* chosen in Settings > Display */
+        else if (o->crtc) rot[ord[k]] = o->rotation ? o->rotation : HDE_ROT_0;
     }
     if (mode == HDE_PROJECT_DUPLICATE) {
         /* the largest resolution every screen can show, the PC screen's native one first (like Windows) */
@@ -400,6 +409,187 @@ int hde_randr_plan_restore(const HdeRandrState *now, const HdeRandrState *saved,
                 return 0;
             }
     return 1;
+}
+
+/* ----------------------------------------------------------------------- resolution / rotation of each screen */
+const char *hde_randr_rotation_id(int rot)
+{
+    switch (rot) {
+    case HDE_ROT_90: return "left";
+    case HDE_ROT_180: return "inverted";
+    case HDE_ROT_270: return "right";
+    default: return "normal";
+    }
+}
+
+int hde_randr_rotation_from_id(const char *id)
+{
+    if (!id || !*id) return 0;
+    if (!strcasecmp(id, "normal") || !strcmp(id, "0")) return HDE_ROT_0;
+    if (!strcasecmp(id, "left") || !strcmp(id, "90")) return HDE_ROT_90;
+    if (!strcasecmp(id, "inverted") || !strcmp(id, "180")) return HDE_ROT_180;
+    if (!strcasecmp(id, "right") || !strcmp(id, "270")) return HDE_ROT_270;
+    return 0;
+}
+
+void hde_randr_wish_text(const HdeRandrOutput *o, unsigned long mode, int rot, char *buf, unsigned long len)
+{
+    int i = mode_index(o, mode);
+    if (i < 0) snprintf(buf, len, "auto/%s", hde_randr_rotation_id(rot));
+    else snprintf(buf, len, "%dx%d@%.2f/%s", o->modes[i].width, o->modes[i].height, o->modes[i].refresh,
+                  hde_randr_rotation_id(rot));
+}
+
+int hde_randr_set_wishes(HdeRandrState *s, const char *list)
+{
+    int n = 0;
+    for (int i = 0; i < s->n_out; i++) {
+        s->out[i].want_mode = 0;
+        s->out[i].want_rot = 0;
+    }
+    for (const char *p = list; p && *p;) {
+        const char *e = strchr(p, ',');
+        size_t l = e ? (size_t)(e - p) : strlen(p);
+        char item[160];
+        snprintf(item, sizeof item, "%.*s", (int)(l < sizeof item ? l : sizeof item - 1), p);
+        p = e ? e + 1 : NULL;
+        char *eq = strchr(item, '=');
+        if (!eq || eq == item) continue;
+        *eq = '\0';
+        const char *val = eq + 1, *slash = strchr(val, '/'), *at = strchr(val, '@');
+        int w = 0, h = 0;
+        double hz = at && (!slash || at < slash) ? atof(at + 1) : 0;
+        if (sscanf(val, "%dx%d", &w, &h) != 2) w = h = 0;            /* "auto": the native resolution */
+        int rot = slash ? hde_randr_rotation_from_id(slash + 1) : 0;
+        for (int i = 0; i < s->n_out; i++) {
+            HdeRandrOutput *o = &s->out[i];
+            if (!o->connected || strcmp(o->name, item)) continue;
+            int mi = -1;
+            if (w > 0 && h > 0 && hz > 0) {                 /* that rate, or the closest one within half a hertz */
+                double best = 0.5;
+                for (int k = 0; k < o->nmode; k++)
+                    if (o->modes[k].width == w && o->modes[k].height == h && fabs(o->modes[k].refresh - hz) < best) {
+                        best = fabs(o->modes[k].refresh - hz);
+                        mi = k;
+                    }
+            }
+            if (mi < 0 && w > 0 && h > 0) mi = find_size(o, w, h);
+            o->want_mode = mi >= 0 ? o->modes[mi].id : 0;
+            o->want_rot = rot;
+            if (o->want_mode || o->want_rot) n++;
+        }
+    }
+    return n;
+}
+
+int hde_randr_plan_modes(const HdeRandrState *s, const unsigned long *mode_of, const int *rot_of, HdeRandrPlan *p)
+{
+    memset(p, 0, sizeof *p);
+    p->mode = hde_randr_mode_of(s);
+    int on[HDE_RANDR_MAX] = { 0 }, x[HDE_RANDR_MAX], y[HDE_RANDR_MAX], w[HDE_RANDR_MAX], h[HDE_RANDR_MAX];
+    int rot[HDE_RANDR_MAX], changed[HDE_RANDR_MAX] = { 0 };
+    unsigned long md[HDE_RANDR_MAX];
+    for (int i = 0; i < s->n_out; i++) {
+        const HdeRandrOutput *o = &s->out[i];
+        int want = (mode_of && mode_of[i]) || (rot_of && rot_of[i]);
+        if (!o->crtc) {
+            if (want) {
+                snprintf(p->error, sizeof p->error, "%s is turned off: turn it on first (F8 or Super+P).", o->name);
+                return 0;
+            }
+            continue;
+        }
+        for (int j = 0; j < i; j++)
+            if (on[j] && s->out[j].crtc == o->crtc) {
+                snprintf(p->error, sizeof p->error, "%s and %s share one graphics output: choose Duplicate again "
+                         "(F8) first.", s->out[j].name, o->name);
+                return 0;
+            }
+        on[i] = 1;
+        int cur_rot = o->rotation ? o->rotation : HDE_ROT_0;
+        md[i] = mode_of && mode_of[i] ? mode_of[i] : o->mode;
+        rot[i] = rot_of && rot_of[i] ? rot_of[i] : cur_rot;
+        int ci = crtc_index(s, o->crtc);
+        if (rot[i] != cur_rot && ci >= 0 && s->crtc[ci].rotations && !(s->crtc[ci].rotations & rot[i])) {
+            snprintf(p->error, sizeof p->error, "%s cannot be turned: its graphics driver does not rotate the picture.",
+                     o->name);
+            return 0;
+        }
+        int mi = mode_index(o, md[i]);
+        if (mi < 0) {
+            snprintf(p->error, sizeof p->error, "%s cannot show this resolution.", o->name);
+            return 0;
+        }
+        w[i] = rotated(rot[i]) ? o->modes[mi].height : o->modes[mi].width;
+        h[i] = rotated(rot[i]) ? o->modes[mi].width : o->modes[mi].height;
+        x[i] = o->x;
+        y[i] = o->y;
+        changed[i] = md[i] != o->mode || rot[i] != cur_rot;
+    }
+    /* the screens to the right of / below a changed one move by as much as it grew or shrank (its old edges, in
+     * the old positions: a row or a column of screens stays a row or a column; Duplicate stays on top of each other) */
+    for (int i = 0; i < s->n_out; i++) {
+        if (!on[i] || !changed[i]) continue;
+        const HdeRandrOutput *o = &s->out[i];
+        int dw = w[i] - o->width, dh = h[i] - o->height;
+        for (int j = 0; j < s->n_out; j++) {
+            if (!on[j] || j == i) continue;
+            if (s->out[j].x >= o->x + o->width) x[j] += dw;
+            if (s->out[j].y >= o->y + o->height) y[j] += dh;
+        }
+    }
+    int minx = 1 << 30, miny = 1 << 30, sw = 0, sh = 0, any = 0;
+    for (int i = 0; i < s->n_out; i++) {
+        if (!on[i]) continue;
+        any = 1;
+        if (x[i] < minx) minx = x[i];
+        if (y[i] < miny) miny = y[i];
+    }
+    if (!any) {
+        snprintf(p->error, sizeof p->error, "No screen is on.");
+        return 0;
+    }
+    for (int i = 0; i < s->n_out; i++) {
+        if (!on[i]) continue;
+        x[i] -= minx;
+        y[i] -= miny;
+        if (x[i] + w[i] > sw) sw = x[i] + w[i];
+        if (y[i] + h[i] > sh) sh = y[i] + h[i];
+    }
+    if (s->max_w > 0 && s->max_h > 0 && (sw > s->max_w || sh > s->max_h)) {
+        snprintf(p->error, sizeof p->error, "The desktop would be %dx%d, larger than this graphics card allows (%dx%d).",
+                 sw, sh, s->max_w, s->max_h);
+        return 0;
+    }
+    if (sw < s->min_w) sw = s->min_w;
+    if (sh < s->min_h) sh = s->min_h;
+    for (int i = 0; i < s->n_out; i++)
+        if (on[i]) add_target(p, i, 1, s->out[i].crtc, md[i], x[i], y[i], w[i], h[i], rot[i]);
+    p->screen_w = sw;
+    p->screen_h = sh;
+    p->primary = s->primary;
+    return 1;
+}
+
+int hde_randr_plan_wishes(const HdeRandrState *s, HdeRandrPlan *p)
+{
+    unsigned long mode_of[HDE_RANDR_MAX] = { 0 };
+    int rot_of[HDE_RANDR_MAX] = { 0 }, any = 0;
+    memset(p, 0, sizeof *p);
+    for (int i = 0; i < s->n_out; i++) {
+        const HdeRandrOutput *o = &s->out[i];
+        if (!o->crtc || !o->connected) continue;
+        if (o->want_mode && o->want_mode != o->mode && mode_index(o, o->want_mode) >= 0) {
+            mode_of[i] = o->want_mode;
+            any = 1;
+        }
+        if (o->want_rot && o->want_rot != (o->rotation ? o->rotation : HDE_ROT_0)) {
+            rot_of[i] = o->want_rot;
+            any = 1;
+        }
+    }
+    if (!any) return 0;
+    return hde_randr_plan_modes(s, mode_of, rot_of, p);
 }
 
 static int name_in_list(const char *list, const char *name)
@@ -601,6 +791,7 @@ int hde_randr_read(Display *dpy, HdeRandrState *s, int probe)
         c->width = (int)ci->width;
         c->height = (int)ci->height;
         c->rotation = ci->rotation & 0x0f;
+        c->rotations = ci->rotations & 0x0f;
         for (int k = 0; k < ci->noutput && c->noutput < HDE_RANDR_MAX; k++) c->outputs[c->noutput++] = ci->outputs[k];
         c->gamma_size = XRRGetCrtcGammaSize(dpy, c->id);
         XRRFreeCrtcInfo(ci);

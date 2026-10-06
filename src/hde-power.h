@@ -65,4 +65,18 @@ char       *hde_power_icon_name(int percent, HdeBatState state);
 /* One line for the logs: "BAT0 82% Discharging, 5.2 W, 2 h 47 min left, health 91% (58.0 of 63.7 Wh, ...)" (g_free) */
 char       *hde_power_describe(const HdePower *p);
 
+/* ---- decisions of the panel's battery saver and low-battery warnings (src/hde-powersave.c), kept here so that
+ * tests/power-test.c can check them without a panel ---- */
+/* Running on the battery: the adapter is unplugged (or, without an adapter to ask, the battery discharges). */
+gboolean    hde_power_on_battery(const HdePower *p);
+/* Should the battery saver be on? enabled: battery_saver; level: battery_saver_level (percent, 100 = whenever the
+ * computer runs on its battery); active: it is on now — it then stays on up to level + 2 %, so that a charge going
+ * up and down around the level does not switch it on and off. Always FALSE when plugged in or without a battery. */
+gboolean    hde_power_saver_wanted(const HdePower *p, gboolean enabled, int level, gboolean active);
+#define HDE_POWER_LOW 10            /* "Battery low" at 10 % */
+#define HDE_POWER_CRITICAL 5        /* "Battery critically low" at 5 % */
+/* The low-battery warning due now: 0 none, 1 low, 2 critical. *warned: the last one given (keep it between calls);
+ * each is given once per discharge, and plugging the computer in starts again. */
+int         hde_power_warning_due(const HdePower *p, int *warned);
+
 #endif

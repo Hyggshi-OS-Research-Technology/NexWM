@@ -544,3 +544,64 @@ in.
 `tests/xtool.py geometry`): 34 px at the bottom at login, 40 px and then 28 px at the top, 56 px at the bottom and then
 34 px again with its bottom edge on the bottom of the screen, 34 px reserved (`_NET_WM_STRUT_PARTIAL`), the clock on
 one line in 28 px and the date back under the time in 34 px. Before the fix the "28 px" panel stayed 40 px high.
+
+## Power, resolutions, DDC/CI brightness and the rest of the open items (fix 15)
+
+### Added
+
+- **Settings → Power** shows the battery (charge, charging or on battery, time left, draw, health, charge cycles, model,
+  the firmware's charge limit; *Battery details…* opens the battery panel), the **power mode** (Power Saver / Balanced /
+  Performance through power-profiles-daemon, also changed from the panel), the **battery saver**, the **low-battery
+  warnings** and the screen timeout. The Battery and Battery saver sections only show on computers with a battery.
+- **Battery saver** (`battery_saver`, off by default): on battery, at the charge chosen in *Turn on at* (10, 15, 20 %,
+  30, 50 % or always on battery) the panel switches to the Power Saver mode, dims the screen to 70 % of its brightness
+  (`battery_saver_dim`) and refreshes its extensions 3 times less often, with a notification. Plugging the computer in
+  (or turning it off) puts the power mode and the brightness back, unless you changed them meanwhile. It stays on up to
+  2 % above the level, so a charge going up and down around it does not switch it on and off.
+- **Low-battery warnings** (`battery_warnings`, on by default): "Battery low" at 10 %, "Battery critically low" at 5 %
+  (a critical notification that stays until closed), once per discharge; plugging in withdraws them.
+- **Resolution, refresh rate and orientation** of each screen in *Settings → Display → Resolution*. The screens to the
+  right of / below the changed one move along (no gap, no overlap); *Keep these display settings?* goes back by itself
+  after 15 seconds. Kept choices go into `display_modes`, which the display service applies at every login, and the F8
+  layouts use when they turn a screen on. Without a window: `hde-settings --display-set HDMI-1 1920x1080@60 [left]`,
+  `... auto` for the native resolution.
+- **DDC/CI brightness**: desktop monitors have no backlight in `/sys`, but most change their own brightness when asked
+  over the video cable. With `ddcutil` installed, F6/F7, the slider in Settings and the Control Center use it (the
+  monitors found are cached for the screens connected; `HDE_DDC=0` turns it off). Otherwise software dimming as before.
+- The **software brightness** (no backlight, no DDC/CI) **is kept for the next login** (`~/.local/state/hde/state.ini`).
+- **The mouse pointer in screenshots**: `hde-screenshot --pointer`, the *Show the mouse pointer* check box of the
+  Screenshot window (remembered as `screenshot_pointer`, also for the Print key). On Wayland: `grim -c`.
+- **GNOME's touchpad settings follow HDE's**: `org.gnome.desktop.peripherals.touchpad` / `.mouse` (and Cinnamon's) get
+  the same natural scrolling, tap to click, speed and acceleration whenever HDE applies them (a change in Settings, every
+  login), so Mutter and Muffin no longer undo HDE's choice. Only when those schemas and dconf are installed.
+
+### Fixed
+
+- **The Control Center's Wi-Fi, Bluetooth and Sound pages** were as tall as the main page, with empty space under
+  their lists. Each page is now only as tall as it needs; the frame follows it.
+- **`scripts/test-nexde`** was a pasted Markdown answer (code fences and all) that started programs which no longer
+  exist (nexwm, nex-panel, …). It now starts a whole HDE session from `./build` in Xephyr, on its own D-Bus session bus,
+  with a throw-away copy of your settings (`--fresh`, `--shared`, `--wm NAME`, `--check`).
+- *Automatic suspend* in Settings → Power used to be a list that nothing applied. HDE does not suspend the computer by
+  itself after a while without use (that needs a power manager, which also handles the cases where it must not, such as
+  a film playing); the row now says so and opens the power manager's settings when one is installed.
+
+### For Hyggshi OS
+
+`scripts/build-nexwm.sh` in the Hyggshi-OS repository still builds the old NexDE (xcb, Qt 6, `bin/nexwm`) and writes a
+session that starts `nex-panel` and friends, which this repository no longer has. `packaging/hyggshi-os/build-nexwm.sh`
+is a drop-in replacement with the same variables (`NEXWM_REPO_URL`, `NEXWM_REF`, `SRC_DIR`, `PREFIX`, `DEBUG_MODE`): it
+builds HDE, installs it into `/usr` with its two sessions, removes the old `nexwm.desktop`, keeps the libraries HDE needs
+and removes the build tools. The CI runs it in a Debian 13 container and starts the installed session.
+
+### Tests
+
+`make check`: the battery saver on a draining fake battery (on at 18 %, the Power Saver mode of a simulated
+power-profiles-daemon, 70 % brightness, the notification, off when plugged in with everything put back), the warnings at
+9 % and 4 %, *Settings → Power*, `--power`, the software brightness written down and put back by a restarted display
+service, the pointer in a screenshot (only there), GNOME's natural-scroll and tap-to-click following settings.ini;
+`power-test` checks the decisions (levels, the 2 % margin, warnings once per discharge). `randr-plan-test`: new
+resolutions with the screens beside / below moving along, Duplicate staying on top, rotation, `display_modes` read and
+written, the wishes at login and in F8 layouts. `tests/display-test.sh` (real Xorg, dummy screens): `--display-set`,
+the Display page's list (reverted when nobody answers, kept and remembered with *Keep changes*), the resolution coming
+back at login, DDC/CI with a simulated `ddcutil`. CI also runs `scripts/test-nexde --check` and the Hyggshi OS script.

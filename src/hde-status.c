@@ -22,6 +22,7 @@
 #include "hde-commands.h"
 #include "hde-input.h"
 #include "hde-power.h"
+#include "hde-powersave.h"
 #include "hde-flyout.h"
 #include "hde-panel-config.h"
 
@@ -392,6 +393,7 @@ static void poll_bat(void)
 {
     HdePower p;
     hde_power_read(&p);
+    hde_powersave_update(&p);               /* battery saver, low-battery warnings */
     if (p.percent < 0) { gtk_widget_hide(it_bat.btn); return; }
     char *icon = hde_power_icon_name(p.percent, p.state);
     char *txt = g_strdup_printf("%d%%", p.percent);

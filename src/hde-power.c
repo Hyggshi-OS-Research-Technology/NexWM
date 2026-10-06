@@ -253,3 +253,32 @@ char *hde_power_describe(const HdePower *p)
                                p->dev[i].percent);
     return g_string_free(s, FALSE);
 }
+
+gboolean hde_power_on_battery(const HdePower *p)
+{
+    if (p->percent < 0 || p->n == 0) return FALSE;
+    if (p->ac == 0) return TRUE;
+    if (p->ac == 1) return FALSE;
+    return p->state == HDE_BAT_DISCHARGING;
+}
+
+gboolean hde_power_saver_wanted(const HdePower *p, gboolean enabled, int level, gboolean active)
+{
+    if (!enabled || !hde_power_on_battery(p)) return FALSE;
+    if (level >= 100) return TRUE;
+    return p->percent <= level || (active && p->percent <= level + 2);
+}
+
+int hde_power_warning_due(const HdePower *p, int *warned)
+{
+    if (!hde_power_on_battery(p)) {
+        if (p->percent >= 0) *warned = 0;           /* plugged in: warn again at the next discharge */
+        return 0;
+    }
+    int now = p->percent <= HDE_POWER_CRITICAL ? 2 : p->percent <= HDE_POWER_LOW ? 1 : 0;
+    if (now > *warned) {
+        *warned = now;
+        return now;
+    }
+    return 0;
+}

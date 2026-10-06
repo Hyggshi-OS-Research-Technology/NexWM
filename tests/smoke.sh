@@ -330,6 +330,24 @@ case "$binfo" in
         else fail "F6 where nothing can change the brightness: a notification says why"; fi
         shot 04b-brightness-impossible ;;
 esac
+
+# ---------- 3c. software brightness is kept for the next session (hde-xsettings: $XDG_STATE_HOME/hde/state.ini) ----------
+case "$binfo" in
+    "software dimming"*)
+        STATE_INI="$HOME/.local/state/hde/state.ini"
+        "$B/hde-settings" --brightness 60 > /dev/null 2>&1; sleep 3
+        if grep -q "^soft_brightness=60" "$STATE_INI" 2>/dev/null; then pass "the software brightness is written down for the next session (soft_brightness=60)"
+        else fail "the software brightness is written down for the next session ($(tr '\n' ' ' < "$STATE_INI" 2>/dev/null))"; fi
+        # a new login: the X server forgot it, the display service starts again
+        xprop -root -remove _HDE_BRIGHTNESS; pkill -KILL -x hde-xsettings
+        i=0; while [ "$i" -lt 60 ] && [ "$(soft)" != 60 ]; do sleep 0.2; i=$((i + 1)); done
+        if [ "$(soft)" = 60 ]; then pass "... and put back when the display service starts (the next login): 60%"
+        else fail "... and put back when the display service starts (_HDE_BRIGHTNESS=$(soft))"; fi
+        check "... the session log says so" grep -q "hde-xsettings: software brightness 60% (as in the last session)" "$OUT/session.log"
+        sleep 1
+        "$B/hde-settings" --brightness 100 > /dev/null 2>&1; sleep 3
+        check "100% is written down too (no dimming at the next login)" grep -q "^soft_brightness=100" "$STATE_INI" ;;
+esac
 xdotool key F8
 i=0; while ! xdotool search --onlyvisible --name "^Project$" >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 if xdotool search --onlyvisible --name "^Project$" >/dev/null 2>&1; then
@@ -427,6 +445,19 @@ xdotool mouseup 1; sleep 1.5
 sz=$(pngsize "$OUT/area.png")
 if [ "$sz" = 200x150 ]; then pass "dragging an area saves exactly that area (200x150)"; else fail "dragging an area saves exactly that area (got $sz)"; fi
 kill "$AREA" 2>/dev/null
+# the mouse pointer in the picture (XFixes): only when asked for (--pointer, the Screenshot window, screenshot_pointer)
+xdotool mousemove 640 400; sleep 0.4
+"$B/hde-screenshot" --file "$OUT/nopointer.png" --no-notify --no-clipboard > "$OUT/nopointer.log" 2>&1
+"$B/hde-screenshot" --pointer --file "$OUT/pointer.png" --no-notify --no-clipboard > "$OUT/pointer.log" 2>&1
+if grep -q "hde-screenshot: pointer at 640,400 .* drawn into the picture" "$OUT/pointer.log"; then
+    pass "hde-screenshot --pointer draws the mouse pointer into the picture ($(sed -n 's/^hde-screenshot: pointer at //p' "$OUT/pointer.log"))"
+else fail "hde-screenshot --pointer draws the mouse pointer into the picture ($(tr '\n' ' ' < "$OUT/pointer.log"))"; fi
+if command -v compare >/dev/null 2>&1; then
+    d=$(compare -metric AE "$OUT/nopointer.png" "$OUT/pointer.png" null: 2>&1 | sed 's/[^0-9].*//')
+    if [ "${d:-0}" -gt 20 ] && [ "${d:-0}" -lt 5000 ]; then pass "... the two pictures differ only where the pointer is ($d pixels)"
+    else fail "... the two pictures differ only where the pointer is (${d:-?} pixels)"; fi
+fi
+check "... without it there is no pointer (the default)" sh -c "! grep -q 'pointer at' '$OUT/nopointer.log'"
 if ! command -v scrot >/dev/null 2>&1; then
     echo "screenshot_tool=scrot" >> "$SETTINGS_INI"; sleep 2.5
     n0=$(nshots); xdotool key Print; sleep 3; n1=$(nshots)
@@ -1167,6 +1198,100 @@ elif [ -n "$PPD_MOCK" ]; then
 fi
 shot 18g-battery-panel
 xdotool key Escape; sleep 0.6
+
+# the battery saver and the low-battery warnings (src/hde-powersave.c, fed by the battery readings every 5 s), and
+# Settings > Power; the fake battery of HDE_POWER_SUPPLY_DIR is drained and plugged in
+PSD=$HDE_POWER_SUPPLY_DIR
+bat() { printf '%s\n' "$1" > "$PSD/BAT0/capacity"; printf '%s\n' "$2" > "$PSD/BAT0/status"; printf '%s\n' "$3" > "$PSD/AC/online"; }
+ppd() {
+    if [ -n "${1:-}" ]; then
+        gdbus call --system --dest net.hadess.PowerProfiles --object-path /net/hadess/PowerProfiles \
+            --method org.freedesktop.DBus.Properties.Set net.hadess.PowerProfiles ActiveProfile "<'$1'>" > /dev/null 2>&1
+    else
+        gdbus call --system --dest net.hadess.PowerProfiles --object-path /net/hadess/PowerProfiles \
+            --method org.freedesktop.DBus.Properties.Get net.hadess.PowerProfiles ActiveProfile 2>&1 | tr -dc 'a-z-'
+    fi
+}
+wait_nlog() { i=0; while [ "$i" -lt "${3:-90}" ]; do [ "$(nlog "$1")" -gt "$2" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+ini_set() {     # KEY VALUE, in the [settings] group of settings.ini
+    if grep -q "^$1=" "$SETTINGS_INI"; then sed -i "s|^$1=.*|$1=$2|" "$SETTINGS_INI"
+    else sed -i "/^\[settings\]\$/a $1=$2" "$SETTINGS_INI"; fi
+}
+[ -n "$PPD_MOCK" ] && ppd balanced
+"$B/hde-settings" --brightness 100 > /dev/null 2>&1
+ini_set battery_saver true; ini_set battery_saver_level 20; sleep 2.5
+c0=$(nlog "hde-panel: battery saver: on")
+bat 18 Discharging 0
+if wait_nlog "hde-panel: battery saver: on" "$c0" 90; then pass "the battery saver turns on at 20% on battery ($(grep 'hde-panel: battery saver: on' "$OUT/session.log" | tail -n 1 | sed 's/.*saver: //'))"
+else fail "the battery saver turns on at 20% on battery ($(grep 'hde-panel: battery saver' "$OUT/session.log" | tail -n 2 | tr '\n' ' '))"; fi
+sleep 2
+if [ -n "$PPD_MOCK" ]; then
+    if [ "$(ppd)" = power-saver ]; then pass "... it switches to the Power Saver mode (power-profiles-daemon)"
+    else fail "... it switches to the Power Saver mode ($(ppd))"; fi
+fi
+case "$binfo" in "software dimming"*)
+    if [ "$(soft)" = 70 ]; then pass "... it dims the screen to 70% of its brightness"
+    else fail "... it dims the screen to 70% of its brightness (_HDE_BRIGHTNESS=$(soft))"; fi ;;
+esac
+check "... a notification says so" grep -q "hde-notify: notification [0-9]* from Power: Battery saver is on" "$OUT/session.log"
+check "... the extensions refresh less often" grep -q "hde-panel: extensions: refreshed 3 times less often (battery saver)" "$OUT/session.log"
+shot 19a-battery-saver
+"$B/hde-settings" --power > "$OUT/power-cli.txt" 2>&1
+check "hde-settings --power: the battery and the battery saver (on now)" grep -q "^Battery saver: at 20% (on now)" "$OUT/power-cli.txt"
+"$B/hde-settings" power > "$OUT/settings-power.log" 2>&1 &
+SPW=$!
+i=0; while ! xdotool search --onlyvisible --name "Hyggshi Settings" >/dev/null 2>&1 && [ "$i" -lt 60 ]; do sleep 0.1; i=$((i + 1)); done
+sleep 2.5
+shot 19b-settings-power
+if [ -n "$PPD_MOCK" ]; then
+    check "Settings > Power shows the power mode (Power Saver, from power-profiles-daemon)" \
+        grep -q "hde-settings: power mode power-saver (.*balanced" "$OUT/settings-power.log"
+fi
+kill "$SPW" 2>/dev/null; sleep 0.5
+c0=$(nlog "hde-panel: power: battery low")
+bat 9 Discharging 0
+if wait_nlog "hde-panel: power: battery low" "$c0" 90; then pass "'Battery low' at 10% ($(grep 'hde-panel: power: battery low' "$OUT/session.log" | tail -n 1 | sed 's/.*power: //'))"
+else fail "'Battery low' at 10%"; fi
+check "... as a notification" grep -q "hde-notify: notification [0-9]* from Power: Battery low" "$OUT/session.log"
+c0=$(nlog "hde-panel: power: battery critically low")
+bat 4 Discharging 0
+if wait_nlog "hde-panel: power: battery critically low" "$c0" 90; then pass "'Battery critically low' at 5%"
+else fail "'Battery critically low' at 5%"; fi
+check "... as a notification that stays (critical)" grep -q "hde-notify: notification [0-9]* from Power: Battery critically low" "$OUT/session.log"
+sleep 1
+shot 19c-battery-critical
+c0=$(nlog "hde-panel: battery saver: off")
+bat 4 Charging 1
+if wait_nlog "hde-panel: battery saver: off (plugged in)" "$c0" 90; then pass "plugged in: the battery saver turns off"
+else fail "plugged in: the battery saver turns off ($(grep 'hde-panel: battery saver' "$OUT/session.log" | tail -n 1))"; fi
+sleep 2.5
+if [ -n "$PPD_MOCK" ]; then
+    if [ "$(ppd)" = balanced ]; then pass "... the power mode is Balanced again"; else fail "... the power mode is Balanced again ($(ppd))"; fi
+fi
+case "$binfo" in "software dimming"*)
+    if [ "$(soft)" = 100 ]; then pass "... and the brightness 100% again"; else fail "... and the brightness 100% again (_HDE_BRIGHTNESS=$(soft))"; fi ;;
+esac
+bat 82 Discharging 0
+sed -i '/^battery_saver=/d; /^battery_saver_level=/d' "$SETTINGS_INI"
+xdotool key Escape; sleep 0.5
+# GNOME's touchpad settings follow HDE's (Mutter / Muffin apply them themselves); the keyfile backend stands in for dconf
+if gsettings list-schemas 2>/dev/null | grep -qx org.gnome.desktop.peripherals.touchpad; then
+    ns0=$(sed -n 's/^natural_scroll=//p' "$SETTINGS_INI" | tail -n 1)
+    ini_set natural_scroll false
+    GSETTINGS_BACKEND=keyfile "$B/hde-settings" --apply > "$OUT/gsettings-apply.log" 2>&1
+    v=$(GSETTINGS_BACKEND=keyfile gsettings get org.gnome.desktop.peripherals.touchpad natural-scroll 2>&1)
+    if [ "$v" = false ]; then pass "natural_scroll=false: org.gnome.desktop.peripherals.touchpad natural-scroll follows (false)"
+    else fail "natural_scroll=false: GNOME's natural-scroll follows ($v; $(tr '\n' ' ' < "$OUT/gsettings-apply.log"))"; fi
+    ini_set natural_scroll true
+    GSETTINGS_BACKEND=keyfile "$B/hde-settings" --apply >> "$OUT/gsettings-apply.log" 2>&1
+    v=$(GSETTINGS_BACKEND=keyfile gsettings get org.gnome.desktop.peripherals.touchpad natural-scroll 2>&1)
+    t=$(GSETTINGS_BACKEND=keyfile gsettings get org.gnome.desktop.peripherals.touchpad tap-to-click 2>&1)
+    if [ "$v" = true ] && [ "$t" = true ]; then pass "... true again, and tap-to-click too (true)"
+    else fail "... true again, and tap-to-click too ($v, $t)"; fi
+    if [ -n "$ns0" ]; then ini_set natural_scroll "$ns0"; else sed -i '/^natural_scroll=/d' "$SETTINGS_INI"; fi
+else
+    skip "gsettings-desktop-schemas is not installed: GNOME's touchpad settings"
+fi
 
 # right-click menus with icons: the panel, the Start button, a status icon
 xdotool mousemove 760 783 click 3; sleep 1

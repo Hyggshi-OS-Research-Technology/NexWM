@@ -16,5 +16,7 @@ GtkWidget *hde_applets_new(void);
 void       hde_applets_update(GtkWidget *box);
 
 void       hde_applets_set_debug(gboolean on);
+/* The battery saver: the extensions refresh 3 times less often while it is on. */
+void       hde_applets_set_slow(gboolean slow);
 
 #endif
