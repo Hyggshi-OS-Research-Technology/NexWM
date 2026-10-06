@@ -1,7 +1,9 @@
 /* hde-osd: volume / brightness OSD (popup window that never takes focus, above the panel). */
 #include "hde-osd.h"
+#include "hde-wl.h"
+#include "hde-panel-config.h"
 
-#define OSD_PANEL_GAP 64      /* distance from the bottom edge of the screen (34px panel + margin) */
+#define OSD_GAP 30            /* distance from the panel (or the bottom edge of the screen) */
 #define OSD_TIMEOUT_MS 1500
 
 static GtkWidget *osd_win, *osd_icon, *osd_level, *osd_label;
@@ -43,7 +45,7 @@ static gboolean osd_hide(gpointer d)
 
 static void osd_build(void)
 {
-    osd_win = gtk_window_new(GTK_WINDOW_POPUP);
+    osd_win = hde_popup_window_new("hde-osd", HDE_LAYER_OVERLAY, HDE_EDGE_BOTTOM, HDE_KB_NONE);
     gtk_window_set_type_hint(GTK_WINDOW(osd_win), GDK_WINDOW_TYPE_HINT_NOTIFICATION);
     gtk_window_set_accept_focus(GTK_WINDOW(osd_win), FALSE);
     gtk_window_set_resizable(GTK_WINDOW(osd_win), FALSE);
@@ -84,15 +86,20 @@ void hde_osd_show(const char *icon_name, int percent, const char *text)
     if (!text && percent >= 0) { g_snprintf(buf, sizeof buf, "%d%%", percent); text = buf; }
     gtk_label_set_text(GTK_LABEL(osd_label), text ? text : "");
 
-    GdkDisplay *dpy = gdk_display_get_default();
-    GdkMonitor *m = gdk_display_get_primary_monitor(dpy);
-    if (!m) m = gdk_display_get_monitor(dpy, 0);
+    GdkMonitor *m = hde_main_monitor();
     GdkRectangle geo = { 0, 0, 1024, 768 };
     if (m) gdk_monitor_get_geometry(m, &geo);
+    int bottom = 0;
+    hde_panel_reserved(NULL, &bottom);
     GtkRequisition nat;
     gtk_widget_get_preferred_size(osd_win, NULL, &nat);
-    gtk_window_move(GTK_WINDOW(osd_win), geo.x + (geo.width - nat.width) / 2,
-                    geo.y + geo.height - OSD_PANEL_GAP - nat.height);
+    if (hde_wl_is_layer(GTK_WINDOW(osd_win))) {
+        hde_wl_layer_exclusive(GTK_WINDOW(osd_win), 0);          /* keeps clear of the panel by itself */
+        hde_wl_layer_margins(GTK_WINDOW(osd_win), 0, 0, 0, OSD_GAP);
+    } else {
+        gtk_window_move(GTK_WINDOW(osd_win), geo.x + (geo.width - nat.width) / 2,
+                        geo.y + geo.height - bottom - OSD_GAP - nat.height);
+    }
     gtk_widget_show(osd_win);
     if (gtk_widget_get_window(osd_win)) gdk_window_raise(gtk_widget_get_window(osd_win));
     if (osd_timer) g_source_remove(osd_timer);

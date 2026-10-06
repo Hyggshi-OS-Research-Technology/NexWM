@@ -1,14 +1,20 @@
-/* Hyggshi Settings — About: HDE (version, build), this computer, the system, and how much memory (RAM) the
- * desktop uses right now, measured live (src/hde-sysinfo.c). `hde-settings --about` prints the same as text. */
+/* Hyggshi Settings — About: the system HDE runs on with its logo (ID / ID_LIKE / LOGO of /etc/os-release:
+ * Hyggshi OS, Ubuntu, Debian, Linux Mint, ...; see src/hde-osinfo.h) and the base it is built on, HDE (version,
+ * build), this computer, and how much memory (RAM) the desktop uses right now, measured live (src/hde-sysinfo.c).
+ * `hde-settings --about` prints the same as text; `hde-settings --about-window` is the small "About HDE" window of
+ * the desktop menu. */
 #include "hde-settings.h"
 #include "hde-sysinfo.h"
 #include "hde-randr.h"
 #include "hde-theme.h"
 #include "hde-build.h"
+#include "hde-osinfo.h"
+#include "hde-wl.h"
 #include <gdk/gdkx.h>
 #include <X11/Xatom.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define PROJECT_URL "https://github.com/Hyggshi-OS-Research-Technology/NexWM"
 
@@ -86,10 +92,37 @@ static char *uptime_text(double sec)
     return g_strdup_printf("%ld min", m);
 }
 
-/* lines for hde_sysinfo_report(): window manager, display server, screens, session */
+/* Wayland: "Wayland (labwc 0.8.4)" — labwc tells its version to the programs it starts */
+static char *wayland_server(void)
+{
+    const char *v = g_getenv("LABWC_VER");
+    const char *desk = g_getenv("XDG_SESSION_DESKTOP");
+    if (g_getenv("LABWC_PID") || v) return g_strdup_printf("Wayland (labwc%s%s)", v ? " " : "", v ? v : "");
+    return g_strdup_printf("Wayland%s%s%s", desk ? " (" : "", desk ? desk : "", desk ? ")" : "");
+}
+
+static char *base_line(void)
+{
+    HdeOsInfo os;
+    hde_os_info_load(&os);
+    char *b = hde_os_base_text(&os, NULL);
+    hde_os_info_clear(&os);
+    return b;
+}
+
+/* lines for hde_sysinfo_report(): base system, window manager, display server, screens, session */
 static char *extra_lines(Display *d, gboolean with_gtk)
 {
     GString *g = g_string_new(NULL);
+    char *base = base_line();
+    if (base) g_string_append_printf(g, "Based on: %s\n", base);
+    g_free(base);
+    if (!d && (g_getenv("WAYLAND_DISPLAY") || hde_is_wayland())) {
+        char *ws = wayland_server();
+        g_string_append_printf(g, "Window manager: %s\n", g_getenv("LABWC_PID") ? "labwc (Wayland compositor)" : "the Wayland compositor");
+        g_string_append_printf(g, "Display server: %s\n", ws);
+        g_free(ws);
+    }
     if (d) {
         char *wm = wm_name(d), *xs = xserver(d), *sc = screens_text(d);
         g_string_append_printf(g, "Window manager: %s\n", wm ? wm : "none running");
@@ -99,7 +132,8 @@ static char *extra_lines(Display *d, gboolean with_gtk)
     }
     if (with_gtk) g_string_append_printf(g, "GTK: %u.%u.%u\n", gtk_get_major_version(), gtk_get_minor_version(),
                                          gtk_get_micro_version());
-    g_string_append_printf(g, "Session: %s\n", g_getenv("HDE_SESSION_PID") ? "HDE (X11)" : "not an HDE session");
+    g_string_append_printf(g, "Session: %s\n", !g_getenv("HDE_SESSION_PID") ? "not an HDE session"
+                                               : g_getenv("WAYLAND_DISPLAY") && !d ? "HDE (Wayland)" : "HDE (X11)");
     return g_string_free(g, FALSE);
 }
 
@@ -108,7 +142,7 @@ int about_cli(void)
     hde_sysinfo_exclude_self(TRUE);
     HdeSysInfo si;
     hde_sysinfo_load(&si);
-    Display *d = XOpenDisplay(NULL);
+    Display *d = g_getenv("WAYLAND_DISPLAY") ? NULL : XOpenDisplay(NULL);
     char *extra = extra_lines(d, FALSE);
     char *r = hde_sysinfo_report(&si, extra);
     printf("%s", r);
@@ -124,41 +158,6 @@ static Display *xdisplay(void)
 {
     GdkDisplay *d = gdk_display_get_default();
     return d && GDK_IS_X11_DISPLAY(d) ? GDK_DISPLAY_XDISPLAY(d) : NULL;
-}
-
-static gboolean draw_logo(GtkWidget *w, cairo_t *cr, gpointer data)
-{
-    (void)data;
-    int W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
-    double s = MIN(W, H), x = (W - s) / 2, y = (H - s) / 2, r = s * 0.24;
-    HdeThemeInfo ti;
-    hde_theme_info_load(&ti);
-    GdkRGBA a;
-    if (!gdk_rgba_parse(&a, ti.accent)) gdk_rgba_parse(&a, "#3584e4");
-    hde_theme_info_clear(&ti);
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, x + s - r, y + r, r, -G_PI / 2, 0);
-    cairo_arc(cr, x + s - r, y + s - r, r, 0, G_PI / 2);
-    cairo_arc(cr, x + r, y + s - r, r, G_PI / 2, G_PI);
-    cairo_arc(cr, x + r, y + r, r, G_PI, 3 * G_PI / 2);
-    cairo_close_path(cr);
-    cairo_pattern_t *g = cairo_pattern_create_linear(x, y, x + s, y + s);
-    cairo_pattern_add_color_stop_rgb(g, 0, MIN(1, a.red * 1.25 + 0.08), MIN(1, a.green * 1.25 + 0.08), MIN(1, a.blue * 1.25 + 0.08));
-    cairo_pattern_add_color_stop_rgb(g, 1, a.red * 0.55, a.green * 0.55, a.blue * 0.65);
-    cairo_set_source(cr, g);
-    cairo_fill(cr);
-    cairo_pattern_destroy(g);
-    /* a window with a title bar, and the H */
-    cairo_set_source_rgba(cr, 1, 1, 1, 0.22);
-    cairo_rectangle(cr, x + s * 0.16, y + s * 0.18, s * 0.68, s * 0.10);
-    cairo_fill(cr);
-    cairo_set_source_rgba(cr, 1, 1, 1, 0.95);
-    double lw = s * 0.12, top = y + s * 0.36, bot = y + s * 0.82;
-    cairo_rectangle(cr, x + s * 0.26, top, lw, bot - top);
-    cairo_rectangle(cr, x + s * 0.74 - lw, top, lw, bot - top);
-    cairo_rectangle(cr, x + s * 0.26, (top + bot) / 2 - lw / 2, s * 0.48, lw);
-    cairo_fill(cr);
-    return FALSE;
 }
 
 static void add_fact(GtkWidget *card, const char *title, const char *value)
@@ -291,6 +290,110 @@ static void on_log(GtkButton *b, gpointer d)
     g_free(p);
 }
 
+#define TAGLINE "A light and fast desktop for Hyggshi OS — GTK 3 on X11 with any GTK window manager, or on Wayland."
+#define CREDITS "Made by HyggshiOSDeveloper and contributors. Free software under the MIT License. Configuration: " \
+                "~/.config/hde/settings.ini. The logos of the distributions belong to their owners; HDE uses the one " \
+                "your system installs, or its own copy drawn from Simple Icons (CC0, see data/logos/LICENSES.md)."
+
+static gboolean dark_ui(void)
+{
+    HdeThemeInfo ti;
+    hde_theme_info_load(&ti);
+    gboolean d = ti.style == HDE_STYLE_DARK;
+    hde_theme_info_clear(&ti);
+    return d;
+}
+
+static GtkWidget *surface_image(cairo_surface_t *s)
+{
+    GtkWidget *im = gtk_image_new_from_surface(s);
+    cairo_surface_destroy(s);
+    return im;
+}
+
+static int ui_scale(void)
+{
+    GdkMonitor *m = hde_main_monitor();
+    return m ? MAX(1, gdk_monitor_get_scale_factor(m)) : 1;
+}
+
+static GtkWidget *hde_logo_image(int size)
+{
+    HdeThemeInfo ti;
+    hde_theme_info_load(&ti);
+    GtkWidget *im = surface_image(hde_hde_logo_surface(size, ui_scale(), ti.accent));
+    hde_theme_info_clear(&ti);
+    return im;
+}
+
+static void on_link(GtkButton *b, gpointer uri) { (void)b; open_uri(uri); }
+
+static GtkWidget *link_button(const char *label, const char *uri)
+{
+    GtkWidget *b = gtk_button_new_with_label(label);
+    gtk_button_set_relief(GTK_BUTTON(b), GTK_RELIEF_NONE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(b), "about-link");
+    gtk_widget_set_tooltip_text(b, uri);
+    g_signal_connect_data(b, "clicked", G_CALLBACK(on_link), g_strdup(uri), (GClosureNotify)(void (*)(void))g_free, 0);
+    return b;
+}
+
+/* The system HDE runs on: its logo, name and version, the base it is built on (with that logo too), its links. */
+static GtkWidget *os_hero(gboolean compact)
+{
+    HdeOsInfo os;
+    hde_os_info_load(&os);
+    gboolean dark = dark_ui();
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, compact ? 4 : 6);
+    gtk_widget_set_halign(v, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(v, compact ? 4 : 10);
+    gtk_widget_set_margin_bottom(v, compact ? 4 : 6);
+    char *how = NULL;
+    GtkWidget *logo = surface_image(hde_os_logo_surface(&os, compact ? 96 : 128, ui_scale(), dark, &how));
+    gtk_box_pack_start(GTK_BOX(v), logo, FALSE, FALSE, 0);
+    char *t = hde_os_title(&os);
+    GtkWidget *title = gtk_label_new(t);
+    gtk_label_set_selectable(GTK_LABEL(title), TRUE);
+    gtk_widget_set_can_focus(title, FALSE);
+    gtk_label_set_line_wrap(GTK_LABEL(title), TRUE);
+    gtk_label_set_justify(GTK_LABEL(title), GTK_JUSTIFY_CENTER);
+    gtk_style_context_add_class(gtk_widget_get_style_context(title), compact ? "about-os-small" : "about-title");
+    gtk_box_pack_start(GTK_BOX(v), title, FALSE, FALSE, 0);
+    char *base_id = NULL, *base_how = NULL;
+    char *base = hde_os_base_text(&os, &base_id);
+    if (base) {
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_halign(row, GTK_ALIGN_CENTER);
+        GtkWidget *bl = gtk_label_new("Based on");
+        gtk_style_context_add_class(gtk_widget_get_style_context(bl), "row-description");
+        gtk_box_pack_start(GTK_BOX(row), bl, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), surface_image(hde_distro_logo_surface(base_id, base, 18, ui_scale(), dark, &base_how)),
+                           FALSE, FALSE, 0);
+        GtkWidget *bn = gtk_label_new(base);
+        gtk_style_context_add_class(gtk_widget_get_style_context(bn), "about-base");
+        gtk_box_pack_start(GTK_BOX(row), bn, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(v), row, FALSE, FALSE, 0);
+    }
+    if (!compact && (os.home_url || os.support_url || os.bug_url)) {
+        GtkWidget *links = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+        gtk_widget_set_halign(links, GTK_ALIGN_CENTER);
+        if (os.home_url) gtk_box_pack_start(GTK_BOX(links), link_button("Website", os.home_url), FALSE, FALSE, 0);
+        if (os.support_url && g_strcmp0(os.support_url, os.home_url))
+            gtk_box_pack_start(GTK_BOX(links), link_button("Support", os.support_url), FALSE, FALSE, 0);
+        if (os.bug_url && g_strcmp0(os.bug_url, os.support_url))
+            gtk_box_pack_start(GTK_BOX(links), link_button("Report a bug", os.bug_url), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(v), links, FALSE, FALSE, 0);
+    }
+    if (g_getenv("HDE_DEBUG"))
+        fprintf(stderr, "hde-settings: about: %s (ID=%s%s%s, from %s): logo from %s%s%s%s%s\n", t, os.id,
+                os.id_like ? ", ID_LIKE=" : "", os.id_like ? os.id_like : "", os.source ? os.source : "nowhere",
+                how ? how : "?", base ? "; based on " : "", base ? base : "", base ? ", its logo from " : "",
+                base ? (base_how ? base_how : "?") : "");
+    g_free(how); g_free(base_how); g_free(t); g_free(base); g_free(base_id);
+    hde_os_info_clear(&os);
+    return v;
+}
+
 GtkWidget *page_about_new(void)
 {
     GtkWidget *box = page_base();
@@ -298,26 +401,25 @@ GtkWidget *page_about_new(void)
     hde_sysinfo_load(&si);
     Display *dpy = xdisplay();
 
-    GtkWidget *hero = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 22);
-    gtk_widget_set_margin_top(hero, 6);
-    gtk_widget_set_margin_bottom(hero, 4);
-    GtkWidget *logo = gtk_drawing_area_new();
-    gtk_widget_set_size_request(logo, 104, 104);
-    gtk_widget_set_valign(logo, GTK_ALIGN_START);
-    g_signal_connect(logo, "draw", G_CALLBACK(draw_logo), NULL);
-    gtk_box_pack_start(GTK_BOX(hero), logo, FALSE, FALSE, 0);
-    GtkWidget *txt = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_box_pack_start(GTK_BOX(box), os_hero(FALSE), FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Desktop"), FALSE, FALSE, 0);
+    GtkWidget *dcard = card_new();
+    GtkWidget *drow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
+    gtk_container_set_border_width(GTK_CONTAINER(drow), 12);
+    gtk_box_pack_start(GTK_BOX(drow), hde_logo_image(48), FALSE, FALSE, 0);
+    GtkWidget *txt = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
     GtkWidget *title = gtk_label_new("Hyggshi Desktop Environment");
-    gtk_style_context_add_class(gtk_widget_get_style_context(title), "about-title");
+    gtk_style_context_add_class(gtk_widget_get_style_context(title), "row-title");
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     char *ver = g_strdup_printf("Version %s  ·  Build %s", HDE_RELEASE, HDE_VERSION);
     GtkWidget *vl = gtk_label_new(ver);
     g_free(ver);
     gtk_label_set_selectable(GTK_LABEL(vl), TRUE);
     gtk_widget_set_can_focus(vl, FALSE);
-    gtk_style_context_add_class(gtk_widget_get_style_context(vl), "page-description");
+    gtk_style_context_add_class(gtk_widget_get_style_context(vl), "row-description");
     gtk_widget_set_halign(vl, GTK_ALIGN_START);
-    GtkWidget *tag = gtk_label_new("A light and fast desktop for Hyggshi OS — GTK 3 on X11, with any GTK window manager.");
+    GtkWidget *tag = gtk_label_new(TAGLINE);
     gtk_label_set_line_wrap(GTK_LABEL(tag), TRUE);
     gtk_label_set_xalign(GTK_LABEL(tag), 0);
     gtk_style_context_add_class(gtk_widget_get_style_context(tag), "row-description");
@@ -338,8 +440,9 @@ GtkWidget *page_about_new(void)
     gtk_box_pack_start(GTK_BOX(txt), vl, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(txt), tag, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(txt), btns, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(hero), txt, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(box), hero, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(drow), txt, TRUE, TRUE, 0);
+    gtk_container_add(GTK_CONTAINER(dcard), drow);
+    gtk_box_pack_start(GTK_BOX(box), dcard, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("This computer"), FALSE, FALSE, 0);
     GtkWidget *pc = card_new();
@@ -362,12 +465,15 @@ GtkWidget *page_about_new(void)
     gtk_box_pack_start(GTK_BOX(box), section("Software"), FALSE, FALSE, 0);
     GtkWidget *sw = card_new();
     char *kern = g_strdup_printf("%s (%s)", si.kernel ? si.kernel : "?", si.arch ? si.arch : "?");
-    char *wm = dpy ? wm_name(dpy) : NULL, *xs = dpy ? xserver(dpy) : g_strdup("Not X11");
+    char *wm = dpy ? wm_name(dpy) : hde_is_wayland() && g_getenv("LABWC_PID") ? g_strdup("labwc (Wayland compositor)") : NULL;
+    char *xs = dpy ? xserver(dpy) : hde_is_wayland() ? wayland_server() : g_strdup("Not X11");
+    char *base = base_line();
     char *gtkv = g_strdup_printf("%u.%u.%u", gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version());
     char *desk = g_strdup_printf("HDE %s (build %s)%s", HDE_RELEASE, HDE_VERSION,
                                  g_getenv("HDE_SESSION_PID") ? "" : " — not running as the session");
     char *up = uptime_text(si.uptime);
     add_fact(sw, "Operating system", si.os);
+    if (base) add_fact(sw, "Based on", base);
     add_fact(sw, "Kernel", kern);
     add_fact(sw, "Desktop", desk);
     add_fact(sw, "Window manager", wm ? wm : "None running");
@@ -375,7 +481,7 @@ GtkWidget *page_about_new(void)
     add_fact(sw, "GTK", gtkv);
     add_fact(sw, "Running for", up);
     gtk_box_pack_start(GTK_BOX(box), sw, FALSE, FALSE, 0);
-    g_free(kern); g_free(wm); g_free(xs); g_free(gtkv); g_free(desk); g_free(up);
+    g_free(kern); g_free(wm); g_free(xs); g_free(gtkv); g_free(desk); g_free(up); g_free(base);
 
     gtk_box_pack_start(GTK_BOX(box), section("Memory used by the desktop"), FALSE, FALSE, 0);
     mem_card = card_new();
@@ -414,13 +520,121 @@ GtkWidget *page_about_new(void)
         "best for everyday browsing. Give a virtual machine at least 2 GB."), FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Credits"), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), info_label("Made by HyggshiOSDeveloper and contributors. Free software under the "
-                                                "MIT License. Configuration: ~/.config/hde/settings.ini"),
-                       FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), info_label(CREDITS), FALSE, FALSE, 0);
 
     g_signal_connect(box, "map", G_CALLBACK(on_about_map), NULL);
     g_signal_connect(box, "unmap", G_CALLBACK(on_about_unmap), NULL);
     g_signal_connect(box, "destroy", G_CALLBACK(on_about_destroy), NULL);
     hde_sysinfo_clear(&si);
     return box;
+}
+
+/* ---------------------------------------------------------------- the "About HDE" window (desktop menu) */
+static void on_details(GtkButton *b, gpointer w)
+{
+    (void)b;
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    if (n > 0) self[n] = '\0';
+    char *argv[] = { n > 0 ? self : (char *)"hde-settings", (char *)"about", NULL };
+    GError *e = NULL;
+    if (!g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &e)) {
+        g_printerr("hde-settings: %s\n", e->message);
+        g_clear_error(&e);
+    }
+    gtk_widget_destroy(GTK_WIDGET(w));
+}
+
+static void on_credits(GtkToggleButton *b, gpointer stack)
+{
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), gtk_toggle_button_get_active(b) ? "credits" : "about");
+}
+
+static gboolean on_about_key(GtkWidget *w, GdkEventKey *e, gpointer d)
+{
+    (void)d;
+    if (e->keyval == GDK_KEY_Escape) { gtk_widget_destroy(w); return TRUE; }
+    return FALSE;
+}
+
+static GtkWidget *centered_label(const char *text, const char *cls)
+{
+    GtkWidget *l = gtk_label_new(text);
+    gtk_label_set_line_wrap(GTK_LABEL(l), TRUE);
+    gtk_label_set_justify(GTK_LABEL(l), GTK_JUSTIFY_CENTER);
+    gtk_label_set_max_width_chars(GTK_LABEL(l), 48);
+    if (cls) gtk_style_context_add_class(gtk_widget_get_style_context(l), cls);
+    return l;
+}
+
+int about_window_main(void)
+{
+    GtkWidget *w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(w), "About HDE");
+    gtk_window_set_icon_name(GTK_WINDOW(w), "help-about");
+    gtk_window_set_resizable(GTK_WINDOW(w), FALSE);
+    gtk_window_set_position(GTK_WINDOW(w), GTK_WIN_POS_CENTER);
+    gtk_window_set_default_size(GTK_WINDOW(w), 460, -1);
+    g_signal_connect(w, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(w, "key-press-event", G_CALLBACK(on_about_key), NULL);
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_container_set_border_width(GTK_CONTAINER(v), 22);
+    gtk_container_add(GTK_CONTAINER(w), v);
+    gtk_box_pack_start(GTK_BOX(v), os_hero(TRUE), FALSE, FALSE, 0);
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top(sep, 10);
+    gtk_widget_set_margin_bottom(sep, 10);
+    gtk_box_pack_start(GTK_BOX(v), sep, FALSE, FALSE, 0);
+
+    GtkWidget *stack = gtk_stack_new();
+    gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+    gtk_stack_set_vhomogeneous(GTK_STACK(stack), FALSE);
+    GtkWidget *about = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    GtkWidget *hl = hde_logo_image(48);
+    gtk_widget_set_halign(hl, GTK_ALIGN_CENTER);
+    gtk_box_pack_start(GTK_BOX(about), hl, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(about), centered_label("Hyggshi Desktop Environment", "about-hde"), FALSE, FALSE, 2);
+    char *ver = g_strdup_printf("Version %s  ·  Build %s", HDE_RELEASE, HDE_VERSION);
+    gtk_box_pack_start(GTK_BOX(about), centered_label(ver, "row-description"), FALSE, FALSE, 0);
+    g_free(ver);
+    gtk_box_pack_start(GTK_BOX(about), centered_label(TAGLINE, NULL), FALSE, FALSE, 6);
+    Display *dpy = xdisplay();
+    char *wm = dpy ? wm_name(dpy) : hde_is_wayland() && g_getenv("LABWC_PID") ? g_strdup("labwc") : NULL;
+    char *xs = dpy ? xserver(dpy) : hde_is_wayland() ? wayland_server() : g_strdup("?");
+    HdeProcMem p[48];
+    guint64 pss = 0, rss = 0;
+    int n = hde_sysinfo_desktop_memory(p, G_N_ELEMENTS(p), &pss, &rss);
+    char *mem = hde_format_bytes(pss);
+    char *facts = n ? g_strdup_printf("%s%s%s  ·  HDE uses %s of RAM", wm ? wm : "", wm ? " on " : "", xs, mem)
+                    : g_strdup_printf("%s%s%s", wm ? wm : "", wm ? " on " : "", xs);
+    gtk_box_pack_start(GTK_BOX(about), centered_label(facts, "row-description"), FALSE, FALSE, 0);
+    g_free(wm); g_free(xs); g_free(mem);
+    gtk_stack_add_named(GTK_STACK(stack), about, "about");
+    GtkWidget *credits = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_box_pack_start(GTK_BOX(credits), centered_label("Credits", "about-hde"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(credits), centered_label(CREDITS, NULL), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(credits), centered_label("Built with GTK 3, libwnck, gtk-layer-shell and labwc. Project page: "
+                                                        PROJECT_URL, "row-description"), FALSE, FALSE, 0);
+    gtk_stack_add_named(GTK_STACK(stack), credits, "credits");
+    gtk_box_pack_start(GTK_BOX(v), stack, FALSE, FALSE, 0);
+
+    GtkWidget *btns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(btns, 16);
+    GtkWidget *cr = gtk_toggle_button_new_with_mnemonic("C_redits");
+    g_signal_connect(cr, "toggled", G_CALLBACK(on_credits), stack);
+    GtkWidget *det = gtk_button_new_with_mnemonic("System _details…");
+    gtk_widget_set_tooltip_text(det, "Settings > About: this computer, the memory each part of HDE uses, …");
+    g_signal_connect(det, "clicked", G_CALLBACK(on_details), w);
+    GtkWidget *close = gtk_button_new_with_mnemonic("_Close");
+    g_signal_connect_swapped(close, "clicked", G_CALLBACK(gtk_widget_destroy), w);
+    gtk_box_pack_start(GTK_BOX(btns), cr, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(btns), close, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(btns), det, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(v), btns, FALSE, FALSE, 0);
+    gtk_widget_show_all(w);
+    gtk_widget_grab_focus(close);
+    if (g_getenv("HDE_DEBUG")) fprintf(stderr, "hde-settings: about window shown (%s)\n", facts);
+    g_free(facts);
+    gtk_main();
+    return 0;
 }

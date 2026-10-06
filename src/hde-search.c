@@ -1,11 +1,12 @@
 /* hde-search: the app search box of the Start menu. */
 #include "hde-search.h"
 #include "hde-osd.h"
+#include "hde-wl.h"
+#include "hde-panel-config.h"
 #include <gio/gdesktopappinfo.h>
 #include <gdk/gdkx.h>
 #include <string.h>
 
-#define PANEL_HEIGHT 34
 #define SEARCH_W 480
 #define SEARCH_H 520
 #define MAX_RESULTS 40
@@ -236,6 +237,7 @@ static gboolean on_map(GtkWidget *w, GdkEvent *e, gpointer d)
 static void build(void)
 {
     swin = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    hde_wl_layer_init(GTK_WINDOW(swin), "hde-search", HDE_LAYER_TOP, HDE_EDGE_LEFT | HDE_EDGE_BOTTOM, HDE_KB_EXCLUSIVE);
     gtk_window_set_title(GTK_WINDOW(swin), "Search applications");
     gtk_window_set_decorated(GTK_WINDOW(swin), FALSE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(swin), TRUE);
@@ -279,12 +281,18 @@ static void build(void)
 void hde_search_show(const char *initial_text, guint32 time)
 {
     if (!swin) build();
-    GdkDisplay *dpy = gdk_display_get_default();
-    GdkMonitor *m = gdk_display_get_primary_monitor(dpy);
-    if (!m) m = gdk_display_get_monitor(dpy, 0);
+    GdkMonitor *m = hde_main_monitor();
     GdkRectangle geo = { 0, 0, 1024, 768 };
     if (m) gdk_monitor_get_geometry(m, &geo);
-    gtk_window_move(GTK_WINDOW(swin), geo.x + 6, geo.y + geo.height - PANEL_HEIGHT - 6 - SEARCH_H);
+    int top = 0, bottom = 0;
+    hde_panel_reserved(&top, &bottom);
+    if (hde_wl_is_layer(GTK_WINDOW(swin))) {
+        hde_wl_layer_edges(GTK_WINDOW(swin), HDE_EDGE_LEFT | (top ? HDE_EDGE_TOP : HDE_EDGE_BOTTOM));
+        hde_wl_layer_exclusive(GTK_WINDOW(swin), 0);
+        hde_wl_layer_margins(GTK_WINDOW(swin), 6, 0, 6, 6);
+    } else {
+        gtk_window_move(GTK_WINDOW(swin), geo.x + 6, top ? geo.y + top + 6 : geo.y + geo.height - bottom - 6 - SEARCH_H);
+    }
 
     g_signal_handlers_block_by_func(sentry, on_search_changed, NULL);
     gtk_entry_set_text(GTK_ENTRY(sentry), initial_text ? initial_text : "");

@@ -12,6 +12,8 @@
 #include "hde-theme.h"
 #include "hde-status.h"
 #include "hde-osd.h"
+#include "hde-wl.h"
+#include "hde-panel-config.h"
 #include <gio/gdesktopappinfo.h>
 #include <string.h>
 
@@ -21,7 +23,7 @@
 
 #define POPUP_WIDTH      360
 #define POPUP_MARGIN     12
-#define PANEL_GAP        46       /* 34px panel + margin */
+#define PANEL_GAP        12       /* between the panel (or the screen edge) and the popups */
 #define MAX_POPUPS       4
 #define MAX_HISTORY      50
 #define DEFAULT_TIMEOUT  6000
@@ -328,7 +330,7 @@ static GtkWidget *wrap_label(const char *markup, const char *css_class, gboolean
 static void build_popup(Notif *n)
 {
     if (n->popup) gtk_widget_destroy(n->popup);
-    GtkWidget *win = gtk_window_new(GTK_WINDOW_POPUP);
+    GtkWidget *win = hde_popup_window_new("hde-notification", HDE_LAYER_OVERLAY, HDE_EDGE_RIGHT | HDE_EDGE_BOTTOM, HDE_KB_NONE);
     n->popup = win;
     gtk_window_set_type_hint(GTK_WINDOW(win), GDK_WINDOW_TYPE_HINT_NOTIFICATION);
     gtk_window_set_accept_focus(GTK_WINDOW(win), FALSE);
@@ -398,23 +400,31 @@ static void build_popup(Notif *n)
     gtk_widget_show_all(outer);
 }
 
+/* Popups stack up from the panel's corner: bottom right above a bottom panel, top right below a top panel. */
 static void relayout(void)
 {
-    GdkDisplay *dpy = gdk_display_get_default();
-    GdkMonitor *m = gdk_display_get_primary_monitor(dpy);
-    if (!m) m = gdk_display_get_monitor(dpy, 0);
+    GdkMonitor *m = hde_main_monitor();
     GdkRectangle geo = { 0, 0, 1024, 768 };
     if (m) gdk_monitor_get_geometry(m, &geo);
-    int y = geo.y + geo.height - PANEL_GAP;
-    for (GList *l = notifs; l; l = l->next) {        /* newest at the bottom */
+    int top = 0, bottom = 0;
+    hde_panel_reserved(&top, &bottom);
+    gboolean down = top > 0;                         /* panel at the top: newest at the top, the others below */
+    int offset = PANEL_GAP;                          /* from the panel (or the screen edge) */
+    for (GList *l = notifs; l; l = l->next) {        /* newest next to the panel */
         Notif *n = l->data;
         if (!n->popup) continue;
         int h = 0;
         gtk_widget_get_preferred_height_for_width(n->popup, POPUP_WIDTH, NULL, &h);
-        y -= h;
-        gtk_window_move(GTK_WINDOW(n->popup), geo.x + geo.width - POPUP_WIDTH - POPUP_MARGIN, y);
+        if (hde_wl_is_layer(GTK_WINDOW(n->popup))) {
+            hde_wl_layer_edges(GTK_WINDOW(n->popup), HDE_EDGE_RIGHT | (down ? HDE_EDGE_TOP : HDE_EDGE_BOTTOM));
+            hde_wl_layer_exclusive(GTK_WINDOW(n->popup), 0);
+            hde_wl_layer_margins(GTK_WINDOW(n->popup), 0, POPUP_MARGIN, down ? offset : 0, down ? 0 : offset);
+        } else {
+            int y = down ? geo.y + top + offset : geo.y + geo.height - bottom - offset - h;
+            gtk_window_move(GTK_WINDOW(n->popup), geo.x + geo.width - POPUP_WIDTH - POPUP_MARGIN, y);
+        }
         if (!gtk_widget_get_visible(n->popup)) gtk_widget_show(n->popup);
-        y -= 8;
+        offset += h + 8;
     }
 }
 

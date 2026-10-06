@@ -287,6 +287,30 @@ static void load_gpu(HdeSysInfo *si)
     si->gpu = all->len ? g_string_free(all, FALSE) : (g_string_free(all, TRUE), NULL);
 }
 
+/* PRETTY_NAME of HDE_OS_RELEASE (tests: the About of another system), else of /etc/os-release */
+static char *os_pretty_name(void)
+{
+    const char *alt = g_getenv("HDE_OS_RELEASE");
+    char *txt = NULL, *res = NULL;
+    if (alt && *alt && g_file_get_contents(alt, &txt, NULL, NULL)) {
+        char **lines = g_strsplit(txt, "\n", -1);
+        for (int i = 0; lines[i] && !res; i++)
+            if (g_str_has_prefix(lines[i], "PRETTY_NAME=")) {
+                char *v = g_strstrip(g_strdup(lines[i] + 12));
+                size_t l = strlen(v);
+                if (l >= 2 && (v[0] == '"' || v[0] == '\'') && v[l - 1] == v[0]) {
+                    v[l - 1] = '\0';
+                    memmove(v, v + 1, l - 1);
+                }
+                res = g_strcompress(v);
+                g_free(v);
+            }
+        g_strfreev(lines);
+        g_free(txt);
+    }
+    return res ? res : g_get_os_info(G_OS_INFO_KEY_PRETTY_NAME);
+}
+
 void hde_sysinfo_load(HdeSysInfo *si)
 {
     memset(si, 0, sizeof *si);
@@ -295,7 +319,7 @@ void hde_sysinfo_load(HdeSysInfo *si)
     load_cpu(si);
     load_memory(si);
     load_gpu(si);
-    si->os = g_get_os_info(G_OS_INFO_KEY_PRETTY_NAME);
+    si->os = os_pretty_name();
     struct utsname u;
     if (uname(&u) == 0) {
         si->kernel = g_strdup_printf("%s %s", u.sysname, u.release);

@@ -1,18 +1,19 @@
 /* Hyggshi Settings — the GTK3 settings center of the Hyggshi Desktop Environment.
  *
  *   hde-settings              open the settings window
- *   hde-settings <page>       open a page directly: display appearance input sound network bluetooth
- *                             windows notifications power keyboard users about
+ *   hde-settings <page>       open a page directly: display appearance panel startmenu input sound network
+ *                             bluetooth windows notifications power keyboard users about
  *   hde-settings --apply      re-apply the settings needed at every login, then exit (called by hde-session)
  *   hde-settings --touchpad-setup[=auto]   the "Touchpad scrolling" window (auto: only at the first login with a
  *                             touchpad, until a direction is chosen; run by hde-session)
  *   hde-settings --project    the Project window of F8 / Super+P (PC screen only, Duplicate, Extend, Second screen only)
  *   hde-settings --display-mode pc|duplicate|extend|second    --displays    --brightness [+N|-N|N]
  *   hde-settings --about      this computer, the system and the memory HDE uses, as text
+ *   hde-settings --about-window   the "About HDE" window (logo of the system, HDE version, credits)
  *   hde-settings --version
  *
  * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound,touchpad,
- * display,about}.c
+ * display,about,panel}.c
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
@@ -44,6 +45,10 @@ static const SettingItem items[] = {
       "Brightness, screens, projector (F8) and Night Light" },
     { "appearance", "preferences-desktop-appearance-symbolic|preferences-desktop-theme-symbolic|applications-graphics-symbolic|weather-clear-night-symbolic",
       "Appearance", "Dark mode, theme, accent, icons and fonts" },
+    { "panel", "view-continuous-symbolic|preferences-desktop-display-symbolic|view-dual-symbolic|window-maximize-symbolic",
+      "Panel", "Position, size, items, pinned apps and extensions" },
+    { "startmenu", "view-app-grid-symbolic|start-here-symbolic|view-grid-symbolic|applications-other-symbolic",
+      "Start Menu", "Layout (modern, Kickoff, classic), favorites and the Start button" },
     { "input", "input-mouse-symbolic", "Input", "Mouse, touchpad and pointer" },
     { "sound", "audio-volume-high-symbolic", "Sound", "Output, input and volume" },
     { "network", "network-wireless-symbolic", "Network", "Wi-Fi networks, Ethernet and VPN" },
@@ -871,6 +876,8 @@ static GtkWidget *make_page(const char *id)
 {
     if (!strcmp(id, "display")) return page_display_new();
     if (!strcmp(id, "appearance")) return page_appearance_new();
+    if (!strcmp(id, "panel")) return page_panel_new();
+    if (!strcmp(id, "startmenu")) return page_startmenu_new();
     if (!strcmp(id, "input")) return make_input_page();
     if (!strcmp(id, "sound")) return page_sound_new();
     if (!strcmp(id, "network")) return page_network_new();
@@ -976,6 +983,10 @@ static void load_css(void)
         ".row-title { font-weight: 600; }"
         ".row-description { opacity: 0.68; font-size: 11px; }"
         ".about-title { font-size: 24px; font-weight: 700; }"
+        ".about-os-small { font-size: 18px; font-weight: 700; }"
+        ".about-hde { font-size: 15px; font-weight: 700; }"
+        ".about-base { font-weight: 600; }"
+        ".about-link label { color: %s; }"
         ".mem-big { font-size: 16px; font-weight: 700; }"
         ".project-tile { padding: 8px 6px; border-radius: 12px; background-image: none; }"
         ".project-tile.selected { box-shadow: inset 0 0 0 2px %s; background-color: alpha(%s, 0.10); }"
@@ -1000,7 +1011,7 @@ static void load_css(void)
         ".preview-light .pv-bar { background-color: #e2e5ea; } .preview-dark .pv-bar { background-color: #14171c; }"
         ".pv-accent { background-color: %s; border-radius: 3px; }"
         "button { border-radius: 8px; }",
-        a, a, a, a, a, a, a, a, a, a, a, a);
+        a, a, a, a, a, a, a, a, a, a, a, a, a);
     if (!app_css) {
         app_css = gtk_css_provider_new();
         gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(app_css),
@@ -1108,6 +1119,14 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "--about")) return about_cli();
+    if (argc > 1 && !strcmp(argv[1], "--about-window")) {
+        signal(SIGPIPE, SIG_IGN);
+        gtk_init(&argc, &argv);
+        hde_theme_apply_process();
+        load_css();
+        hde_theme_watch(on_theme_changed, NULL);
+        return about_window_main();
+    }
     if (argc > 1 && !strcmp(argv[1], "--displays")) return display_cli_displays();
     if (argc > 1 && (!strcmp(argv[1], "--display-mode") || g_str_has_prefix(argv[1], "--display-mode="))) {
         const char *m = argv[1][14] == '=' ? argv[1] + 15 : argc > 2 ? argv[2] : NULL;
@@ -1163,8 +1182,8 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc > 1 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
-        printf("Usage: hde-settings [PAGE]   (display appearance input sound network bluetooth windows\n"
-               "                             notifications power keyboard users about)\n"
+        printf("Usage: hde-settings [PAGE]   (display appearance panel startmenu input sound network bluetooth\n"
+               "                             windows notifications power keyboard users about)\n"
                "       hde-settings --apply  re-apply login-time settings and exit\n"
                "       hde-settings --touchpad-setup   choose which way the touchpad scrolls, with a test page\n"
                "       hde-settings --project          the Project window (F8): PC screen only, Duplicate, Extend,\n"
@@ -1173,6 +1192,7 @@ int main(int argc, char **argv)
                "       hde-settings --displays         the screens, the layout in use and the brightness method\n"
                "       hde-settings --brightness [+N|-N|N]   show or change the screen brightness\n"
                "       hde-settings --about            this computer, the system and the memory HDE uses\n"
+               "       hde-settings --about-window     the About HDE window\n"
                "       hde-settings --version\n"
                "       hde-settings --style dark|light|toggle   switch Dark mode without opening the window\n");
         return 0;

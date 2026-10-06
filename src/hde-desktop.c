@@ -12,16 +12,19 @@
 #include <glib/gstdio.h>
 #include "hde-theme.h"
 #include "hde-commands.h"
+#include "hde-panel-config.h"
+#include "hde-wl.h"
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <math.h>
 
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#define PANEL_HEIGHT 34
+static int panel_top_px, panel_bottom_px = HDE_PANEL_SIZE_DEFAULT;   /* the panel (Settings > Panel): keep icons clear */
 #define CELL_W 100
 #define CELL_H 108
 #define MARGIN 16
+#define TOP0 (MARGIN + panel_top_px)          /* first row of icons */
 
 static GtkWidget *win, *fixed;
 static GdkPixbuf *wallpaper;
@@ -430,11 +433,11 @@ static gboolean on_icon_press(GtkWidget *ev, GdkEventButton *e, gpointer data)
 static void snap_icon_position(gint *x, gint *y)
 {
     gint max_x = MAX(MARGIN, gtk_widget_get_allocated_width(fixed) - CELL_W);
-    gint max_y = MAX(MARGIN, gtk_widget_get_allocated_height(fixed) - PANEL_HEIGHT - CELL_H);
+    gint max_y = MAX(TOP0, gtk_widget_get_allocated_height(fixed) - panel_bottom_px - CELL_H);
     gint sx = MARGIN + (gint)round(((*x - MARGIN) / (gdouble)CELL_W)) * CELL_W;
-    gint sy = MARGIN + (gint)round(((*y - MARGIN) / (gdouble)CELL_H)) * CELL_H;
+    gint sy = TOP0 + (gint)round(((*y - TOP0) / (gdouble)CELL_H)) * CELL_H;
     sx = MAX(MARGIN, MIN(sx, max_x));
-    sy = MAX(MARGIN, MIN(sy, max_y));
+    sy = MAX(TOP0, MIN(sy, max_y));
     *x = sx;
     *y = sy;
 }
@@ -474,9 +477,9 @@ static gboolean find_free_cell(gint wanted_x, gint wanted_y,
     if (!fixed || !out_x || !out_y) return FALSE;
 
     gint max_x = MAX(MARGIN, gtk_widget_get_allocated_width(fixed) - CELL_W);
-    gint max_y = MAX(MARGIN, gtk_widget_get_allocated_height(fixed) - PANEL_HEIGHT - CELL_H);
+    gint max_y = MAX(TOP0, gtk_widget_get_allocated_height(fixed) - panel_bottom_px - CELL_H);
     gint cols = MAX(1, ((max_x - MARGIN) / CELL_W) + 1);
-    gint rows = MAX(1, ((max_y - MARGIN) / CELL_H) + 1);
+    gint rows = MAX(1, ((max_y - TOP0) / CELL_H) + 1);
 
     gint wx = wanted_x;
     gint wy = wanted_y;
@@ -484,7 +487,7 @@ static gboolean find_free_cell(gint wanted_x, gint wanted_y,
 
     /* Search in expanding Manhattan rings around the requested cell. */
     gint target_col = (wx - MARGIN) / CELL_W;
-    gint target_row = (wy - MARGIN) / CELL_H;
+    gint target_row = (wy - TOP0) / CELL_H;
     gint max_radius = MAX(cols, rows);
 
     for (gint radius = 0; radius <= max_radius; ++radius) {
@@ -496,7 +499,7 @@ static gboolean find_free_cell(gint wanted_x, gint wanted_y,
                     continue;
 
                 gint x = MARGIN + col * CELL_W;
-                gint y = MARGIN + row * CELL_H;
+                gint y = TOP0 + row * CELL_H;
                 if (!icon_cell_occupied(x, y, ignore)) {
                     *out_x = x;
                     *out_y = y;
@@ -521,7 +524,7 @@ static gboolean on_icon_motion(GtkWidget *ev, GdkEventMotion *e, gpointer data)
     gint nx = drag_orig_x + (gint)dx;
     gint ny = drag_orig_y + (gint)dy;
     nx = MAX(MARGIN, MIN(nx, gtk_widget_get_allocated_width(fixed) - CELL_W));
-    ny = MAX(MARGIN, MIN(ny, gtk_widget_get_allocated_height(fixed) - PANEL_HEIGHT - CELL_H));
+    ny = MAX(TOP0, MIN(ny, gtk_widget_get_allocated_height(fixed) - panel_bottom_px - CELL_H));
     snap_icon_position(&nx, &ny);
 
     /* Never place two icons in the same grid cell.  While dragging, an
@@ -654,7 +657,7 @@ static void reload_icons(void)
     last_press_icon = NULL;
     gtk_container_foreach(GTK_CONTAINER(fixed), destroy_child, NULL);
 
-    gint available_h = MAX(CELL_H, mon.height - PANEL_HEIGHT - 2 * MARGIN);
+    gint available_h = MAX(CELL_H, mon.height - panel_top_px - panel_bottom_px - 2 * MARGIN);
     int rows = MAX(1, available_h / CELL_H);
     int idx = 0;
 
@@ -662,7 +665,7 @@ static void reload_icons(void)
         const char *_pp = g_object_get_data(G_OBJECT(w), "target"); \
         if (keep_arranged || !restore_icon_position((w), _pp)) { \
             gint _px = mon.x + MARGIN + (idx / rows) * CELL_W; \
-            gint _py = mon.y + MARGIN + (idx % rows) * CELL_H; \
+            gint _py = mon.y + TOP0 + (idx % rows) * CELL_H; \
             gint _fx = _px, _fy = _py; \
             if (!find_free_cell(_px, _py, (w), &_fx, &_fy)) { \
                 _fx = _px; _fy = _py; \
@@ -1931,7 +1934,7 @@ static void m_display_settings(GtkMenuItem *i, gpointer d)
     }
 }
 
-/* "About HDE": Settings > About (this computer, the system, the memory HDE uses) */
+/* "About HDE": the About window (logo of the system, HDE version, credits; "System details…" opens Settings > About) */
 static void m_about(GtkMenuItem *i, gpointer d)
 {
     (void)i; (void)d;
@@ -1940,7 +1943,7 @@ static void m_about(GtkMenuItem *i, gpointer d)
     char *sib = dir ? g_build_filename(dir, "hde-settings", NULL) : NULL;
     char *prog = sib && g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE) ? g_strdup(sib) : g_find_program_in_path("hde-settings");
     if (prog) {
-        char *argv[] = { prog, (char *)"about", NULL };
+        char *argv[] = { prog, (char *)"--about-window", NULL };
         GError *e = NULL;
         if (!g_spawn_async(NULL, argv, NULL, 0, NULL, NULL, NULL, &e)) {
             g_printerr("hde-desktop: cannot start %s: %s\n", prog, e ? e->message : "?");
@@ -2259,6 +2262,14 @@ static void on_theme_changed(gpointer d)
 {
     (void)d;
     load_accent();
+    int t = 0, b = 0;                     /* Settings > Panel: moved to the other edge, or another height */
+    hde_panel_reserved(&t, &b);
+    if (t != panel_top_px || b != panel_bottom_px) {
+        panel_top_px = t;
+        panel_bottom_px = b;
+        DBG("panel now takes %d px at the top, %d px at the bottom: icons rearranged", t, b);
+        reload_icons();
+    }
 }
 
 /* Settings > Appearance writes the wallpaper to config.ini: reload as soon as the file changes. */
@@ -2297,6 +2308,7 @@ int main(int argc, char **argv)
 {
     gtk_init(&argc, &argv);
     debug_on = g_getenv("HDE_DEBUG") != NULL;
+    hde_panel_reserved(&panel_top_px, &panel_bottom_px);
     hde_theme_apply_process();          /* right-click menu / dialogs follow Dark mode */
     hde_theme_watch(on_theme_changed, NULL);
     load_accent();

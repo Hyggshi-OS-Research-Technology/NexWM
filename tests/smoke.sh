@@ -1,8 +1,10 @@
 #!/bin/sh
 # tests/smoke.sh — HDE smoke test: runs a whole HDE session in Xvfb, then checks the main features
-# (Super key, F1/F2/F3, F6/F7 brightness, F8 Project window, notifications, PrtSc screenshots and the Screenshot
-#  window, desktop icon frame + icon menu, Wi-Fi list, About / memory used, live Dark mode, WM switch without logout,
-#  restart after a crash). Several screens for real: tests/display-test.sh (Xorg).
+# (Super key, the Start menu in its three layouts — search, keyboard, favorites, pin to panel —, F1/F2/F3, F6/F7
+#  brightness, F8 Project window, notifications, PrtSc screenshots and the Screenshot window, desktop icon frame + icon
+#  menu, Wi-Fi list, About with the logo of the system / memory used, the About window for Hyggshi OS, Debian, Linux Mint,
+#  live Dark mode, panel at the top / height / items / extensions, WM switch without logout, restart after a crash).
+#  Several screens for real: tests/display-test.sh (Xorg). The Wayland session: tests/wayland-test.sh (labwc).
 #
 #   make check            (or: BUILD=build sh tests/smoke.sh)
 # Needs: Xvfb xdotool dbus-run-session python3. Optional: metacity openbox pulseaudio notify-send import(ImageMagick)
@@ -31,6 +33,49 @@ if [ -z "${HDE_SMOKE_INNER:-}" ]; then
     mkdir -p "$OUT/home/Desktop/aaa-folder"
     echo "inside" > "$OUT/home/Desktop/aaa-folder/inside.txt"
     echo "notes" > "$OUT/home/Desktop/bbb-notes.txt"
+    # places of the Start menu, an app it can start without side effects
+    mkdir -p "$OUT/home/Documents" "$OUT/home/Downloads" "$OUT/home/Music" "$OUT/home/Pictures" "$OUT/home/Videos"
+    printf '[Desktop Entry]\nType=Application\nName=HDE Test App\nComment=Writes a file for the smoke test\nExec=touch %s/test-app-launched\nIcon=applications-utilities\nCategories=Utility;\n' \
+        "$OUT" > "$OUT/home/.local/share/applications/hde-test-app.desktop"
+    # os-release of other systems for the About window (HDE_OS_RELEASE): the logo of the system and of its base
+    cat > "$OUT/os-release-hyggshios" <<'EOF'
+PRETTY_NAME="Hyggshi OS 1.0 \"Sen Vàng\" (dựa trên Debian 13)"
+NAME="Hyggshi OS"
+VERSION_ID="1.0"
+VERSION="1.0 (Sen Vàng) (Debian 13)"
+VERSION_CODENAME="Sen Vàng"
+HYGGSHI_BASE_CODENAME=trixie
+ID=hyggshios
+ID_LIKE=debian
+HOME_URL="https://github.com/Hyggshi-OS-Research-Technology"
+SUPPORT_URL="https://github.com/Hyggshi-OS-Research-Technology/Hyggshi-OS/issues"
+BUG_REPORT_URL="https://github.com/Hyggshi-OS-Research-Technology/Hyggshi-OS/issues"
+LOGO=distributor-logo
+EOF
+    cat > "$OUT/os-release-debian" <<'EOF'
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+EOF
+    cat > "$OUT/os-release-mint" <<'EOF'
+NAME="Linux Mint"
+VERSION="22.1 (Xia)"
+ID=linuxmint
+ID_LIKE="ubuntu debian"
+PRETTY_NAME="Linux Mint 22.1"
+VERSION_ID="22.1"
+HOME_URL="https://www.linuxmint.com/"
+SUPPORT_URL="https://forums.linuxmint.com/"
+VERSION_CODENAME=xia
+UBUNTU_CODENAME=noble
+EOF
+    printf 'NAME="Foo OS"\nPRETTY_NAME="Foo OS 2"\nID=foo\nANSI_COLOR="0;35"\n' > "$OUT/os-release-foo"
     # Openbox config like many LXDE/Openbox systems, with Print bound to an external program: HDE must keep the key
     # (the user-visible bug was 'Failed to execute child process "scrot"' coming from such a binding).
     if [ -f /etc/xdg/openbox/rc.xml ]; then
@@ -146,22 +191,43 @@ if [ -x "$B/randr-plan-test" ]; then
 else
     skip "randr-plan-test not built (make build/randr-plan-test)"
 fi
+# the SVG path reader that draws the logos of the distributions (data/logos), without an X server
+if [ -x "$B/svgpath-test" ]; then
+    "$B/svgpath-test" --logos "$HERE/../data/logos" > "$OUT/svgpath-test.txt" 2>&1
+    nok=$(grep -c "^PASS: logo " "$OUT/svgpath-test.txt"); nbad=$(grep -c "^FAIL" "$OUT/svgpath-test.txt")
+    if [ "$nbad" = 0 ] && [ "${nok:-0}" -ge 20 ]; then pass "the SVG path reader draws all $nok bundled distribution logos (and passes its unit checks)"
+    else fail "the SVG path reader: $nbad failure(s): $(grep '^FAIL' "$OUT/svgpath-test.txt" | head -n 3 | tr '\n' ' ')"; fi
+else
+    skip "svgpath-test not built (make build/svgpath-test)"
+fi
 
-# ---------- 2. Super key -> Start menu ----------
+# ---------- 2. Super key -> Start menu (the modern layout, like Linux Mint: the default) ----------
+nlog() { nlog_n=$(grep -c "$1" "$OUT/session.log" 2>/dev/null); echo "${nlog_n:-0}"; }
 n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
 if [ "$n1" -gt "$n0" ]; then pass "Super key opens the Start menu ($n0 -> $n1 popups)"; else fail "Super key opens the Start menu ($n0 -> $n1 popups)"; fi
+m=$(grep "hde-panel: start menu: shown" "$OUT/session.log" | tail -n 1)
+case "$m" in
+    *"shown (modern)"*"places: Home, Desktop, Documents, Downloads, Music, Pictures, Videos"*)
+        pass "it is the modern menu (picture, places, favorites, categories, apps)" ;;
+    *) fail "it is the modern menu with the places (${m:-no 'shown' line})" ;;
+esac
+echo "INFO: $m" >> "$OUT/results.txt"
 shot 02-start-menu
 xdotool type --delay 120 "sett"; sleep 1.5
-check "typing while the menu is open starts app search" xdotool search --onlyvisible --name "Search applications"
+if grep -q "hde-panel: start menu: search 'sett': [1-9][0-9]* result(s), best: Hyggshi Settings" "$OUT/session.log"; then
+    pass "typing in the Start menu searches at once (sett -> Hyggshi Settings)"
+else fail "typing in the Start menu searches at once ($(grep "start menu: search" "$OUT/session.log" | tail -n 1))"; fi
 shot 03-app-search
-xdotool key Escape; sleep 0.8
-check "Escape closes app search" sh -c "! xdotool search --onlyvisible --name 'Search applications'"
+xdotool key Escape; sleep 0.6; n2=$(popups)
+if [ "$n2" -gt "$n0" ]; then pass "Escape first clears the search (the menu stays open)"; else fail "Escape first clears the search ($n2 popups)"; fi
+xdotool key Escape; sleep 0.8; n3=$(popups)
+if [ "$n3" -le "$n0" ]; then pass "Escape again closes the Start menu"; else fail "Escape again closes the Start menu ($n3 popups)"; fi
 xdotool key super; sleep 1.2; n1=$(popups); xdotool key super; sleep 1.2; n2=$(popups)
 if [ "$n2" -lt "$n1" ]; then pass "pressing Super again closes the Start menu ($n1 -> $n2)"; else fail "pressing Super again closes the Start menu ($n1 -> $n2)"; fi
-n0=$(popups); xdotool key super+s; sleep 1.5
-check "Super+S opens app search" xdotool search --onlyvisible --name "Search applications"
-n1=$(popups)
-if [ "$n1" -le "$n0" ]; then pass "Super+<key> combination does not pop up the Start menu"; else fail "Super+<key> popped up the Start menu"; fi
+n0=$(popups); t0=$(nlog "hde-panel: toggle menu"); xdotool key super+s; sleep 1.5; n1=$(popups); t1=$(nlog "hde-panel: toggle menu")
+if [ "$n1" -gt "$n0" ] && grep -q "hde-panel: command 2 " "$OUT/session.log"; then pass "Super+S opens the Start menu with its search box"
+else fail "Super+S opens the Start menu with its search box ($n0 -> $n1 popups)"; fi
+if [ "$t1" = "$t0" ]; then pass "Super+<key> combination does not toggle the Start menu"; else fail "Super+<key> toggled the Start menu ($t0 -> $t1)"; fi
 xdotool key Escape; sleep 0.8
 # regression: xdotool releases Super before S -> that release never reaches hde-hotkeys (it holds the Super+S grab); Super must still work
 n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
@@ -720,6 +786,156 @@ $XT xsettings > "$OUT/xsettings-light.txt" 2>&1
 if grep -q '^Net/ThemeName=Adwaita$' "$OUT/xsettings-light.txt"; then pass "switching back to Light mode works live"
 else fail "switching back to Light mode ($(grep ThemeName "$OUT/xsettings-light.txt"))"; fi
 kill $SETTINGS 2>/dev/null
+
+# ---------- 6b. the Start menu: search, keyboard, the app's menu (favorites, pin to panel), Kickoff and classic ----------
+rm -f "$OUT/test-app-launched"
+n0=$(popups); xdotool key super; sleep 1.2
+xdotool type --delay 80 "test app"; sleep 1.2
+if grep -q "start menu: search 'test app': 1 result(s), best: HDE Test App" "$OUT/session.log"; then
+    pass "searching 'test app' finds HDE Test App only (every word must match)"
+else fail "searching 'test app' finds HDE Test App ($(grep "start menu: search 'test app'" "$OUT/session.log" | tail -n 1))"; fi
+xdotool key Menu; sleep 1
+if grep -q "start menu: menu of HDE Test App: Add to Favorites | Pin to Panel | Add to Desktop" "$OUT/session.log"; then
+    pass "the Menu key opens the app's own menu (Add to Favorites, Pin to Panel, Add to Desktop)"
+else fail "the Menu key opens the app's own menu"; fi
+shot 15a-start-menu-app-menu
+xdotool key f; sleep 1.5
+if grep -q "^menu_favorites=.*hde-test-app.desktop" "$SETTINGS_INI"; then pass "Add to Favorites adds the app to the favorites (menu_favorites)"
+else fail "Add to Favorites adds the app to the favorites ($(grep '^menu_favorites' "$SETTINGS_INI"))"; fi
+check "... and the menu shows the new favorite at once" grep -q "start menu: favorites: .*hde-test-app.desktop" "$OUT/session.log"
+xdotool key Menu; sleep 1; xdotool key p; sleep 2
+if grep -q "^panel_launchers=hde-test-app.desktop" "$SETTINGS_INI" && grep -q "hde-panel: pinned apps: HDE Test App" "$OUT/session.log"; then
+    pass "Pin to Panel puts a button for the app on the panel"
+else fail "Pin to Panel puts a button for the app on the panel ($(grep '^panel_launchers' "$SETTINGS_INI"))"; fi
+shot 15b-start-menu-favorite-pinned
+xdotool key Return; sleep 2
+if [ -f "$OUT/test-app-launched" ]; then pass "Enter starts the app found (HDE Test App ran)"; else fail "Enter starts the app found"; fi
+n1=$(popups); if [ "$n1" -le "$n0" ]; then pass "the menu closes after starting an app"; else fail "the menu closes after starting an app ($n1 popups)"; fi
+xdotool key super; sleep 1.2
+c0=$(nlog "hde-panel: start menu: category ")
+xdotool key Left; sleep 0.3; xdotool key Down; sleep 0.3; xdotool key Down; sleep 0.8
+c1=$(nlog "hde-panel: start menu: category ")
+if [ "$c1" -ge "$((c0 + 2))" ]; then pass "Left / Down move through the categories with the keyboard ($(grep 'start menu: category ' "$OUT/session.log" | tail -n 1 | sed 's/.*category //'))"
+else fail "Left / Down move through the categories with the keyboard ($c0 -> $c1)"; fi
+shot 15c-start-menu-category
+# the mouse over a category opens it (no click needed); the menu's place comes from its log line
+geo=$(sed -n 's/.*start menu: shown (modern) at \([0-9]*\),\([0-9]*\) \([0-9]*\)x\([0-9]*\).*/\1 \2/p' "$OUT/session.log" | tail -n 1)
+mx=${geo% *}; my=${geo#* }
+if [ -n "$mx" ]; then
+    c0=$(nlog "hde-panel: start menu: category ")
+    xdotool mousemove "$((mx + 300))" "$((my + 160))"; sleep 0.3; xdotool mousemove "$((mx + 300))" "$((my + 200))"; sleep 1
+    c1=$(nlog "hde-panel: start menu: category ")
+    if [ "$c1" -gt "$c0" ]; then pass "moving the mouse over a category opens it ($(grep 'start menu: category ' "$OUT/session.log" | tail -n 1 | sed 's/.*category //'))"
+    else fail "moving the mouse over a category opens it (menu at $mx,$my)"; fi
+    shot 15c2-start-menu-hover
+fi
+xdotool key Escape; sleep 0.6
+echo "menu_style=kickoff" >> "$SETTINGS_INI"; sleep 2.5
+n0=$(popups); xdotool key super; sleep 1.5; n1=$(popups)
+m=$(grep "hde-panel: start menu: shown" "$OUT/session.log" | tail -n 1)
+case "$m" in *"shown (kickoff)"*) pass "menu_style=kickoff: the KDE Plasma-like menu ($n0 -> $n1 popups)" ;;
+    *) fail "menu_style=kickoff: the KDE Plasma-like menu (${m:-nothing})" ;; esac
+shot 15d-start-menu-kickoff
+xdotool key Tab; sleep 1
+check "Kickoff: Tab shows the Places tab" grep -q "start menu: tab places" "$OUT/session.log"
+shot 15e-start-menu-kickoff-places
+xdotool key Escape; sleep 0.8
+sed -i 's/^menu_style=.*/menu_style=classic/' "$SETTINGS_INI"; sleep 2.5
+n0=$(popups); xdotool key super; sleep 1.2; n1=$(popups)
+if [ "$n1" -gt "$n0" ] && [ "$(nlog "menu popup by keyboard")" -gt 0 ]; then pass "menu_style=classic: the drop-down menu ($n0 -> $n1 popups)"
+else fail "menu_style=classic: the drop-down menu ($n0 -> $n1 popups)"; fi
+shot 15f-start-menu-classic
+xdotool type --delay 120 "sett"; sleep 1.5
+check "classic menu: typing opens the search window" xdotool search --onlyvisible --name "Search applications"
+xdotool key Escape; sleep 0.8
+sed -i '/^menu_style=/d' "$SETTINGS_INI"; sleep 2.5
+
+# ---------- 6c. Settings > Panel: top of the screen, height, items, extensions, the Start button ----------
+"$B/hde-settings" panel > "$OUT/settings-panel.log" 2>&1 &
+SETTINGS=$!
+sleep 3.5; shot 16a-settings-panel
+xdotool mousemove 760 500; for i in 1 2 3 4 5 6 7 8; do xdotool click 5; done; sleep 0.6; shot 16b-settings-panel-more
+"$B/hde-settings" startmenu; sleep 2.5; shot 16c-settings-startmenu
+xdotool mousemove 760 500; for i in 1 2 3 4 5 6 7 8; do xdotool click 5; done; sleep 0.6; shot 16d-settings-startmenu-more
+kill "$SETTINGS" 2>/dev/null; sleep 0.5
+python3 - "$SETTINGS_INI" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read().rstrip("\n") + "\n"
+s = s.replace("[settings]\n", "[settings]\npanel_position=top\npanel_size=40\npanel_show_run=false\nmenu_button_icon=os\n"
+              "menu_button_label=Start\npanel_applets=t1;c1;\n", 1)
+s += "\n[applet:t1]\ntype=command\nlabel=Test\ncommand=echo HDE-EXT-OK\ninterval=5\n\n[applet:c1]\ntype=cpu\nlabel=CPU\ninterval=2\n"
+open(p, "w").write(s)
+EOF
+sleep 3
+check "panel_position=top, panel_size=40: the panel moves to the top, 40 px high" grep -q "hde-panel: settings changed: panel at 0,0 1280x40" "$OUT/session.log"
+check "... the desktop icons make room for it" grep -q "hde-desktop: panel now takes 40 px at the top, 0 px at the bottom" "$OUT/session.log"
+if grep "hde-panel: settings applied: top, 40px" "$OUT/session.log" | tail -n 1 | grep -q "items: menu desktop launchers taskbar"; then
+    pass "panel_show_run=false hides the Run button"
+else fail "panel_show_run=false hides the Run button ($(grep 'settings applied' "$OUT/session.log" | tail -n 1))"; fi
+check "an extension shows the output of a command (echo HDE-EXT-OK)" grep -q "hde-panel: extension t1 (command): HDE-EXT-OK" "$OUT/session.log"
+check "the built-in processor extension works (no tool needed)" grep -q "hde-panel: extension c1 (cpu): CPU" "$OUT/session.log"
+if grep -q "hde-panel: start button: Start, " "$OUT/session.log"; then
+    pass "the Start button shows the logo of the system and the label 'Start' ($(grep 'start button: Start' "$OUT/session.log" | tail -n 1 | sed 's/.*Start, //'))"
+else fail "the Start button shows the logo of the system and the label 'Start'"; fi
+shot 16e-panel-top
+xdotool key super; sleep 1.5
+if grep "hde-panel: start menu: shown" "$OUT/session.log" | tail -n 1 | grep -q "shown (modern) at [0-9]*,44 "; then
+    pass "with the panel at the top the Start menu opens below it"
+else fail "with the panel at the top the Start menu opens below it ($(grep 'start menu: shown' "$OUT/session.log" | tail -n 1))"; fi
+shot 16f-start-menu-under-top-panel
+xdotool key Escape; sleep 0.6
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a "Smoke test" "Panel at the top" "Notifications come from the top right now"; sleep 1.2
+    shot 16g-notification-top-panel
+fi
+python3 - "$SETTINGS_INI" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("panel_size=40\n", "panel_size=28\npanel_opacity=80\npanel_taskbar_labels=false\nclock_24h=false\n", 1)
+open(p, "w").write(s)
+EOF
+sleep 3
+check "panel_size=28: a thin panel" grep -q "hde-panel: settings changed: panel at 0,0 1280x28" "$OUT/session.log"
+shot 16h-panel-thin-top
+python3 - "$SETTINGS_INI" <<'EOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s = s.split("\n[applet:")[0].rstrip("\n") + "\n"
+s = re.sub(r"(?m)^(panel_position|panel_size|panel_show_run|menu_button_icon|menu_button_label|panel_applets|panel_opacity|"
+           r"panel_taskbar_labels|clock_24h)=.*\n", "", s)
+open(p, "w").write(s)
+EOF
+sleep 3
+check "back to the defaults: the panel returns to the bottom, 34 px" grep -q "hde-panel: settings changed: panel at 0,766 1280x34" "$OUT/session.log"
+check "... and the desktop icons follow" grep -q "hde-desktop: panel now takes 0 px at the top, 34 px at the bottom" "$OUT/session.log"
+
+# ---------- 6d. About: the logo of the system and of its base (os-release), the About window ----------
+l=$(grep "hde-settings: about: .*logo from" "$OUT/settings.log" | head -n 1)
+case "$l" in
+    *"logo from badge"*|"") fail "Settings > About finds a logo for this system (${l:-nothing logged})" ;;
+    *) pass "Settings > About shows the logo of this system: $(echo "$l" | sed 's/^hde-settings: about: //')" ;;
+esac
+for osr in hyggshios debian mint foo; do
+    HDE_OS_RELEASE="$OUT/os-release-$osr" "$B/hde-settings" --about-window > "$OUT/about-$osr.log" 2>&1 &
+    AW=$!
+    sleep 2.5
+    shot "17-about-window-$osr"
+    kill "$AW" 2>/dev/null
+done
+if grep -q 'about: Hyggshi OS 1.0 "Sen Vàng" (ID=hyggshios, ID_LIKE=debian, .*): logo from \(built in: hyggshios\|icon theme: distributor-logo\); based on Debian 13 (trixie), its logo from [^b]' "$OUT/about-hyggshios.log"; then
+    pass "Hyggshi OS (ID=hyggshios): its own logo, 'Based on Debian 13 (trixie)' with the Debian logo"
+else fail "Hyggshi OS: its own logo and 'Based on Debian 13 (trixie)' ($(grep 'about:' "$OUT/about-hyggshios.log" | head -n 1))"; fi
+check "Debian (ID=debian): the Debian logo" grep -q "about: Debian GNU/Linux 13 (trixie) (ID=debian, .*): logo from [^b]" "$OUT/about-debian.log"
+if grep -q "about: Linux Mint 22.1 (ID=linuxmint, ID_LIKE=ubuntu debian, .*): logo from [^b][^;]*; based on Ubuntu 24.04 LTS (noble), its logo from [^b]" "$OUT/about-mint.log"; then
+    pass "Linux Mint: the Mint logo, 'Based on Ubuntu 24.04 LTS (noble)' with the Ubuntu logo"
+else fail "Linux Mint: the Mint logo and its Ubuntu base ($(grep 'about:' "$OUT/about-mint.log" | head -n 1))"; fi
+check "an unknown system gets a badge with its first letter (F) in its ANSI_COLOR" grep -q "about: Foo OS 2 (ID=foo, .*): logo from badge: F" "$OUT/about-foo.log"
+HDE_OS_RELEASE="$OUT/os-release-hyggshios" "$B/hde-settings" --about > "$OUT/about-hyggshios.txt" 2>&1
+check "hde-settings --about tells the base too (Based on: Debian 13 (trixie))" grep -q "^Based on: Debian 13 (trixie)" "$OUT/about-hyggshios.txt"
+grep -h "hde-settings: about" "$OUT"/about-*.log | sed 's/^/INFO: /' >> "$OUT/results.txt"
 
 # ---------- 7. WM switch without logging out ----------
 if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; then

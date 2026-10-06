@@ -52,6 +52,8 @@ GtkWidget *page_keyboard_new(void);
 GtkWidget *page_sound_new(void);
 GtkWidget *page_display_new(void);          /* hde-settings-display.c: brightness, screens, Project, Night Light */
 GtkWidget *page_about_new(void);            /* hde-settings-about.c */
+GtkWidget *page_panel_new(void);            /* hde-settings-panel.c: Settings > Panel */
+GtkWidget *page_startmenu_new(void);        /* hde-settings-panel.c: Settings > Start Menu */
 
 /* ---- screens (hde-settings-display.c) and About (hde-settings-about.c) without the main window ---- */
 int display_project_main(int argc, char **argv);   /* hde-settings --project: the F8 window (after gtk_init) */
@@ -59,6 +61,7 @@ int display_cli_displays(void);                    /* --displays */
 int display_cli_mode(const char *id);              /* --display-mode pc|duplicate|extend|second */
 int display_cli_brightness(const char *arg);       /* --brightness [+N|-N|N] */
 int about_cli(void);                               /* --about */
+int about_window_main(void);                       /* --about-window: the "About HDE" window (after gtk_init) */
 
 /* Apply the settings that must be re-applied at every login (keyboard, key repeat, screen blanking, ...).
  * Called by `hde-settings --apply` (run by hde-session at startup) and when the user changes a value. */

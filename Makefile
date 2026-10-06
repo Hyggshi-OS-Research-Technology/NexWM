@@ -21,19 +21,25 @@ X11_LIBS:=$(shell pkg-config --libs x11 2>/dev/null || echo -lX11)
 # software brightness for F6/F7 on screens without a backlight, Night Light. Without it: none of these.
 XRANDR_CFLAGS:=$(shell pkg-config --exists xrandr 2>/dev/null && echo "-DHAVE_XRANDR `pkg-config --cflags xrandr`")
 XRANDR_LIBS:=$(shell pkg-config --libs xrandr 2>/dev/null)
+# gtk-layer-shell (libgtk-layer-shell-dev): the "HDE (Wayland)" session — panel, desktop, Start menu and popups as
+# layer-shell surfaces. Without it HDE builds for X11 only.
+LAYER_CFLAGS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo "-DHAVE_GTK_LAYER_SHELL `pkg-config --cflags gtk-layer-shell-0`")
+LAYER_LIBS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && pkg-config --libs gtk-layer-shell-0)
 
 # Flags for the GTK programs in src/
 GUI_CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE
+GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE -DHDE_DATADIR=\"$(PREFIX)/share/hde\"
 
 HDE_HEADERS=$(wildcard src/*.h)
 PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-notify.c src/hde-search.c src/hde-theme.c \
-          src/hde-input.c
-DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c
+          src/hde-input.c src/hde-startmenu.c src/hde-applets.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c \
+          src/hde-wl.c
+DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c src/hde-panel-config.c src/hde-wl.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
              src/hde-settings-sound.c src/hde-settings-touchpad.c src/hde-settings-display.c src/hde-settings-about.c \
-             src/hde-theme.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-sysinfo.c
+             src/hde-theme.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-sysinfo.c \
+             src/hde-settings-panel.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c src/hde-wl.c
 # Build stamp (commit + date) shown in Settings > About, by --version and at the top of the session log, to tell at a
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
@@ -49,14 +55,15 @@ components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUIL
             $(BUILD)/hde-screenshot
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(LAYER_LIBS) -lm
 $(BUILD)/hde-panel: $(PANEL_SRC) $(HDE_HEADERS) | $(BUILD)
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) $(XI_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) \
-	    $(WNCK_LIBS) $(XI_LIBS) $(X11_LIBS) -lm
+	@[ -n "$(LAYER_CFLAGS)" ] || echo "NOTE: libgtk-layer-shell-dev (pkg-config gtk-layer-shell-0) not found: HDE for X11 only, no Wayland session"
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(WNCK_CFLAGS) $(XI_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) \
+	    $(GTK_LIBS) $(WNCK_LIBS) $(XI_LIBS) $(X11_LIBS) $(LAYER_LIBS) -lm
 $(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) $(VERSION_H) | $(BUILD)
 	@[ -n "$(XRANDR_CFLAGS)" ] || echo "WARNING: libxrandr-dev (pkg-config xrandr) not found: no F8 screen layouts, no software brightness"
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) $(XI_CFLAGS) $(XRANDR_CFLAGS) -o $@ $(filter %.c,$^) \
-	    $(GTK_LIBS) $(XI_LIBS) $(XRANDR_LIBS) $(X11_LIBS) -lm
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) $(XI_CFLAGS) $(XRANDR_CFLAGS) $(LAYER_CFLAGS) -o $@ \
+	    $(filter %.c,$^) $(GTK_LIBS) $(XI_LIBS) $(XRANDR_LIBS) $(X11_LIBS) $(LAYER_LIBS) -lm
 $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-brightness.c src/hde-randr.c src/hde-ipc.h src/hde-commands.h \
                       src/hde-brightness.h src/hde-randr.h | $(BUILD)
 	@[ -n "$(XI_CFLAGS)" ] || echo "WARNING: libxi-dev (pkg-config xi) not found: Super key will not open the Start menu"
@@ -74,6 +81,9 @@ $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/
 # The screen layouts of F8 without an X server (tests/randr-plan-test.c): run by `make check`
 $(BUILD)/randr-plan-test: tests/randr-plan-test.c src/hde-randr.c src/hde-randr.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+# The SVG path reader that draws the distribution logos of data/logos (tests/svgpath-test.c): run by `make check`
+$(BUILD)/svgpath-test: tests/svgpath-test.c src/hde-svgpath.c src/hde-svgpath.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
 $(BUILD):
 	mkdir -p $(BUILD)
 $(VERSION_H): FORCE | $(BUILD)
@@ -88,7 +98,7 @@ $(BUILD)/hde-session: apps/hde-session.c src/hde-wm.h src/hde-build.h $(VERSION_
 backend/x11/x11_backend.o: src/hde-commands.h
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
-check: all $(BUILD)/randr-plan-test
+check: all $(BUILD)/randr-plan-test $(BUILD)/svgpath-test
 	BUILD=$(BUILD) sh tests/smoke.sh
 
 clean:
@@ -104,6 +114,8 @@ install: all
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
+	install -d $(DESTDIR)$(PREFIX)/share/hde/logos
+	install -m644 data/logos/*.svg data/logos/LICENSES.md $(DESTDIR)$(PREFIX)/share/hde/logos/
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hyggshi-settings.desktop > $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-screenshot.desktop > $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
@@ -127,4 +139,5 @@ reload:
 uninstall:
 	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
 	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
+	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 .PHONY: all clean install uninstall components dev reload check FORCE
