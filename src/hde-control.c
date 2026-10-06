@@ -262,7 +262,9 @@ static const char *signal_icon(int s)
 static void wifi_tile_update(void)
 {
     if (!net_known) return;                     /* not asked yet: the tile appears with the answer */
-    if (!have_nm) {
+    if (!have_nm) {                             /* no NetworkManager: no list, the tile opens Network settings */
+        gtk_label_set_text(GTK_LABEL(tiles[T_WIFI].title_l), "Network");
+        if (tiles[T_WIFI].more_btn) gtk_widget_hide(tiles[T_WIFI].more_btn);
         tile_set(T_WIFI, TRUE, FALSE, "network-workgroup-symbolic|network-wired-symbolic", "Settings");
         return;
     }
@@ -1589,6 +1591,15 @@ static gboolean snd_log_idle(gpointer d)
     }
     g_list_free(rows);
     log_widget("cc-mic-scale", sl_mic.scale);
+    GList *apps = gtk_container_get_children(GTK_CONTAINER(apps_box));
+    for (GList *a = apps; a; a = a->next) {
+        const char *app = g_object_get_data(G_OBJECT(a->data), "app");
+        if (!app) continue;
+        char *n = g_strdup_printf("cc-app-%s", app);
+        log_widget(n, a->data);
+        g_free(n);
+    }
+    g_list_free(apps);
     return G_SOURCE_REMOVE;
 }
 
@@ -1644,6 +1655,7 @@ static void on_snd_data(gboolean ok, const char *out, const char *err, gpointer 
             Stream *s = streams->pdata[i];
             GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
             add_class(h, "cc-app");
+            g_object_set_data_full(G_OBJECT(h), "app", g_strdup(s->app ? s->app : "App"), g_free);
             GtkWidget *mute = gtk_button_new();
             char *ic = g_strdup_printf("%s|%s-symbolic|application-x-executable-symbolic|audio-x-generic-symbolic",
                                        s->icon ? s->icon : "audio-x-generic", s->icon ? s->icon : "audio-x-generic");
@@ -2026,14 +2038,12 @@ static GtkWidget *build_sound_page(void)
     in_title = section_label("Input");
     gtk_widget_set_no_show_all(in_title, TRUE);
     gtk_box_pack_start(GTK_BOX(inner), in_title, FALSE, FALSE, 0);
-    in_list = list_new(G_CALLBACK(on_out_row), GINT_TO_POINTER(1));
-    gtk_widget_set_no_show_all(in_list, TRUE);
+    in_list = list_new(G_CALLBACK(on_out_row), GINT_TO_POINTER(1));   /* (not no-show-all: show_all fills it) */
     gtk_box_pack_start(GTK_BOX(inner), in_list, FALSE, FALSE, 0);
     apps_title = section_label("Apps");
     gtk_widget_set_no_show_all(apps_title, TRUE);
     gtk_box_pack_start(GTK_BOX(inner), apps_title, FALSE, FALSE, 0);
     apps_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    gtk_widget_set_no_show_all(apps_box, TRUE);
     gtk_box_pack_start(GTK_BOX(inner), apps_box, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(v), scrolled(inner, 220, 440), TRUE, TRUE, 0);
     GtkWidget *mixer = text_button("Advanced mixer…", "multimedia-volume-control-symbolic|audio-card-symbolic");

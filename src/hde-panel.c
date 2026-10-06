@@ -1236,7 +1236,7 @@ static void add_button_icon_items(GtkWidget *sub)
 static void start_button_menu(GdkEventButton *e)
 {
     GtkWidget *m = gtk_menu_new();
-    pm_item(m, "start-here-symbolic|view-app-grid-symbolic|open-menu-symbolic", "_Open the Start menu",
+    pm_item(m, "view-app-grid-symbolic|start-here-symbolic|open-menu-symbolic", "_Open the Start menu",
             G_CALLBACK(pm_open_menu), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
     GtkWidget *style = hde_menu_submenu(m, "view-list-symbolic|view-grid-symbolic", "Menu _layout");
@@ -1286,7 +1286,7 @@ static void panel_menu(GdkEventButton *e)
     gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
     pm_item(m, "preferences-desktop-display-symbolic|view-continuous-symbolic|preferences-system-symbolic",
             "_Panel Settings…", G_CALLBACK(pm_settings), (gpointer)"panel");
-    pm_item(m, "start-here-symbolic|view-app-grid-symbolic|open-menu-symbolic", "_Start Menu Settings…",
+    pm_item(m, "view-app-grid-symbolic|start-here-symbolic|open-menu-symbolic", "_Start Menu Settings…",
             G_CALLBACK(pm_settings), (gpointer)"startmenu");
     GtkWidget *pos = hde_menu_submenu(m, "view-dual-symbolic|object-flip-vertical-symbolic|go-bottom-symbolic", "P_osition");
     GtkWidget *g = pm_radio_item(pos, NULL, hde_menu_icon("go-bottom-symbolic"), "_Bottom", "panel_position", "bottom", !pcfg.top);

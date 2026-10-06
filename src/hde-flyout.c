@@ -8,7 +8,7 @@
 
 struct _HdeFlyout {
     char *name;
-    GtkWidget *win, *frame, *child, *anchor, *panel, *focus;
+    GtkWidget *win, *frame, *child, *anchor, *panel, *focus, *muted_tip;
     gboolean grabbed, panel_top;
     int grab_tries, placed_w, placed_h;
     guint grab_retry_id;
@@ -258,6 +258,14 @@ void hde_flyout_show(HdeFlyout *f, GtkWidget *anchor, GtkWidget *panel)
 {
     f->anchor = anchor;
     f->panel = panel;
+    /* the tooltip of the button that opened it would stay over the frame (the pointer is still on the button) */
+    if (f->muted_tip) { gtk_widget_set_has_tooltip(f->muted_tip, TRUE); g_object_remove_weak_pointer(G_OBJECT(f->muted_tip), (gpointer *)&f->muted_tip); f->muted_tip = NULL; }
+    if (anchor && gtk_widget_get_has_tooltip(anchor)) {
+        gtk_widget_set_has_tooltip(anchor, FALSE);   /* hde-status / hde-notify leave a muted tooltip alone */
+        f->muted_tip = anchor;
+        g_object_add_weak_pointer(G_OBJECT(anchor), (gpointer *)&f->muted_tip);
+        gtk_tooltip_trigger_tooltip_query(gtk_widget_get_display(anchor));
+    }
     place(f);
     gtk_widget_show(f->win);
     if (hde_wl_is_layer(GTK_WINDOW(f->win))) {
@@ -281,6 +289,11 @@ void hde_flyout_hide(HdeFlyout *f)
         send_focus(f, FALSE);
     }
     gtk_widget_hide(f->win);
+    if (f->muted_tip) {
+        gtk_widget_set_has_tooltip(f->muted_tip, TRUE);
+        g_object_remove_weak_pointer(G_OBJECT(f->muted_tip), (gpointer *)&f->muted_tip);
+        f->muted_tip = NULL;
+    }
     if (debug_on()) g_printerr("hde-panel: %s: hidden\n", f->name);
     if (f->hide_cb) f->hide_cb(f->hide_data);
 }
@@ -379,7 +392,8 @@ void hde_menu_popup(GtkWidget *menu, GtkWidget *widget, const GdkEvent *event)
     gtk_style_context_add_class(gtk_widget_get_style_context(menu), "hde-panel-menu");
     g_signal_connect(menu, "deactivate", G_CALLBACK(on_menu_closed), NULL);
     gtk_widget_show_all(menu);
-    if (widget && !gtk_menu_get_attach_widget(GTK_MENU(menu))) gtk_menu_attach_to_widget(GTK_MENU(menu), widget, NULL);
+    /* not attached to the widget: an attached menu takes the widget's CSS (the Start button's white-on-accent labels);
+     * the click (or the anchor widget) tells GTK where it belongs, also on Wayland */
     if (event) gtk_menu_popup_at_pointer(GTK_MENU(menu), event);
     else if (widget) gtk_menu_popup_at_widget(GTK_MENU(menu), widget, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_SOUTH_WEST, NULL);
     else gtk_menu_popup_at_pointer(GTK_MENU(menu), NULL);

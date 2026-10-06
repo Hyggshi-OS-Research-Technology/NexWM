@@ -684,7 +684,10 @@ static void bell_update(void)
         g_free(tip);
         tip = t2;
     }
-    gtk_widget_set_tooltip_text(bell_btn, tip);
+    char *old_tip = gtk_widget_get_tooltip_text(bell_btn);
+    if (gtk_widget_get_has_tooltip(bell_btn) || !old_tip)       /* muted while the Control Center is open */
+        gtk_widget_set_tooltip_text(bell_btn, tip);
+    g_free(old_tip);
     g_free(tip);
 }
 

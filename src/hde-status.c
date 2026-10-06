@@ -63,7 +63,10 @@ static void item_set(Item *it, const char *icon, const char *text, const char *t
         gtk_label_set_text(GTK_LABEL(it->lbl), text ? text : "");
         gtk_widget_set_visible(it->lbl, text && *text);
     }
-    gtk_widget_set_tooltip_text(it->btn, tip);
+    /* a pop-up of this button is open (hde-flyout.c muted its tooltip): leave it muted until it closes */
+    char *old_tip = gtk_widget_get_tooltip_text(it->btn);
+    if (gtk_widget_get_has_tooltip(it->btn) || !old_tip) gtk_widget_set_tooltip_text(it->btn, tip);
+    g_free(old_tip);
     gtk_widget_show(it->btn);
 }
 

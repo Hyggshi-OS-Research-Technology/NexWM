@@ -826,7 +826,8 @@ int display_cli_mode(const char *id)
 
 int display_cli_brightness(const char *arg)
 {
-    Display *d = cli_display();
+    /* Wayland session: only the backlight (software dimming would only reach Xwayland's windows, like F6/F7 there) */
+    Display *d = g_getenv("WAYLAND_DISPLAY") && *g_getenv("WAYLAND_DISPLAY") ? NULL : cli_display();
     HdeBrightness b;
     int rc = 0;
     if (!arg) {

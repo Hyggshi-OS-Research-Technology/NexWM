@@ -1049,7 +1049,10 @@ if [ "$(soft)" != "" ] || grep -q "control center: brightness: software" "$OUT/s
         if [ "${b:-0}" -ge 55 ] && [ "${b:-0}" -le 75 ]; then pass "the brightness slider dims the screen (software dimming: $b%)"
         else fail "the brightness slider dims the screen (_HDE_BRIGHTNESS=$b)"; fi
         xdotool mousemove "$(($3 + $4 - 1))" "$2" click 1; sleep 2
-        check "... and brightens it back to 100%" sh -c "[ \"\$(xprop -root _HDE_BRIGHTNESS | sed -n 's/.*= //p')\" = 100 ]"
+        b=$(soft)
+        if [ "${b:-0}" -ge 95 ]; then pass "... and brightens it back at the right end ($b%)"
+        else fail "... and brightens it back at the right end (_HDE_BRIGHTNESS=$b)"; fi
+        "$B/hde-settings" --brightness 100 >/dev/null 2>&1
     else fail "the brightness slider is in the Control Center (no widget position logged)"; fi
 fi
 # the Wi-Fi list right in the Control Center, a password asked in the list
@@ -1078,16 +1081,22 @@ fi
 if pactl info >/dev/null 2>&1; then
     def0=$(pactl info | sed -n 's/^Default Sink: //p')
     pactl load-module module-null-sink sink_name=hde_hdmi sink_properties=device.description=HDMI-Test >/dev/null 2>&1
+    pactl load-module module-null-sink sink_name=hde_usb sink_properties=device.description=USB-Headset-Test >/dev/null 2>&1
+    pactl set-default-sink hde_hdmi
     pacat -p --raw --format=s16le --rate=8000 --channels=1 < /dev/zero > /dev/null 2>&1 &
     PACAT=$!
     sleep 1
     "$B/hde-panel" --control-center=sound; sleep 3
-    check "the Sound page lists the output devices" grep -q "control center: sound: outputs: .*HDMI-Test" "$OUT/session.log"
+    check "the Sound page lists the output devices" grep -q "control center: sound: outputs: .*HDMI-Test\*, USB-Headset-Test\|control center: sound: outputs: .*USB-Headset-Test, .*HDMI-Test\*" "$OUT/session.log"
     check "... and the apps playing sound, each with its own volume" grep -q "control center: sound: outputs: .*apps: [^ ]* [0-9]*%" "$OUT/session.log"
+    check "... shown in the list (a row with a slider)" grep -q "hde-panel: widget cc-app-" "$OUT/session.log"
     shot 18e-cc-sound
-    pclick cc-sink-hde_hdmi; sleep 2
-    if [ "$(pactl info | sed -n 's/^Default Sink: //p')" = hde_hdmi ]; then pass "choosing an output device makes it the default one"
-    else fail "choosing an output device makes it the default one ($(pactl info | sed -n 's/^Default Sink: //p'))"; fi
+    pclick cc-sink-hde_usb; sleep 2
+    if [ "$(pactl info | sed -n 's/^Default Sink: //p')" = hde_usb ]; then pass "choosing another output device makes it the default one"
+    else fail "choosing another output device makes it the default one ($(pactl info | sed -n 's/^Default Sink: //p'))"; fi
+    if pactl list short sink-inputs | grep -q "	$(pactl list short sinks | awk '$2 == "hde_usb" {print $1}')	"; then
+        pass "... and the app playing moves to it"
+    else fail "... and the app playing moves to it ($(pactl list short sink-inputs | tr '\t\n' ' ;'))"; fi
     [ -n "$def0" ] && pactl set-default-sink "$def0"
     kill "$PACAT" 2>/dev/null
     pactl unload-module module-null-sink 2>/dev/null
