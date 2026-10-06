@@ -112,9 +112,14 @@ int hde_randr_plan(const HdeRandrState *s, HdeProjectMode mode, HdeRandrPlan *p)
 /* Plan going back to a layout saved earlier with hde_randr_read() (the "Revert" of the confirmation). */
 int hde_randr_plan_restore(const HdeRandrState *now, const HdeRandrState *saved, HdeRandrPlan *p);
 /* After a screen was plugged in or out: 1 if the layout must be fixed, *mode = the layout to apply:
- *  - connected screens exist but none of them is on (the screen in use was unplugged): PC screen only;
- *  - an unplugged screen is still part of the desktop: the current layout again, on the screens that are left. */
-int hde_randr_needs_fix(const HdeRandrState *s, HdeProjectMode *mode, char *why, unsigned long why_len);
+ *  - a screen that was connected (in was_connected, comma-separated names; NULL = any) was unplugged while it was
+ *    on, and no connected screen is on any more: PC screen only;
+ *  - such an unplugged screen is still part of the desktop: the current layout again, on the screens that are left;
+ *  - nothing is on at all although screens are connected: PC screen only.
+ * A screen turned on by hand while it reports "disconnected" (a VGA projector without EDID, forced on with xrandr)
+ * was never seen connected, so it is left alone. */
+int hde_randr_needs_fix(const HdeRandrState *s, const char *was_connected, HdeProjectMode *mode, char *why,
+                        unsigned long why_len);
 /* "eDP-1 1920x1080+0+0 (PC screen), HDMI-1 1280x1024+1920+0; screen 3200x1080" — for logs and --displays. */
 void hde_randr_describe(const HdeRandrState *s, char *buf, unsigned long len);
 /* Label of a screen for people: "Built-in screen", "DELL U2415 (HDMI-1)", "DUMMY1". */

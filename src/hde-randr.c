@@ -402,16 +402,30 @@ int hde_randr_plan_restore(const HdeRandrState *now, const HdeRandrState *saved,
     return 1;
 }
 
-int hde_randr_needs_fix(const HdeRandrState *s, HdeProjectMode *mode, char *why, unsigned long why_len)
+static int name_in_list(const char *list, const char *name)
 {
-    int nconn = hde_randr_n_connected(s), conn_on = 0, stale = -1;
+    size_t n = strlen(name);
+    for (const char *p = list; p && *p;) {
+        const char *e = strchr(p, ',');
+        size_t l = e ? (size_t)(e - p) : strlen(p);
+        if (l == n && !strncmp(p, name, n)) return 1;
+        p = e ? e + 1 : NULL;
+    }
+    return 0;
+}
+
+int hde_randr_needs_fix(const HdeRandrState *s, const char *was_connected, HdeProjectMode *mode, char *why,
+                        unsigned long why_len)
+{
+    int nconn = hde_randr_n_connected(s), conn_on = 0, any_on = 0, stale = -1;
     for (int i = 0; i < s->n_out; i++) {
         const HdeRandrOutput *o = &s->out[i];
+        if (o->crtc) any_on++;
         if (o->connected && o->crtc) conn_on++;
-        if (!o->connected && o->crtc && stale < 0) stale = i;
+        if (!o->connected && o->crtc && stale < 0 && (!was_connected || name_in_list(was_connected, o->name))) stale = i;
     }
     if (nconn == 0) return 0;                     /* nothing to show anything on (e.g. a laptop with its lid closed) */
-    if (conn_on == 0) {
+    if (conn_on == 0 && (stale >= 0 || any_on == 0)) {
         *mode = HDE_PROJECT_PC;
         if (why && stale >= 0)
             snprintf(why, why_len, "no connected screen is on (%s was unplugged): turning the PC screen on",

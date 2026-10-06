@@ -297,10 +297,11 @@ pkill -x hde-xsettings; sleep 0.5
 if wait_geom DUMMY1 "[0-9]+x[0-9]+\+1280\+0" 60 || wait_geom DUMMY1 "[0-9]+x[0-9]+\+[0-9]+\+0" 10; then
     pass "at login the layout chosen earlier for these screens comes back (Extend: DUMMY1 $(geom DUMMY1))"
 else fail "at login the layout chosen earlier comes back (DUMMY1 $(geom DUMMY1))"; fi
-check "... and hde-xsettings logs it" grep -q "hde-xsettings: displays: the layout chosen earlier for DUMMY0,DUMMY1: Extend" "$OUT/xsettings-login.log"
+check "... and hde-xsettings logs it" grep -q "hde-xsettings: displays: the layout chosen earlier for DUMMY0,DUMMY1 (Extend applied)" "$OUT/xsettings-login.log"
 
 # ---------- 9. a screen plugged in: the Project window asks ----------
 plug DUMMY2 DUMMY1
+xrandr > /dev/null 2>&1      # the dummy driver says "connected" at the next look, a real screen raises a hotplug event
 if wait_win "^Project$" 80; then
     pass "a third screen (DUMMY2) plugged in: the Project window opens by itself"
     check "... saying which screen is new" grep -q "hde-xsettings: displays: connected: DUMMY2 (display_connect=ask)" "$OUT/xsettings-login.log"
@@ -341,7 +342,7 @@ check "Settings opens" wait_win "Hyggshi Settings"
 shot 10-settings-display
 "$B/hde-settings" about; sleep 3
 shot 11-settings-about
-xdotool mousemove 760 520; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do xdotool click 5; done; sleep 1
+xdotool mousemove 760 520; for i in 1 2 3 4 5 6 7; do xdotool click 5; done; sleep 1
 shot 12-settings-about-memory
 grep "hde-settings: about:" "$OUT/settings.log" | head -n 1 | sed 's/^/INFO: /' | tee -a "$OUT/results.txt"
 kill $SETTINGS 2>/dev/null

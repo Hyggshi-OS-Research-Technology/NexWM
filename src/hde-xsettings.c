@@ -322,7 +322,7 @@ static int apply_layout(HdeRandrState *st, HdeProjectMode mode, const char *why)
     HdeRandrPlan *p = g_new0(HdeRandrPlan, 1);
     char err[256] = "";
     int ok = hde_randr_plan(st, mode, p) && hde_randr_apply(dpy, st, p, err, sizeof err);
-    if (ok) fprintf(stderr, "hde-xsettings: displays: %s: %s\n", why, hde_project_label(mode));
+    if (ok) fprintf(stderr, "hde-xsettings: displays: %s (%s applied)\n", why, hde_project_label(mode));
     else fprintf(stderr, "hde-xsettings: displays: %s: %s failed: %s\n", why, hde_project_label(mode), p->error[0] ? p->error : err);
     g_free(p);
     return ok;
@@ -389,7 +389,7 @@ static void display_check(void)
     if (!hde_randr_read(dpy, st, 0)) { g_free(st); return; }
     HdeProjectMode fix;
     char why[300];
-    if (hde_randr_needs_fix(st, &fix, why, sizeof why)) {
+    if (hde_randr_needs_fix(st, display_names, &fix, why, sizeof why)) {
         gint64 now = g_get_monotonic_time();
         if (now - fix_window_start > 10 * G_USEC_PER_SEC) { fix_window_start = now; fix_count = 0; }
         if (++fix_count <= 3 && apply_layout(st, fix, why)) hde_randr_read(dpy, st, 0);

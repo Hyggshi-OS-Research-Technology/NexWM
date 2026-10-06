@@ -692,7 +692,7 @@ fi
 "$B/hde-settings" appearance; sleep 2; shot 09-settings-appearance-light
 "$B/hde-settings" display; sleep 2.5; shot 09b-settings-display
 "$B/hde-settings" about; sleep 3.5; shot 09c-settings-about
-xdotool mousemove 760 520; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do xdotool click 5; done; sleep 1; shot 09d-settings-about-memory
+xdotool mousemove 760 520; for i in 1 2 3 4 5 6 7; do xdotool click 5; done; sleep 1; shot 09d-settings-about-memory
 if grep -q "hde-settings: about: HDE uses " "$OUT/settings.log"; then
     pass "Settings > About shows how much memory HDE uses ($(sed -n 's/^hde-settings: about: HDE uses \([^(]*\).*/\1/p' "$OUT/settings.log" | head -n 1))"
 else fail "Settings > About shows how much memory HDE uses"; fi

@@ -202,9 +202,9 @@ int main(void)
     memcpy(saved_ext, s, sizeof *s);
     HdeProjectMode fix = HDE_PROJECT_OTHER;
     char why[256] = "";
-    CHECK(!hde_randr_needs_fix(s, &fix, why, sizeof why), "extended, everything plugged in: nothing to fix");
+    CHECK(!hde_randr_needs_fix(s, NULL, &fix, why, sizeof why), "extended, everything plugged in: nothing to fix");
     s->out[1].connected = 0;
-    CHECK(hde_randr_needs_fix(s, &fix, why, sizeof why) && fix == HDE_PROJECT_PC,
+    CHECK(hde_randr_needs_fix(s, NULL, &fix, why, sizeof why) && fix == HDE_PROJECT_PC,
           "projector unplugged while extended: the desktop shrinks back to the laptop (%s)", why);
     CHECK(hde_randr_plan(s, fix, &p) && is_on(&p, s, "eDP-1", 0, 0, 1920, 1080) && is_off(&p, s, "HDMI-1") &&
           target(&p, s, "HDMI-1") && p.screen_w == 1920,
@@ -216,10 +216,14 @@ int main(void)
     apply(s, &p);
     CHECK(hde_randr_mode_of(s) == HDE_PROJECT_SECOND, "Second screen only is recognised");
     s->out[1].connected = 0;
-    CHECK(hde_randr_needs_fix(s, &fix, why, sizeof why) && fix == HDE_PROJECT_PC && strstr(why, "HDMI-1"),
+    CHECK(hde_randr_needs_fix(s, NULL, &fix, why, sizeof why) && fix == HDE_PROJECT_PC && strstr(why, "HDMI-1"),
           "projector unplugged in Second screen only: the laptop screen is turned back on (%s)", why);
     CHECK(hde_randr_plan(s, fix, &p) && is_on(&p, s, "eDP-1", 0, 0, 1920, 1080) && is_off(&p, s, "HDMI-1"),
           "... at its native resolution");
+    /* only screens that WERE connected count as unplugged: a projector forced on by hand while it reports
+     * "disconnected" (VGA without EDID: xrandr --output VGA-1 --mode 1024x768) is left alone */
+    CHECK(!hde_randr_needs_fix(s, "eDP-1", &fix, why, sizeof why) && hde_randr_needs_fix(s, "HDMI-1,eDP-1", &fix, why, sizeof why),
+          "a screen forced on while it reports 'disconnected' (never seen connected) is not turned off");
     s->out[1].connected = 1;
 
     /* Revert: back to the extended layout saved before */

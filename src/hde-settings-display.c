@@ -427,7 +427,7 @@ static void project_refresh(void)
     if (main >= 0) hde_randr_output_label(&s->out[main], lmain, sizeof lmain);
     if (second >= 0) hde_randr_output_label(&s->out[second], lsecond, sizeof lsecond);
     const char *details[HDE_PROJECT_N] = { lmain, pj.nconnected >= 2 ? "The same picture on both" : "Needs a second screen",
-                                           pj.nconnected >= 2 ? "One desktop over both screens" : "Needs a second screen",
+                                           pj.nconnected >= 2 ? "One desktop on both" : "Needs a second screen",
                                            lsecond };
     for (int i = 0; i < HDE_PROJECT_N; i++) {
         gtk_widget_set_sensitive(pj.tiles[i], available(i));
