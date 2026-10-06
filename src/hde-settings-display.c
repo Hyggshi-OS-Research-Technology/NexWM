@@ -1074,6 +1074,7 @@ static gboolean apply_output_change(const char *name, unsigned long mode, int ro
     char what[160];
     g_snprintf(what, sizeof what, "%s %s applied", name, oc->entry);
     log_state(what, dpy);
+    fprintf(stderr, "hde-settings: display: %s %s applied, asking to keep it\n", name, oc->entry);
     char *why = g_strdup_printf("The %s of %s changed.", mode ? "resolution" : "orientation", oc->label);
     confirm_show(now, why, out_change_done, oc);    /* takes now */
     g_free(why);
@@ -1179,6 +1180,8 @@ static void res_fill(const HdeRandrState *s, gboolean ok)
 static void res_apply(unsigned long mode, int rot)
 {
     char *error = NULL;
+    fprintf(stderr, "hde-settings: display: %s: mode %lu, rotation %s chosen in the Resolution section\n", res_output, mode,
+            rot ? hde_randr_rotation_id(rot) : "unchanged");
     if (!apply_output_change(res_output, mode, rot, &error)) {
         settings_status("%s", error);
         message_dialog(GTK_MESSAGE_WARNING, "The screen could not be changed", error);

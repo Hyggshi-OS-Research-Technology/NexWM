@@ -402,24 +402,38 @@ set_ini display_modes ""
 # the Display page: another resolution from the list, nobody keeps it -> back by itself; then one that is kept
 pkill -x hde-settings 2>/dev/null; sleep 0.5
 SLOG="$OUT/settings-res.log"         # (not appended to the session log: hde-session's own writes would cover it)
+# pick_next SHOT: open the resolution list of the Display page and pick the entry below the one in use; 0 = the
+# "Keep these display settings?" window came
+pick_next() {
+    pick_shot=$1
+    click_widget display-resolution "$SLOG"; sleep 1
+    shot "$pick_shot"
+    xdotool key Down; sleep 0.4; xdotool key Return
+    wait_win "^Keep these display settings\?$" 40 && return 0
+    info "the list did not take Down + Return (widget at $(widget display-resolution "$SLOG"), active window:" \
+         "$(xdotool getactivewindow getwindowname 2>/dev/null)); with the mouse instead"
+    xdotool key Escape; sleep 0.6
+    # shellcheck disable=SC2046  # "X Y" -> two arguments
+    set -- $(widget display-resolution "$SLOG")
+    xdotool mousemove "$1" "$2" sleep 0.3 mousedown 1 sleep 0.2 mouseup 1; sleep 1
+    shot "$pick_shot-mouse"
+    xdotool mousemove_relative 0 32; sleep 0.5; xdotool click 1
+    wait_win "^Keep these display settings\?$" 40
+}
 "$B/hde-settings" display > "$SLOG" 2>&1 &
 SRES=$!
 if wait_win "Hyggshi Settings" 60; then
     sleep 2
     shot 13-settings-display-resolution
     if [ -n "$(widget display-resolution "$SLOG")" ]; then
-        click_widget display-resolution "$SLOG"; sleep 0.8
-        xdotool key Down; sleep 0.3; xdotool key Return
-        if wait_win "^Keep these display settings\?$" 40 && ! wait_geom DUMMY0 "1280x800\+0\+0" 5; then
+        if pick_next 13b-resolution-list && ! wait_geom DUMMY0 "1280x800\+0\+0" 5; then
             pass "a new resolution from the list applies at once and asks to keep it (DUMMY0 $(geom DUMMY0))"
             sleep 1; shot 14-keep-resolution
             if wait_geom DUMMY0 "1280x800\+0\+0" 90; then pass "... nobody answers: back to 1280x800 after the countdown"
             else fail "... nobody answers: back to 1280x800 after the countdown (DUMMY0 $(geom DUMMY0))"; fi
             check "... and not remembered" sh -c "! grep -q '^display_modes=.*DUMMY0=' '$INI'"
             sleep 1.5
-            click_widget display-resolution "$SLOG"; sleep 0.8
-            xdotool key Down; sleep 0.3; xdotool key Return
-            if wait_win "^Keep these display settings\?$" 40; then
+            if pick_next 14b-resolution-list-again; then
                 sleep 1.5
                 n0=$(grep -c "hde-settings: project: kept" "$SLOG")
                 click_widget project-keep "$SLOG"
@@ -430,7 +444,10 @@ if wait_win "Hyggshi Settings" 60; then
                     pass "'Keep changes' keeps it and remembers it for the next logins ($g)"
                 else fail "'Keep changes' keeps it and remembers it ($g; $(grep '^display_modes' "$INI"))"; fi
             else fail "a second choice from the list asks again"; fi
-        else fail "a new resolution from the list applies and asks to keep it (DUMMY0 $(geom DUMMY0); $(grep 'hde-settings: display' "$SLOG" | tail -n 2 | tr '\n' ' '))"; fi
+        else
+            fail "a new resolution from the list applies and asks to keep it (DUMMY0 $(geom DUMMY0))"
+            grep "hde-settings: \(display\|project\|widget display-res\)" "$SLOG" | tail -n 6 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        fi
     else fail "the Display page has a resolution list (no widget position logged)"; fi
 else fail "Settings opens at the Display page"; fi
 kill "$SRES" 2>/dev/null; sleep 0.5
