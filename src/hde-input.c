@@ -145,6 +145,10 @@ gboolean hde_input_init(Display *dpy)
 
 Display *hde_input_open(void)
 {
+    /* the Wayland session: labwc applies these settings (hde-settings --wayland-config); the X server there is
+     * Xwayland, whose devices are only stand-ins */
+    const char *st = g_getenv("XDG_SESSION_TYPE");
+    if (g_getenv("WAYLAND_DISPLAY") && st && !strcmp(st, "wayland")) return NULL;
     Display *dpy = XOpenDisplay(NULL);
     if (dpy && !hde_input_init(dpy)) {
         XCloseDisplay(dpy);

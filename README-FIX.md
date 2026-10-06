@@ -396,3 +396,55 @@ back to software dimming. `tests/randr-plan-test.c` checks the layouts without a
 desktop PC with two monitors, no common resolution, too few CRTCs, desktop size limit, unplugging the screen in use).
 `make check` (Xvfb) checks F6/F7 and the OSD, the F8 window with one screen, the Screenshot window, and Settings →
 About / Display.
+
+## Start menu like Linux Mint or KDE, panel settings and extensions, About with the logo of the system, Wayland (fix 12)
+
+- **Start menu redone** (`src/hde-startmenu.c`, *Settings → Start Menu*, key `menu_style`):
+  - **Modern** (the default), like Linux Mint's Cinnamon menu: on the left your picture (AccountsService / `~/.face`,
+    else your initial) and name, the places (Home, Desktop, Documents, Downloads, Music, Pictures, Videos), your
+    favorite apps and the lock / log out / power buttons; on the right a search box, the categories — they open as the
+    mouse moves over them — and the apps of the category with their descriptions; *Recent Files* as a category.
+  - **Kickoff**, like KDE Plasma: picture, name and search on top, categories on the left with *Favorites* as a grid of
+    tiles, the *Applications* / *Places* tabs (Tab switches) and *Sleep* / *Restart* / *Shut Down* / *Leave* below.
+  - **Classic**: the previous drop-down menu.
+  - Typing searches at once: names, descriptions, keywords and commands, accents optional, every word must match;
+    a command in `$PATH` can be run. Up/Down/Left/Right/Tab/Enter, Esc clears the search then closes. Right-click or
+    the Menu key on an app: *Add to / Remove from Favorites*, *Move Up / Down*, *Pin to Panel*, *Add to Desktop*.
+  - On X11 it is a popup that holds the keyboard and mouse like a menu (a click outside closes it); it is built ahead
+    of time so it opens at once.
+- **Settings → Panel** (`src/hde-panel-config.h`), everything applies at once: **bottom or top**, height (24–64 px),
+  opacity, each item on/off (Start button, Show Desktop, Run, pinned apps, taskbar — with or without window titles,
+  grouping —, workspaces, tray, status icons, notifications, clock), 12/24-hour clock, date, seconds, a preview of
+  the result. **Pinned apps** (also from the Start menu: *Pin to Panel*). **Extensions**: processor and
+  memory use (built in, no tool) and the first line of any command, refreshed every few seconds, with presets
+  (weather from wttr.in, uptime, free disk space, keyboard layout, public IP) and a command for clicks. The desktop
+  icons, the OSD, notifications, the calendar and the search window follow the panel's edge and height.
+  The Start button: label, and ☰ / the logo of the system / the HDE logo / no icon.
+- **About with the logo of the system** (*Settings → About* and the new **About HDE** window of the desktop menu,
+  `hde-settings --about-window`, which replaces the old GtkAboutDialog of image 4): the logo comes from
+  `/etc/os-release` — first the system's own (`LOGO=`: Ubuntu `ubuntu-logo`, Hyggshi OS `distributor-logo`; icons
+  like `distributor-logo-<ID>`, `emblem-<ID>`; `/usr/share/pixmaps/<ID>-logo.png`), else HDE's own copy
+  (`data/logos/`, 27 distributions from Simple Icons, drawn by HDE's own SVG path reader `src/hde-svgpath.c`, no SVG
+  library needed) or the Hyggshi OS logo drawn in code, else a round badge with the first letter in `ANSI_COLOR`.
+  A derivative shows **"Based on Debian 13 (trixie)"** / **"Ubuntu 24.04 LTS (noble)"** with its base's logo
+  (`ID_LIKE`, `HYGGSHI_BASE_CODENAME` / `UBUNTU_CODENAME`, `/etc/debian_version`), and the system's links (website,
+  support, bug reports). `hde-settings --about` adds a *Based on* line.
+- **The HDE (Wayland) session** (`data/hde-wayland.desktop`, needs `labwc`): `hde-start --wayland` → `hde-session
+  --wayland` writes labwc's configuration from settings.ini (`hde-settings --wayland-config`: HDE's key bindings,
+  touchpad, key repeat, keyboard layout, title bars in HDE's light/dark colours and accent) and starts labwc, which
+  starts the session: the panel, desktop (wallpaper on every screen), Start menu, notifications, OSD, calendar and
+  search as **layer-shell surfaces** (gtk-layer-shell), a **Wayland taskbar** (wlr-foreign-toplevel-management:
+  click, middle-click to close, right-click Minimize / Maximize / Close; Show Desktop), the panel controlled over
+  D-Bus, the keys as labwc key bindings that run `hde-hotkeys --action ...` (Super, Ctrl+Esc, F1–F3, F6–F8, media
+  keys, PrtSc through `grim` / `slurp`, Super+L with `swaylock`, ...). Changing a setting rewrites labwc's
+  configuration and labwc reloads it; logging out stops labwc. Without `libgtk-layer-shell-dev` HDE builds for X11 only.
+
+### Tests
+
+`make check`: the modern menu (places, search, Escape twice, Super / Super+S), *Add to Favorites* and *Pin to Panel*
+from the app's menu, Enter starting an app, categories with the keyboard and under the mouse, Kickoff (Places tab) and
+classic; the panel at the top 40 px high without the Run button, with two extensions (a command and the processor),
+the Start button with the system's logo, the menu opening below the panel, a thin panel, back to the bottom; the About
+window for Hyggshi OS (its logo, based on Debian 13), Debian, Linux Mint (based on Ubuntu 24.04) and an unknown system
+(badge); `svgpath-test` draws every bundled logo; `hde-hotkeys --action` and `hde-settings --wayland-config`.
+`tests/wayland-test.sh` (CI job *wayland*, Debian 13): the whole Wayland session in a headless labwc — see README.

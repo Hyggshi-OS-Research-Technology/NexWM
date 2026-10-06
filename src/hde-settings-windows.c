@@ -152,6 +152,13 @@ static GtkWidget *wm_row(GtkWidget **group, const char *id, const char *title, c
 GtkWidget *page_windows_new(void)
 {
     GtkWidget *box = page_base();
+    if (g_getenv("WAYLAND_DISPLAY") && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland")) {
+        gtk_box_pack_start(GTK_BOX(box), section("Wayland session"), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), info_label(
+            "In the HDE (Wayland) session the labwc compositor manages the windows (title bars in HDE's colours, "
+            "Alt+Tab, snapping with Super+Left / Super+Right, Super+Up to maximize). The window manager chosen below "
+            "is used in the HDE session on X11."), FALSE, FALSE, 0);
+    }
     gtk_box_pack_start(GTK_BOX(box), section("Current"), FALSE, FALSE, 0);
     running_row = row_box("Running window manager", "Checking…", NULL);
     gtk_box_pack_start(GTK_BOX(box), running_row, FALSE, FALSE, 0);

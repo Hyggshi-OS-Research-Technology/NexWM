@@ -63,9 +63,12 @@
  * software dimming; no brightnessctl needed). */
 
 /* Screen lock: try real lockers first. `loginctl lock-session` only works when
- * some program listens to logind, so it comes last. */
+ * some program listens to logind, so it comes last. On Wayland (the HDE (Wayland) session): swaylock or gtklock
+ * (ext-session-lock, which labwc supports). */
 #define HDE_SH_LOCK \
-    "if command -v light-locker-command >/dev/null 2>&1 && light-locker-command -l >/dev/null 2>&1; then :; " \
+    "if [ -n \"$WAYLAND_DISPLAY\" ] && command -v swaylock >/dev/null 2>&1; then swaylock -f -c 1e222a; " \
+    "elif [ -n \"$WAYLAND_DISPLAY\" ] && command -v gtklock >/dev/null 2>&1; then gtklock -d; " \
+    "elif command -v light-locker-command >/dev/null 2>&1 && light-locker-command -l >/dev/null 2>&1; then :; " \
     "elif command -v xscreensaver-command >/dev/null 2>&1 && xscreensaver-command -lock >/dev/null 2>&1; then :; " \
     "elif command -v xfce4-screensaver-command >/dev/null 2>&1 && xfce4-screensaver-command --lock >/dev/null 2>&1; then :; " \
     "elif command -v mate-screensaver-command >/dev/null 2>&1 && mate-screensaver-command --lock >/dev/null 2>&1; then :; " \

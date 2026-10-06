@@ -18,6 +18,9 @@
  * X11 clipboards live in the program that owns them, so the process stays in the background while it owns
  * the clipboard (until another program copies something, at most 10 minutes; a clipboard manager may keep
  * the image afterwards). The saved path is printed on stdout. Exit status: 0 saved (or copied), 1 cancelled, 2 error.
+ *
+ * In the "HDE (Wayland)" session programs cannot read the screen through GTK: grim takes the picture (wlr-screencopy,
+ * labwc has it) and slurp lets you drag the area (for --window too: Wayland does not tell where the active window is).
  */
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
@@ -30,6 +33,7 @@
 #include <string.h>
 
 typedef enum { MODE_FULL, MODE_AREA, MODE_WINDOW } Mode;
+static gboolean wayland_mode;           /* the Wayland session: grim (+ slurp) */
 
 static Mode mode = MODE_FULL;
 static int opt_delay;
@@ -44,6 +48,7 @@ static GDBusConnection *bus;
 static guint32 notif_id;
 
 static gboolean ui_visible(void);
+static void finish(GdkPixbuf *p);
 static void ui_show_result(GdkPixbuf *p, const char *path);
 static void ui_show_error(const char *what);
 static void ui_show_start(void);
@@ -99,6 +104,93 @@ static GdkPixbuf *grab_root(int x, int y, int w, int h)
     if (y + h > sh) h = sh - y;
     if (w <= 0 || h <= 0) return NULL;
     return gdk_pixbuf_get_from_window(root, x, y, w, h);
+}
+
+/* ---------------------------------------------------------------- Wayland: grim, slurp */
+static GdkPixbuf *grim_capture(const char *geometry, GError **err)
+{
+    char *grim = g_find_program_in_path("grim");
+    if (!grim) {
+        g_set_error_literal(err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "Screenshots on Wayland need grim: sudo apt install grim");
+        return NULL;
+    }
+    const char *argv[] = { grim, "-t", "png", geometry ? "-g" : "-", geometry ? geometry : NULL, geometry ? "-" : NULL, NULL };
+    char *out = NULL;
+    gsize len = 0;
+    int status = 0;
+    GdkPixbuf *pb = NULL;
+    GError *e = NULL;
+    GSubprocess *sp = g_subprocess_newv(argv, G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE, &e);
+    GBytes *ob = NULL, *eb = NULL;
+    if (sp && g_subprocess_communicate(sp, NULL, NULL, &ob, &eb, &e)) {
+        status = g_subprocess_get_exit_status(sp);
+        out = ob ? g_bytes_unref_to_data(ob, &len) : NULL;
+        ob = NULL;
+        if (status == 0 && out && len) {
+            GdkPixbufLoader *ld = gdk_pixbuf_loader_new_with_type("png", NULL);
+            if (gdk_pixbuf_loader_write(ld, (const guchar *)out, len, &e) && gdk_pixbuf_loader_close(ld, &e)) {
+                pb = gdk_pixbuf_loader_get_pixbuf(ld);
+                if (pb) g_object_ref(pb);
+            } else gdk_pixbuf_loader_close(ld, NULL);
+            g_object_unref(ld);
+        } else if (!e) {
+            gsize el = 0;
+            char *msg = eb ? g_bytes_unref_to_data(eb, &el) : NULL;
+            eb = NULL;
+            g_set_error(&e, G_IO_ERROR, G_IO_ERROR_FAILED, "grim failed: %s", msg && *msg ? g_strstrip(msg) : "?");
+            g_free(msg);
+        }
+    }
+    if (eb) g_bytes_unref(eb);
+    if (ob) g_bytes_unref(ob);
+    g_free(out);
+    g_clear_object(&sp);
+    g_free(grim);
+    if (e) g_propagate_error(err, e);
+    return pb;
+}
+
+/* slurp: drag a rectangle; returns "x,y wxh" or NULL when cancelled (Esc) */
+static char *slurp_geometry(GError **err)
+{
+    char *slurp = g_find_program_in_path("slurp");
+    if (!slurp) {
+        g_set_error_literal(err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "Choosing an area on Wayland needs slurp: sudo apt install slurp");
+        return NULL;
+    }
+    char *out = NULL;
+    int status = 1;
+    const char *argv[] = { slurp, "-d", NULL };
+    g_spawn_sync(NULL, (char **)argv, NULL, G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out, NULL, &status, NULL);
+    g_free(slurp);
+    if (status != 0 || !out || !*g_strstrip(out)) { g_free(out); return NULL; }
+    return out;
+}
+
+static void wayland_capture(void)
+{
+    GError *e = NULL;
+    char *geo = NULL;
+    if (mode != MODE_FULL) {
+        geo = slurp_geometry(&e);
+        if (!geo && !e) {                       /* cancelled */
+            g_printerr("hde-screenshot: area: cancelled\n");
+            exit_code = 1;
+            if (ui_visible()) ui_show_start();
+            quit_if_idle();
+            return;
+        }
+    }
+    GdkPixbuf *pb = e ? NULL : grim_capture(geo, &e);
+    g_free(geo);
+    if (!pb) {
+        fail(e ? e->message : "Could not read the screen contents.");
+        g_clear_error(&e);
+        return;
+    }
+    finish(pb);
 }
 
 static gboolean get_prop(Display *dpy, Window w, const char *name, Atom type, unsigned char **data, unsigned long *n)
@@ -645,6 +737,7 @@ static gboolean start_capture(gpointer data)
 {
     (void)data;
     GdkRectangle r;
+    if (wayland_mode) { wayland_capture(); return G_SOURCE_REMOVE; }
     switch (mode) {
     case MODE_AREA:
         area_begin();
@@ -925,7 +1018,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "hde-screenshot: --clipboard cannot be combined with --no-clipboard or --file\n");
         return 2;
     }
-    gdk_set_allowed_backends("x11");
+    const char *wl = g_getenv("WAYLAND_DISPLAY");
+    wayland_mode = wl && *wl && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland");
+    gdk_set_allowed_backends(wayland_mode ? "wayland,x11" : "x11");
     if (!gtk_init_check(&argc, &argv)) {
         fprintf(stderr, "hde-screenshot: cannot open the X display (DISPLAY=%s)\n", g_getenv("DISPLAY") ? g_getenv("DISPLAY") : "unset");
         return 2;

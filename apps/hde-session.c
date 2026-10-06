@@ -14,6 +14,13 @@
  *  - Crashed components (panel, desktop, hotkeys, xsettings, polkit agent) are restarted automatically
  *    (rate-limited so they never loop forever); a normal exit (exit 0 / SIGTERM) is not restarted.
  *  - `hde-session restart` (SIGUSR1): restart desktop + panel without logging out.
+ *
+ * The "HDE (Wayland)" session (hde-start --wayland, data/hde-wayland.desktop): `hde-session --wayland` writes the
+ * configuration of the labwc compositor from settings.ini (hde-settings --wayland-config: HDE's key bindings, touchpad,
+ * keyboard, colours) and replaces itself with labwc, which starts `hde-session --wayland-inner`: desktop and panel as
+ * layer-shell surfaces, polkit agent, XDG autostart. No window manager, hde-hotkeys or hde-xsettings there: labwc
+ * manages the windows, runs the key bindings (hde-hotkeys --action ...) and applies the input settings; labwc's
+ * configuration is rewritten (and reloaded) whenever settings.ini changes. Logging out stops labwc too.
  */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
@@ -41,6 +48,8 @@ static volatile sig_atomic_t g_stop = 0;
 static volatile sig_atomic_t g_restart = 0;     /* SIGUSR1: restart desktop + panel */
 static volatile sig_atomic_t g_switch_wm = 0;   /* SIGUSR2: switch WM according to settings.ini */
 static char g_bindir[4096];
+static int g_wayland;                           /* --wayland-inner: running inside the labwc compositor */
+static char g_labwc_dir[4096];
 
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
 static void on_usr1(int sig) { (void)sig; g_restart = 1; }
@@ -151,6 +160,64 @@ static void run_wait(const char *const *argv, int timeout_ms)
     }
     kill(p, SIGKILL);
     waitpid(p, NULL, 0);
+}
+
+/* ===================== the Wayland session (labwc) ===================== */
+static void config_path(char *out, size_t n, const char *rel)
+{
+    const char *x = getenv("XDG_CONFIG_HOME"), *h = getenv("HOME");
+    if (x && *x) snprintf(out, n, "%s/hde/%s", x, rel);
+    else snprintf(out, n, "%s/.config/hde/%s", h ? h : "/tmp", rel);
+}
+
+/* hde-settings --wayland-config: labwc's rc.xml (HDE's keys, touchpad, keyboard), colours, ... from settings.ini */
+static void write_labwc_config(int reload)
+{
+    char *s = resolve_component("hde-settings", g_bindir);
+    if (!s) { fprintf(stderr, "hde-session: hde-settings not found: labwc runs with its own defaults\n"); return; }
+    const char *argv[] = { s, "--wayland-config", g_labwc_dir, reload ? "--reload" : NULL, NULL };
+    run_wait(argv, 8000);
+    free(s);
+    fflush(stdout);
+}
+
+/* hde-session --wayland (from hde-start --wayland, i.e. the login screen): become the labwc compositor, which then
+ * starts `hde-session --wayland-inner` (the real session). */
+static int wayland_launch(void)
+{
+    char *labwc = resolve_component("labwc", NULL);
+    if (!labwc) {
+        fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: sudo apt install labwc\n");
+        return 1;
+    }
+    setenv("XDG_SESSION_TYPE", "wayland", 1);
+    setenv("XDG_CURRENT_DESKTOP", "HDE", 1);
+    setenv("XDG_SESSION_DESKTOP", "HDE", 1);
+    setenv("DESKTOP_SESSION", "hde-wayland", 1);
+    setenv("MOZ_ENABLE_WAYLAND", "1", 0);            /* Firefox, Qt, Clutter, Java, Electron: native Wayland */
+    setenv("QT_QPA_PLATFORM", "wayland;xcb", 0);
+    setenv("CLUTTER_BACKEND", "wayland", 0);
+    setenv("_JAVA_AWT_WM_NONREPARENTING", "1", 0);
+    setenv("ELECTRON_OZONE_PLATFORM_HINT", "auto", 0);
+    unsetenv("GDK_BACKEND");                         /* GTK apps pick Wayland by themselves (X11 through Xwayland) */
+    unsetenv("DISPLAY");                             /* labwc sets it for Xwayland */
+    config_path(g_labwc_dir, sizeof g_labwc_dir, "labwc");
+    write_labwc_config(0);
+    char cmd[8300];
+    snprintf(cmd, sizeof cmd, "'%s/hde-session' --wayland-inner", g_bindir);   /* labwc: no shell, quotes ok */
+    printf("hde-session: HDE build %s: starting the Wayland compositor: %s -C %s -s \"%s\"\n", HDE_VERSION, labwc,
+           g_labwc_dir, cmd);
+    fflush(stdout);
+    execl(labwc, "labwc", "-C", g_labwc_dir, "-s", cmd, (char *)NULL);
+    perror("hde-session: labwc");
+    free(labwc);
+    return 1;
+}
+
+static pid_t compositor_pid(void)
+{
+    const char *p = getenv("LABWC_PID");
+    return p && atoi(p) > 1 ? (pid_t)atoi(p) : getppid();
 }
 
 static void stop_pid(pid_t *p)
@@ -619,6 +686,7 @@ static int action(const char *name)
 static void usage(void)
 {
     printf("Usage: hde-session [--no-wm] [--no-desktop] [--no-panel]\n"
+           "       hde-session --wayland   the HDE (Wayland) session: starts the labwc compositor with HDE inside\n"
            "       hde-session restart   restart desktop + panel of the running session (no logout)\n"
            "       hde-session wm        switch to the window manager selected in Settings (no logout)\n"
            "       hde-session {logout|reboot|shutdown|suspend|lock}\n");
@@ -650,6 +718,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "hde-session: no running hde-session found; the window manager will change at next login\n");
         return 1;
     }
+    if (argc > 1 && (!strcmp(argv[1], "--wayland") || !strcmp(argv[1], "--wayland-inner"))) {
+        self_dir(g_bindir, sizeof(g_bindir), argv[0]);
+        /* outside the compositor (from the login screen): start labwc, which starts us again inside */
+        if (!strcmp(argv[1], "--wayland") && !getenv("WAYLAND_DISPLAY")) return wayland_launch();
+        g_wayland = 1;
+        setenv("HDE_BACKEND", "wayland", 1);
+        config_path(g_labwc_dir, sizeof g_labwc_dir, "labwc");
+    }
     if (argc > 1 && argv[1][0] != '-') {
         if (hde_session_init() == 0 && action(argv[1]) == 0) return 0;
         fprintf(stderr, "hde-session: unknown command or action failed: %s\n", argv[1]);
@@ -664,9 +740,12 @@ int main(int argc, char **argv)
 
     /* Nested in Xephyr on a Wayland host (or HDE_CORE_EVENTS=1): GTK3 using XInput2 does not receive
      * real clicks from Xephyr -> force core events. Set HDE_XI2=1 to disable. Must happen BEFORE unsetenv(WAYLAND_DISPLAY). */
-    if (!getenv("HDE_XI2") && (getenv("HDE_CORE_EVENTS") || getenv("WAYLAND_DISPLAY")))
+    if (!g_wayland && !getenv("HDE_XI2") && (getenv("HDE_CORE_EVENTS") || getenv("WAYLAND_DISPLAY")))
         setenv("GDK_CORE_DEVICE_EVENTS", "1", 1);
-    if (!hde_core_backend() || hde_core_backend()->type != HDE_BACKEND_WAYLAND) {
+    if (g_wayland) {
+        setenv("GDK_BACKEND", "wayland,x11", 1);   /* HDE's programs: layer-shell surfaces need Wayland */
+        unsetenv("GDK_CORE_DEVICE_EVENTS");
+    } else if (!hde_core_backend() || hde_core_backend()->type != HDE_BACKEND_WAYLAND) {
         unsetenv("WAYLAND_DISPLAY");
         setenv("GDK_BACKEND", "x11", 1);
     }
@@ -677,7 +756,7 @@ int main(int argc, char **argv)
         setenv("XDG_CURRENT_DESKTOP", "HDE", 1);
         setenv("XDG_SESSION_DESKTOP", "HDE", 1);
         setenv("DESKTOP_SESSION", "hde", 1);
-        setenv("XDG_SESSION_TYPE", "x11", 0);
+        setenv("XDG_SESSION_TYPE", g_wayland ? "wayland" : "x11", g_wayland);
         setenv("QT_QPA_PLATFORMTHEME", "gtk3", 0);   /* Qt apps follow the GTK theme / Dark mode */
     }
 
@@ -695,26 +774,30 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
 
     self_dir(g_bindir, sizeof(g_bindir), argv[0]);
-    printf("hde-session: HDE build %s (%s)\n", HDE_VERSION, g_bindir);
+    printf("hde-session: HDE build %s (%s)%s\n", HDE_VERSION, g_bindir,
+           g_wayland ? ", Wayland session inside labwc" : "");
     fflush(stdout);
-    g_use_wm = getenv("HDE_NO_WM") == NULL;
+    g_use_wm = getenv("HDE_NO_WM") == NULL && !g_wayland;
     int start_desktop = 1, start_panel = 1;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--no-desktop")) start_desktop = 0;
         else if (!strcmp(argv[i], "--no-panel")) start_panel = 0;
         else if (!strcmp(argv[i], "--no-wm")) g_use_wm = 0;
+        else if (!strcmp(argv[i], "--wayland") || !strcmp(argv[i], "--wayland-inner")) g_use_wm = 0;
     }
 
     /* D-Bus services activated on demand (portal, keyring, ...) need to know the DISPLAY of this session. */
     {
         const char *dua[] = { "dbus-update-activation-environment", "--systemd", "DISPLAY", "XAUTHORITY",
                               "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION", "XDG_SESSION_TYPE",
-                              "GDK_BACKEND", "QT_QPA_PLATFORMTHEME", "HDE_SESSION_PID", NULL };
+                              "GDK_BACKEND", "QT_QPA_PLATFORMTHEME", "HDE_SESSION_PID", "WAYLAND_DISPLAY",
+                              "QT_QPA_PLATFORM", "MOZ_ENABLE_WAYLAND", NULL };
         run_wait(dua, 3000);
     }
 
-    /* 1. System shortcuts BEFORE the window manager, so that HDE owns its keys (see the top of this file) */
-    comps[C_HOTKEYS].enabled = start_panel;
+    /* 1. System shortcuts BEFORE the window manager, so that HDE owns its keys (see the top of this file).
+     *    Wayland: labwc runs HDE's key bindings itself (rc.xml written by hde-settings --wayland-config). */
+    comps[C_HOTKEYS].enabled = start_panel && !g_wayland;
     comp_start_wait_ready(&comps[C_HOTKEYS], 2000);
 
     /* 2. Window manager before any GTK application */
@@ -723,10 +806,11 @@ int main(int argc, char **argv)
         if (wm_start_next() == 0) usleep(400 * 1000);
     }
 
-    /* 3. XSETTINGS (theme / Dark mode for every GTK app) + re-apply keyboard, mouse and display settings */
-    comps[C_XSETTINGS].enabled = 1;
+    /* 3. XSETTINGS (theme / Dark mode for every GTK app) + re-apply keyboard, mouse and display settings.
+     *    Wayland: GTK apps follow GSettings (written by Settings), labwc applies keyboard and touchpad settings. */
+    comps[C_XSETTINGS].enabled = !g_wayland;
     comp_start(&comps[C_XSETTINGS]);
-    {
+    if (!g_wayland) {
         char *s = resolve_component("hde-settings", g_bindir);
         if (s) {
             const char *args[] = { "--apply", NULL };
@@ -745,6 +829,10 @@ int main(int argc, char **argv)
 
     time_t autostart_at = time(NULL) + 2;   /* after the panel has a system tray for the applets */
     int autostart_done = 0;
+    char ini[4096];
+    config_path(ini, sizeof ini, "settings.ini");
+    struct stat ist;
+    time_t ini_mtime = stat(ini, &ist) == 0 ? ist.st_mtime : 0, ini_seen = 0;
     while (!g_stop) {
         reap_children();
         if (g_restart) { g_restart = 0; restart_components(); }
@@ -757,7 +845,17 @@ int main(int argc, char **argv)
             autostart_done = 1;
             start_polkit_agent();
             run_autostart();
-            if (start_panel) start_touchpad_setup();
+            if (start_panel && !g_wayland) start_touchpad_setup();
+        }
+        if (g_wayland) {
+            /* settings.ini changed (Settings > Keyboard / Input / Appearance, ...): new labwc configuration */
+            if (stat(ini, &ist) == 0 && ist.st_mtime != ini_mtime) { ini_mtime = ist.st_mtime; ini_seen = now; }
+            if (ini_seen && now > ini_seen) { ini_seen = 0; write_labwc_config(1); }
+            pid_t cp = compositor_pid();
+            if (cp <= 1 || kill(cp, 0) != 0) {
+                fprintf(stderr, "hde-session: the Wayland compositor is gone; ending the session\n");
+                break;
+            }
         }
         struct timespec ts = { 0, 250 * 1000000L };
         nanosleep(&ts, NULL);
@@ -772,6 +870,14 @@ int main(int argc, char **argv)
     stop_pid(&comps[C_XSETTINGS].pid);
     stop_pid(&g_wm_old);
     stop_pid(&g_wm);
+    if (g_wayland) {
+        pid_t cp = compositor_pid();
+        if (cp > 1 && kill(cp, 0) == 0) {
+            printf("hde-session: stopping the Wayland compositor (process %d)\n", (int)cp);
+            fflush(stdout);
+            kill(cp, SIGTERM);
+        }
+    }
     hde_session_shutdown_core();
     return 0;
 }

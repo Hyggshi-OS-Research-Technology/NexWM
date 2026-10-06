@@ -470,7 +470,9 @@ static void toggle_menu(guint32 time)
     DBG("toggle menu: search_visible=%d menu_mapped=%d", hde_search_visible(),
         classic_menu() ? app_menu && gtk_widget_get_mapped(app_menu) : hde_startmenu_visible());
     if (hde_search_visible()) { hde_search_hide(); return; }
-    if (!classic_menu()) {
+    /* Wayland: a GtkMenu needs a real click to pop up (an input serial); the Super key comes as a command, so the
+     * classic layout opens the modern menu there */
+    if (!classic_menu() || hde_is_wayland()) {
         hde_startmenu_toggle(menu_btn, panel_win, time);
         return;
     }
@@ -916,6 +918,10 @@ static void load_css(void)
     g_string_append(s, ".hde-panel .launcher { padding: 2px 5px; }");
     g_string_append(s, ".hde-panel .applet { padding: 2px 6px; }");
     g_string_append(s, ".hde-panel .icons-only button { padding: 2px 6px; }");
+    g_string_append_printf(s, ".hde-panel .wl-task { padding: 2px 8px; min-width: 24px; }"
+                              ".hde-panel .wl-task.active { background: alpha(%s, 0.28); box-shadow: inset 0 %s2px %s; }"
+                              ".hde-panel .wl-task.minimized label { color: %s; }",
+                           ti.accent, pcfg.top ? "" : "-", ti.accent, sub);
     g_string_append(s, ".hde-panel .clock-btn { padding: 0 8px; }");
     g_string_append_printf(s, ".hde-panel .clock-box { min-width: %dpx; }", pcfg.clock_seconds || !pcfg.clock_24h ? 120 : 100);
     g_string_append_printf(s, ".hde-panel .clock-time { font-weight: 700; font-size: %dpx; }", big ? 14 : 12);

@@ -62,6 +62,7 @@ int display_cli_mode(const char *id);              /* --display-mode pc|duplicat
 int display_cli_brightness(const char *arg);       /* --brightness [+N|-N|N] */
 int about_cli(void);                               /* --about */
 int about_window_main(void);                       /* --about-window: the "About HDE" window (after gtk_init) */
+int wayland_config_cli(int argc, char **argv);     /* --wayland-config [DIR] [--reload]: labwc's configuration */
 
 /* Apply the settings that must be re-applied at every login (keyboard, key repeat, screen blanking, ...).
  * Called by `hde-settings --apply` (run by hde-session at startup) and when the user changes a value. */

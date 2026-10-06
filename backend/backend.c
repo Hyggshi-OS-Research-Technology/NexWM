@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 extern HDEBackend *hde_backend_x11_create(void); extern HDEBackend *hde_backend_wayland_create(void);
-/* The Wayland backend is still only a placeholder; desktop/panel are both GTK/X11.
+/* The Wayland backend serves the "HDE (Wayland)" session (hde-session --wayland-inner sets HDE_BACKEND=wayland, since
+ * labwc also sets DISPLAY for Xwayland).
  * Priority: HDE_BACKEND=x11|wayland  >  DISPLAY set -> X11 (Xephyr/XWayland)  >  only WAYLAND_DISPLAY -> Wayland.
  * Previously a WAYLAND_DISPLAY on the host was enough to pick Wayland, even when running inside Xephyr (DISPLAY=:2). */
 HDEBackendType hde_backend_detect(void){

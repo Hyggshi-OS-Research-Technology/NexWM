@@ -172,6 +172,59 @@ jobs:
           /tmp/hde-display/*.txt
           /tmp/hde-display/shot-*.png
 
+  # The "HDE (Wayland)" session for real, on Debian 13 (Hyggshi OS's base): labwc with its headless backend and the pixman
+  # renderer (no screen or GPU needed), started by hde-start --wayland; grim takes the screenshots, wtype types keys.
+  wayland:
+    name: wayland (debian:trixie, labwc)
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: |
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev \
+          libwayland-dev labwc xwayland grim wtype dbus zenity libnotify-bin libglib2.0-bin imagemagick \
+          adwaita-icon-theme librsvg2-common fonts-dejavu-core procps python3 ca-certificates
+        labwc --version; pkg-config --modversion gtk-layer-shell-0 wayland-client
+
+    - name: Build (with the Wayland taskbar)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log
+        grep -q "HAVE_WAYLAND_TASKBAR" build.log || { echo "::error::hde-panel was built without the Wayland taskbar"; exit 1; }
+
+    - name: Wayland session test (labwc, layer shell, Start menu, Super key, taskbar, PrtSc with grim, logout)
+      run: sh tests/wayland-test.sh
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-wayland results "HDE Wayland test"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-wayland checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-wayland
+        path: |
+          /tmp/hde-wayland/*.log
+          /tmp/hde-wayland/*.txt
+          /tmp/hde-wayland/*.out
+          /tmp/hde-wayland/shot-*.png
+          /tmp/hde-wayland/home/.config/hde/labwc/*
+
   # HDE mostly runs on Debian-based systems (Hyggshi OS defaults to Debian 13): build with their compilers too.
   # Debian 13 has GCC 14 (implicit declarations and pointer/int mix-ups are errors); testing has the newest GCC,
   # which compiles C23 by default (bool/true/false are keywords, "f()" means "f(void)").

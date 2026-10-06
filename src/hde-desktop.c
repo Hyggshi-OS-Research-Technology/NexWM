@@ -71,6 +71,9 @@ static char *config_file(void)
     return g_build_filename(g_get_user_config_dir(), "hde", "config.ini", NULL);
 }
 
+static GPtrArray *extra_bg;                             /* Wayland: wallpaper-only surfaces on the other screens */
+static void redraw_all(void);
+
 static void load_wallpaper(const char *path)
 {
     if (path && wallpaper_path && !strcmp(path, wallpaper_path) && wallpaper) {
@@ -88,7 +91,7 @@ static void load_wallpaper(const char *path)
             g_clear_error(&e);
         }
     }
-    if (win) gtk_widget_queue_draw(win);
+    redraw_all();
 }
 
 static void load_config(void)
@@ -177,7 +180,7 @@ static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
     int H = gtk_widget_get_allocated_height(w);
     GdkDisplay *d = gdk_display_get_default();
     int n = gdk_display_get_n_monitors(d);
-    if (n <= 1) {
+    if (n <= 1 || hde_wl_is_layer(GTK_WINDOW(win))) {        /* Wayland: this surface is one screen */
         paint_wallpaper(cr, 0, 0, W, H);
         return FALSE;   /* keep drawing the child icons */
     }
@@ -1958,11 +1961,62 @@ static void m_about(GtkMenuItem *i, gpointer d)
 /* ---------- screens changed (F8, a monitor plugged in or out): cover the whole desktop again ---------- */
 static guint screens_id;
 
+/* Wayland: a layer surface covers one screen only; the others get a surface that just shows the wallpaper */
+static gboolean extra_draw(GtkWidget *w, cairo_t *cr, gpointer d)
+{
+    (void)d;
+    paint_wallpaper(cr, 0, 0, gtk_widget_get_allocated_width(w), gtk_widget_get_allocated_height(w));
+    return TRUE;
+}
+
+static void update_extra_wallpapers(GdkMonitor *main_mon)
+{
+    if (!win || !hde_wl_is_layer(GTK_WINDOW(win))) return;
+    if (extra_bg) g_ptr_array_free(extra_bg, TRUE);
+    extra_bg = g_ptr_array_new_with_free_func((GDestroyNotify)gtk_widget_destroy);
+    GdkDisplay *dpy = gdk_display_get_default();
+    for (int i = 0; i < gdk_display_get_n_monitors(dpy); i++) {
+        GdkMonitor *m = gdk_display_get_monitor(dpy, i);
+        if (m == main_mon) continue;
+        GtkWidget *w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        if (!hde_wl_layer_init(GTK_WINDOW(w), "hde-wallpaper", HDE_LAYER_BACKGROUND, HDE_EDGE_ALL, HDE_KB_NONE)) {
+            gtk_widget_destroy(w);
+            continue;
+        }
+        hde_wl_layer_exclusive(GTK_WINDOW(w), -1);
+        hde_wl_layer_monitor(GTK_WINDOW(w), m);
+        gtk_widget_set_app_paintable(w, TRUE);
+        g_signal_connect(w, "draw", G_CALLBACK(extra_draw), NULL);
+        gtk_widget_show(w);
+        g_ptr_array_add(extra_bg, w);
+    }
+    DBG("Wayland: wallpaper on %u more screen(s)", extra_bg->len);
+}
+
+static void redraw_all(void)
+{
+    if (win) gtk_widget_queue_draw(win);
+    for (guint i = 0; extra_bg && i < extra_bg->len; i++) gtk_widget_queue_draw(extra_bg->pdata[i]);
+}
+
 static gboolean desktop_place(gpointer d)
 {
     (void)d;
     screens_id = 0;
     if (!win) return G_SOURCE_REMOVE;
+    if (hde_wl_is_layer(GTK_WINDOW(win))) {
+        GdkMonitor *m = hde_main_monitor();
+        if (m) gdk_monitor_get_geometry(m, &mon);
+        mon.x = mon.y = 0;                               /* the surface's own coordinates */
+        hde_wl_layer_monitor(GTK_WINDOW(win), m);
+        gtk_widget_set_size_request(win, mon.width, mon.height);
+        update_extra_wallpapers(m);
+        reload_icons();
+        redraw_all();
+        fprintf(stderr, "hde-desktop: screens changed: desktop %dx%d (Wayland layer shell, %d screen(s))\n", mon.width,
+                mon.height, gdk_display_get_n_monitors(gdk_display_get_default()));
+        return G_SOURCE_REMOVE;
+    }
     GdkDisplay *dpy = gdk_display_get_default();
     GdkMonitor *m = gdk_display_get_primary_monitor(dpy);
     if (!m) m = gdk_display_get_monitor(dpy, 0);
@@ -2324,15 +2378,23 @@ int main(int argc, char **argv)
 
     win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(win), "hde-desktop");
-    gtk_window_set_type_hint(GTK_WINDOW(win), GDK_WINDOW_TYPE_HINT_DESKTOP);
-    gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
-    gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
-    gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
-    gtk_window_stick(GTK_WINDOW(win));
-    gtk_window_set_keep_below(GTK_WINDOW(win), TRUE);   /* never on top of the panel / other windows */
-    gtk_widget_set_size_request(win, sw, sh);
-    gtk_window_set_default_size(GTK_WINDOW(win), sw, sh);
-    gtk_window_move(GTK_WINDOW(win), 0, 0);
+    if (hde_wl_layer_init(GTK_WINDOW(win), "hde-desktop", HDE_LAYER_BACKGROUND, HDE_EDGE_ALL, HDE_KB_ON_DEMAND)) {
+        /* Wayland: the background layer of the main screen (under the panel too); keys when clicked */
+        hde_wl_layer_exclusive(GTK_WINDOW(win), -1);
+        hde_wl_layer_monitor(GTK_WINDOW(win), m);
+        mon.x = mon.y = 0;
+        gtk_widget_set_size_request(win, mon.width, mon.height);
+    } else {
+        gtk_window_set_type_hint(GTK_WINDOW(win), GDK_WINDOW_TYPE_HINT_DESKTOP);
+        gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
+        gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
+        gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
+        gtk_window_stick(GTK_WINDOW(win));
+        gtk_window_set_keep_below(GTK_WINDOW(win), TRUE);   /* never on top of the panel / other windows */
+        gtk_widget_set_size_request(win, sw, sh);
+        gtk_window_set_default_size(GTK_WINDOW(win), sw, sh);
+        gtk_window_move(GTK_WINDOW(win), 0, 0);
+    }
     gtk_widget_set_app_paintable(win, TRUE);
     gtk_widget_add_events(win, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK | GDK_KEY_PRESS_MASK);
     g_signal_connect(win, "draw", G_CALLBACK(on_draw), NULL);
@@ -2370,7 +2432,10 @@ int main(int argc, char **argv)
     }
 
     gtk_widget_show_all(win);
-    gdk_window_lower(gtk_widget_get_window(win));         /* even without a WM, or when the WM ignores the DESKTOP hint */
+    if (hde_wl_is_layer(GTK_WINDOW(win))) {
+        update_extra_wallpapers(m);
+        fprintf(stderr, "hde-desktop: Wayland: desktop on the background layer, %dx%d\n", mon.width, mon.height);
+    } else gdk_window_lower(gtk_widget_get_window(win));  /* even without a WM, or when the WM ignores the DESKTOP hint */
     g_signal_connect(scr, "monitors-changed", G_CALLBACK(on_screens_changed), NULL);
     g_signal_connect(scr, "size-changed", G_CALLBACK(on_screens_changed), NULL);
     gtk_main();

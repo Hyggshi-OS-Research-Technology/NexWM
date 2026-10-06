@@ -92,12 +92,22 @@ static char *uptime_text(double sec)
     return g_strdup_printf("%ld min", m);
 }
 
-/* Wayland: "Wayland (labwc 0.8.4)" — labwc tells its version to the programs it starts */
+/* Wayland: "Wayland (labwc 0.8.4)" — labwc gives the programs it starts LABWC_PID */
 static char *wayland_server(void)
 {
-    const char *v = g_getenv("LABWC_VER");
     const char *desk = g_getenv("XDG_SESSION_DESKTOP");
-    if (g_getenv("LABWC_PID") || v) return g_strdup_printf("Wayland (labwc%s%s)", v ? " " : "", v ? v : "");
+    if (g_getenv("LABWC_PID")) {
+        char *out = NULL, *res = NULL;
+        const char *argv[] = { "labwc", "--version", NULL };
+        if (g_spawn_sync(NULL, (char **)argv, NULL, G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL, NULL, NULL, &out,
+                         NULL, NULL, NULL) && out && g_str_has_prefix(out, "labwc ")) {
+            char *v = g_strndup(out + 6, strcspn(out + 6, " \n"));
+            res = g_strdup_printf("Wayland (labwc %s)", v);
+            g_free(v);
+        }
+        g_free(out);
+        return res ? res : g_strdup("Wayland (labwc)");
+    }
     return g_strdup_printf("Wayland%s%s%s", desk ? " (" : "", desk ? desk : "", desk ? ")" : "");
 }
 
@@ -474,6 +484,8 @@ GtkWidget *page_about_new(void)
     char *up = uptime_text(si.uptime);
     add_fact(sw, "Operating system", si.os);
     if (base) add_fact(sw, "Based on", base);
+    if (g_getenv("HDE_DEBUG"))
+        fprintf(stderr, "hde-settings: about: window manager: %s; display server: %s\n", wm ? wm : "none", xs);
     add_fact(sw, "Kernel", kern);
     add_fact(sw, "Desktop", desk);
     add_fact(sw, "Window manager", wm ? wm : "None running");

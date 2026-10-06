@@ -1238,6 +1238,7 @@ static void build_categories(gboolean with_favorites, int width)
     gtk_widget_add_events(cats_box, GDK_LEAVE_NOTIFY_MASK);
     cats_scroll = scrolled(cats_box);
     gtk_widget_set_size_request(cats_scroll, width, -1);
+    gtk_widget_set_hexpand(cats_scroll, FALSE);           /* a fixed column (see build_modern) */
 }
 
 static GtkWidget *build_modern(void)
@@ -1248,6 +1249,9 @@ static GtkWidget *build_modern(void)
         GtkWidget *side = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
         add_class(side, "sm-sidebar");
         gtk_widget_set_size_request(side, 180 + s * 20, -1);
+        /* the ellipsizing labels inside want to expand: without this GtkBox gives the column extra room and draws it
+         * centred in it (empty gaps on both sides) */
+        gtk_widget_set_hexpand(side, FALSE);
         GtkWidget *user = gtk_button_new();
         add_class(user, "sm-user");
         gtk_widget_set_can_focus(user, FALSE);

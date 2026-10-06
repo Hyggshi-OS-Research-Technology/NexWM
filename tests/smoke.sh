@@ -255,6 +255,13 @@ if pactl info >/dev/null 2>&1; then
     pactl set-sink-volume @DEFAULT_SINK@ 50%; xdotool key F3; sleep 1.3
     v=$(vol); if [ "$v" = 50 ]; then pass "fkeys_sound=false gives F1-F3 back to applications"; else fail "fkeys_sound=false (F3 still changed volume to $v%)"; fi
     sed -i '/^fkeys_sound=/d' "$SETTINGS_INI"; sleep 2
+    # what labwc's key bindings run in the Wayland session, here on X11
+    pactl set-sink-volume @DEFAULT_SINK@ 50%; c0=$(nlog "hde-panel: command 5 ")
+    "$B/hde-hotkeys" --action volume-up; sleep 1.3
+    v=$(vol)
+    if [ "$v" = 55 ] && [ "$(nlog "hde-panel: command 5 ")" -gt "$c0" ]; then
+        pass "hde-hotkeys --action volume-up (the Wayland key bindings) raises the volume and shows the OSD"
+    else fail "hde-hotkeys --action volume-up raises the volume and shows the OSD (50% -> $v%)"; fi
 else
     skip "no PulseAudio server: F1/F2/F3 volume tests"
 fi
@@ -767,6 +774,12 @@ if grep -q "^Desktop memory now: " "$OUT/about.txt" && grep -q " hde-panel " "$O
     pass "hde-settings --about: $(sed -n 's/^Desktop memory now: //p' "$OUT/about.txt")"
 else fail "hde-settings --about lists the memory of the desktop's programs"; fi
 sed -n '/^Desktop memory now/,$p' "$OUT/about.txt" | sed 's/^/INFO: /' >> "$OUT/results.txt"
+# where the desktop's memory goes (largest mappings, PSS in kB; "[anon]" = the heap)
+dp=$(pgrep -x hde-desktop | head -n 1)
+if [ -n "$dp" ] && [ -r "/proc/$dp/smaps" ]; then
+    awk '/^[0-9a-f]+-[0-9a-f]+ /{n=$6; if (n == "") n="[anon]"} /^Pss:/{p[n]+=$2} END{for (k in p) printf "%d %s\n", p[k], k}' \
+        "/proc/$dp/smaps" | sort -rn | head -n 8 | sed 's/^/INFO: hde-desktop PSS kB: /' >> "$OUT/results.txt"
+fi
 
 # ---------- 6. Dark mode ----------
 "$B/hde-settings" --style dark > "$OUT/style-dark.log" 2>&1
@@ -911,6 +924,16 @@ EOF
 sleep 3
 check "back to the defaults: the panel returns to the bottom, 34 px" grep -q "hde-panel: settings changed: panel at 0,766 1280x34" "$OUT/session.log"
 check "... and the desktop icons follow" grep -q "hde-desktop: panel now takes 0 px at the top, 34 px at the bottom" "$OUT/session.log"
+
+# labwc's configuration for the Wayland session, written from settings.ini (tests/wayland-test.sh runs it for real)
+echo "fkeys_sound=false" >> "$SETTINGS_INI"
+"$B/hde-settings" --wayland-config "$OUT/labwc-config" > "$OUT/labwc-config.log" 2>&1
+RCX="$OUT/labwc-config/rc.xml"
+if grep -q "hde-panel --menu" "$RCX" && grep -q 'key="Print".*hde-hotkeys --action screenshot' "$RCX" && ! grep -q 'key="F3"' "$RCX" &&
+   grep -q '<naturalScroll>yes</naturalScroll>' "$RCX" && [ -s "$OUT/labwc-config/themerc-override" ]; then
+    pass "hde-settings --wayland-config writes labwc's rc.xml from settings.ini (Super, PrtSc; fkeys_sound=false: no F1-F3)"
+else fail "hde-settings --wayland-config writes labwc's rc.xml from settings.ini ($(cat "$OUT/labwc-config.log"))"; fi
+sed -i '/^fkeys_sound=/d' "$SETTINGS_INI"
 
 # ---------- 6d. About: the logo of the system and of its base (os-release), the About window ----------
 l=$(grep "hde-settings: about: .*logo from" "$OUT/settings.log" | head -n 1)

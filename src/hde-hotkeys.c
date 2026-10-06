@@ -21,6 +21,12 @@
  * Brightness needs no extra tool (src/hde-brightness.c): the laptop backlight (directly or through systemd-logind),
  * else software dimming of the screens (desktop monitors, virtual machines).
  *
+ * hde-hotkeys --action NAME: do one of these actions once and exit (no key grabs, works without X): what the key
+ * bindings of the labwc compositor run in the "HDE (Wayland)" session (written by hde-settings --wayland-config).
+ * NAME: volume-up volume-down volume-mute mic-mute brightness-up brightness-down screenshot screenshot-area
+ * screenshot-window clipboard clipboard-area clipboard-window project play next previous stop lock files terminal
+ * desktop run search power menu. The panel is told on D-Bus there (org.hyggshi.HDE.Panel, through gdbus).
+ *
  * hde-session starts hde-hotkeys BEFORE the window manager (and waits for HDE_READY_FD), so these keys belong
  * to HDE even when the WM's own config binds them too (e.g. Openbox rc.xml: Print -> scrot, W-e -> kfmclient,
  * which fail with "Failed to execute child process" when those programs are not installed).
@@ -59,6 +65,7 @@
 
 static volatile sig_atomic_t stop_flag = 0;
 static int debug_on;               /* HDE_DEBUG=1: diagnostic log */
+static int wayland_session;        /* --action in a Wayland session: no X server of ours, the panel listens on D-Bus */
 static volatile sig_atomic_t reload_flag = 0;
 static Display *dpy;
 static Window root;
@@ -238,13 +245,34 @@ static void notify(const char *summary, const char *body)
     }
 }
 
-/* Send a command to hde-panel from a child process (separate X connection). */
+/* Send a command to hde-panel on D-Bus (the Wayland session; also when no panel window is found on X):
+ * gdbus call ... org.hyggshi.HDE.Panel.Command <cmd> 0 <arg>. Returns 0 if the panel answered. */
+static int panel_dbus(long cmd, long arg)
+{
+    char c[24], a[24];
+    snprintf(c, sizeof c, "%ld", cmd);
+    snprintf(a, sizeof a, "%ld", arg);
+    pid_t p = fork();
+    if (p < 0) return -1;
+    if (p == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); dup2(devnull, STDERR_FILENO); }
+        execlp("gdbus", "gdbus", "call", "--session", "--dest", "org.hyggshi.HDE.Panel", "--object-path",
+               "/org/hyggshi/HDE/Panel", "--method", "org.hyggshi.HDE.Panel.Command", c, "0", a, (char *)NULL);
+        _exit(127);
+    }
+    int st = 0;
+    if (waitpid(p, &st, 0) != p) return -1;
+    return WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : -1;
+}
+
+/* Send a command to hde-panel from a child process (separate X connection, or D-Bus). */
 static void child_send_panel(long cmd, long arg)
 {
-    Display *d = XOpenDisplay(NULL);
-    if (!d) return;
-    hde_ipc_send(d, cmd, arg, CurrentTime);
-    XCloseDisplay(d);
+    Display *d = wayland_session ? NULL : XOpenDisplay(NULL);
+    int rc = d ? hde_ipc_send(d, cmd, arg, CurrentTime) : -1;
+    if (d) XCloseDisplay(d);
+    if (rc != 0) panel_dbus(cmd, arg);
 }
 
 /* Run the volume/microphone command in a child process (serialized with flock), then ask the panel to show the OSD. */
@@ -273,7 +301,7 @@ static void brightness_key(int step)
     snprintf(lock, sizeof lock, "%s/hde-hotkeys-brightness.lock", rt && *rt ? rt : "/tmp");
     int lfd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (lfd >= 0 && flock(lfd, LOCK_EX) != 0) { close(lfd); lfd = -1; }
-    Display *d = XOpenDisplay(NULL);
+    Display *d = wayland_session ? NULL : XOpenDisplay(NULL);   /* Wayland: the backlight only (no X gamma) */
     HdeBrightness b;
     int ok = hde_brightness_set(d, step, 1, &b);
     char desc[384];
@@ -281,7 +309,8 @@ static void brightness_key(int step)
     if (debug_on || !ok || b.note[0])
         fprintf(stderr, "hde-hotkeys: brightness %s: %s%s%s%s\n", step > 0 ? "up" : "down", desc,
                 b.via[0] ? " (via " : "", b.via, b.via[0] ? ")" : "");
-    if (ok && d) hde_ipc_send(d, HDE_CMD_OSD_BRIGHTNESS, b.percent, CurrentTime);
+    if (ok && (!d || hde_ipc_send(d, HDE_CMD_OSD_BRIGHTNESS, b.percent, CurrentTime) != 0))
+        panel_dbus(HDE_CMD_OSD_BRIGHTNESS, b.percent);
     if (d) XCloseDisplay(d);
     if (!ok) {
         char body[400];
@@ -390,6 +419,14 @@ static void project(Time t)
         notify("Project", "hde-settings is missing. Reinstall HDE (make && sudo make install).");
         return;
     }
+    if (wayland_session) {              /* the Project window drives XRandR: on Wayland, Settings > Display instead */
+        pid_t p = fork_child();
+        if (p == 0) {
+            execl(path, "hde-settings", "display", (char *)NULL);
+            _exit(127);
+        }
+        return;
+    }
     snprintf(targ, sizeof targ, "--time=%lu", (unsigned long)t);
     if (debug_on) fprintf(stderr, "hde-hotkeys: project: %s --project %s\n", path, targ);
     pid_t p = fork_child();
@@ -457,6 +494,7 @@ static void media(const char *what)
 
 static void toggle_show_desktop(void)
 {
+    if (!dpy) { panel_dbus(HDE_CMD_SHOW_DESKTOP, 0); return; }    /* Wayland: the panel's taskbar does it */
     Atom a = XInternAtom(dpy, "_NET_SHOWING_DESKTOP", False);
     Atom type;
     int fmt;
@@ -480,7 +518,8 @@ static void toggle_show_desktop(void)
 
 static void panel_cmd(long cmd, Time t)
 {
-    int rc = hde_ipc_send(dpy, cmd, 0, t);
+    int rc = dpy ? hde_ipc_send(dpy, cmd, 0, t) : -1;
+    if (rc != 0) rc = panel_dbus(cmd, 0);
     if (rc != 0) fprintf(stderr, "hde-hotkeys: hde-panel is not running (command %ld ignored)\n", cmd);
     else if (debug_on) fprintf(stderr, "hde-hotkeys: sent command %ld to hde-panel (time %lu)\n", cmd, (unsigned long)t);
 }
@@ -780,14 +819,54 @@ static int acquire_instance_lock(void)
     return XGetSelectionOwner(dpy, sel) == w;
 }
 
+/* hde-hotkeys --action NAME (see the top of this file) */
+static int run_action(const char *name)
+{
+    static const struct { const char *name; int act; } actions[] = {
+        { "volume-up", A_VOL_UP }, { "volume-down", A_VOL_DOWN }, { "volume-mute", A_VOL_MUTE }, { "mic-mute", A_MIC_MUTE },
+        { "brightness-up", A_BRIGHT_UP }, { "brightness-down", A_BRIGHT_DOWN }, { "screenshot", A_SHOT_FULL },
+        { "screenshot-area", A_SHOT_AREA }, { "screenshot-window", A_SHOT_WIN }, { "clipboard", A_CLIP_FULL },
+        { "clipboard-area", A_CLIP_AREA }, { "clipboard-window", A_CLIP_WIN }, { "project", A_PROJECT },
+        { "play", A_PLAY }, { "next", A_NEXT }, { "previous", A_PREV }, { "stop", A_STOP }, { "lock", A_LOCK },
+        { "files", A_FILES }, { "terminal", A_TERMINAL }, { "desktop", A_DESKTOP }, { "run", A_RUN },
+        { "search", A_SEARCH }, { "power", A_POWER },
+    };
+    debug_on = getenv("HDE_DEBUG") != NULL;
+    load_config();
+    const char *w = getenv("WAYLAND_DISPLAY");
+    wayland_session = w && *w;
+    dpy = wayland_session ? NULL : XOpenDisplay(NULL);
+    if (dpy) root = DefaultRootWindow(dpy);
+    signal(SIGCHLD, SIG_DFL);
+    int act = -1;
+    for (unsigned i = 0; i < sizeof actions / sizeof actions[0]; i++)
+        if (!strcmp(name, actions[i].name)) act = actions[i].act;
+    if (debug_on) fprintf(stderr, "hde-hotkeys: action %s (%s)\n", name, wayland_session ? "Wayland" : "X11");
+    if (!strcmp(name, "menu")) panel_cmd(HDE_CMD_MENU, CurrentTime);
+    else if (act >= 0) do_action(act, CurrentTime);
+    else {
+        fprintf(stderr, "hde-hotkeys: unknown action '%s'\n", name);
+        if (dpy) XCloseDisplay(dpy);
+        return 2;
+    }
+    if (dpy) XCloseDisplay(dpy);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    const char *xdg0 = getenv("XDG_CONFIG_HOME"), *home0 = getenv("HOME");
+    if (xdg0 && *xdg0) snprintf(cfg_path, sizeof cfg_path, "%s/hde/settings.ini", xdg0);
+    else snprintf(cfg_path, sizeof cfg_path, "%s/.config/hde/settings.ini", home0 ? home0 : "/tmp");
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--action") && i + 1 < argc) return run_action(argv[i + 1]);
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf("hde-hotkeys: HDE system shortcuts daemon (see the comment at the top of hde-hotkeys.c)\n"
                    "Config: ~/.config/hde/settings.ini  super_menu fkeys_sound fkeys_display media_keys system_shortcuts\n"
                    "        screenshot_tool\n"
-                   "Send SIGHUP to reload.\n");
+                   "Send SIGHUP to reload.\n"
+                   "hde-hotkeys --action NAME   do one action and exit (labwc's key bindings in the Wayland session)\n");
             return 0;
         }
     }

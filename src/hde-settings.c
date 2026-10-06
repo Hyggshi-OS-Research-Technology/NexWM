@@ -10,6 +10,7 @@
  *   hde-settings --display-mode pc|duplicate|extend|second    --displays    --brightness [+N|-N|N]
  *   hde-settings --about      this computer, the system and the memory HDE uses, as text
  *   hde-settings --about-window   the "About HDE" window (logo of the system, HDE version, credits)
+ *   hde-settings --wayland-config [DIR] [--reload]   the labwc configuration of the "HDE (Wayland)" session
  *   hde-settings --version
  *
  * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound,touchpad,
@@ -1119,6 +1120,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "--about")) return about_cli();
+    if (argc > 1 && !strcmp(argv[1], "--wayland-config")) return wayland_config_cli(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "--about-window")) {
         signal(SIGPIPE, SIG_IGN);
         gtk_init(&argc, &argv);
@@ -1193,6 +1195,7 @@ int main(int argc, char **argv)
                "       hde-settings --brightness [+N|-N|N]   show or change the screen brightness\n"
                "       hde-settings --about            this computer, the system and the memory HDE uses\n"
                "       hde-settings --about-window     the About HDE window\n"
+               "       hde-settings --wayland-config [DIR] [--reload]   write labwc's configuration (Wayland session)\n"
                "       hde-settings --version\n"
                "       hde-settings --style dark|light|toggle   switch Dark mode without opening the window\n");
         return 0;

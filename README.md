@@ -1,21 +1,22 @@
 # HDE — Hyggshi Desktop Environment
 
-A lightweight GTK3 / X11 desktop environment: panel (Start menu, taskbar, system tray, status
-area, notifications, clock), desktop icons and wallpaper, **Hyggshi Settings**, a session
+A lightweight GTK3 desktop environment for X11 **and Wayland**: panel (Start menu, taskbar, system tray, status
+area, notifications, clock, extensions), desktop icons and wallpaper, **Hyggshi Settings**, a session
 manager and a system-hotkeys daemon.
 
 ## Features
 
 | Area | What you get |
 |------|--------------|
-| **Start menu** | Categories, custom launchers (`~/.config/hde/start-apps/*.desktop`), **press Super to open/close**, just start typing to search apps (or `Super+S`) |
-| **Panel** | Taskbar + workspaces (libwnck), system tray (XEmbed + StatusNotifierItem), Wi-Fi / Bluetooth / volume / battery status, notification bell with Do Not Disturb, calendar on the clock |
+| **Start menu** | Three layouts (*Settings → Start Menu*): **Modern** like Linux Mint's Cinnamon menu — your picture and name, places (Home, Documents, Downloads, …), favorites and lock / log out / power on the left, a search box, the categories (they open under the mouse) and the apps with their descriptions on the right; **Kickoff** like KDE Plasma — search on top, favorites as tiles, *Applications* / *Places* tabs, Sleep / Restart / Shut Down; **Classic**, the small drop-down menu. **Press Super to open/close**, just type to search (names, descriptions, keywords, commands; accents optional), arrows / Tab / Enter / Esc, right-click (or the Menu key) an app: Add to Favorites, Pin to Panel, Add to Desktop. Recent files. Options: what it shows, icon size, menu size, the Start button's label and icon (☰, the logo of your system, the HDE logo) |
+| **Panel** | *Settings → Panel*, all live: **bottom or top**, height, transparency, which items it shows (Start button, Show Desktop, Run, pinned apps, taskbar with or without titles and grouping, workspaces, tray, status, notifications, clock), 12/24-hour clock with date and seconds. **Pinned apps** and **extensions**: processor and memory use (built in) or the output of any command refreshed every few seconds (weather, uptime, free disk space, … presets), with a command on click. Taskbar + workspaces (libwnck; on Wayland wlr-foreign-toplevel), system tray (XEmbed + StatusNotifierItem), Wi-Fi / Bluetooth / volume / battery status, notification bell with Do Not Disturb, calendar on the clock |
 | **Notifications** | Built-in `org.freedesktop.Notifications` 1.2 daemon (actions, images, urgency, sounds, history) — `notify-send` and every app work |
 | **Hotkeys** | Super = Start menu, **F1/F2/F3 = mute / volume down / volume up**, **F6/F7 = screen darker / brighter**, **F8 (or Super+P, or the display key of a laptop) = Project**, media + brightness keys with an on-screen display, screenshots, lock, terminal, files, run |
 | **Screens (Project)** | **F8** opens a *Project* window like Windows + P: **PC screen only · Duplicate · Extend · Second screen only** for a projector, TV or second monitor (F8 again = next choice, Enter applies). Built on XRandR — no `xrandr`/`arandr` needed. *Second screen only* goes back by itself after 15 s unless kept (in case the other screen shows nothing). Plugging in a screen opens the window (or extends / duplicates, as chosen); unplugging the screen in use turns the computer's screen back on; the choice comes back at the next login for the same screens. The panel and desktop follow every change; each screen gets the whole wallpaper |
 | **Brightness** | **F6 / F7** and the brightness keys, with an OSD, **without brightnessctl**: the laptop backlight (directly or through systemd-logind), or software dimming of every screen on desktop monitors and virtual machines (which have no backlight a program can change). Slider in *Settings → Display*; *Night Light* (warmer colours) works too |
 | **Screenshots** | Built-in `hde-screenshot` (no scrot or other tool needed): whole screen, drag an area, or the active window; saved to `~/Pictures/Screenshots`, copied to the clipboard, announced with a notification (Open / Show in Folder). Hold `Ctrl` to only copy to the clipboard. **Start menu → Screenshot** opens the *Screenshot* window: choose whole screen / window / area and a delay, then Copy, Save As, Open or Show in Folder |
-| **About** | *Settings → About*: HDE version and build, the computer (model, processor, RAM, graphics, storage, screens), the system, and **how much RAM HDE uses right now** (per program, measured live); *Copy system info* for bug reports. `hde-settings --about` prints the same |
+| **About** | *Settings → About* and the **About HDE** window (desktop menu): the **logo of your system** from `/etc/os-release` (`ID=` hyggshios, ubuntu, debian, linuxmint, … — the logo the system installs, else HDE's own copy of 27 distribution logos, else a badge), its name and version, **"Based on Debian 13 (trixie)" / "Ubuntu 24.04 LTS"** with that logo too, its links; HDE version and build, the computer (model, processor, RAM, graphics, storage, screens), and **how much RAM HDE uses right now** (per program, measured live); *Copy system info* for bug reports. `hde-settings --about` prints the same |
+| **Wayland** | The **HDE (Wayland)** session on the login screen (needs `labwc`): the labwc compositor with HDE's panel, desktop, Start menu, notifications and OSD as layer-shell surfaces, a Wayland taskbar, the same keys (Super, F1–F3, F6–F8, PrtSc with `grim`, …) as labwc key bindings, title bars in HDE's colours; Settings for keyboard, touchpad and appearance apply there too |
 | **Desktop** | Wallpaper + icons from `~/Desktop` with a clear selection frame (accent color) and hover highlight; **right-click an icon for its own menu** — Open, Open With, Open in Terminal, Cut, Copy, Rename, Move to Trash, Properties; rubber-band and Ctrl+click selection; Paste, Delete, F2 and the usual keyboard shortcuts |
 | **Network** | Real Wi-Fi list (NetworkManager): scan, signal, security, connect with password, disconnect, forget, hidden networks; wired/VPN devices |
 | **Bluetooth** | Device list straight from BlueZ: paired + nearby devices, scan, pair (PIN/passkey/confirmation agent), connect, disconnect, remove |
@@ -28,16 +29,19 @@ manager and a system-hotkeys daemon.
 ## Install
 
 ```sh
-# build dependencies
-sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev
+# build dependencies (libgtk-layer-shell-dev: for the Wayland session)
+sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libgtk-layer-shell-dev
 # recommended runtime packages
 sudo apt install metacity network-manager bluez pipewire-pulse policykit-1-gnome \
                  gnome-themes-extra libnotify-bin playerctl
+# for the HDE (Wayland) session: the compositor, screenshots, screen lock
+sudo apt install labwc grim slurp swaylock
 make
 sudo make install          # PREFIX=/usr/local by default
 ```
 
-Log out and choose the **HDE** session on the login screen. Logs: `~/.cache/hde/session.log`.
+Log out and choose the **HDE** session on the login screen — or **HDE (Wayland)** (shown once `labwc` is installed).
+Logs: `~/.cache/hde/session.log`.
 Updating an older copy (or one unpacked from a ZIP that still had prebuilt programs in `build/`): run
 `make clean && make && sudo make install`, so that every program is rebuilt from the current sources.
 **After updating HDE, log out and back in once** — `make dev` restarts the desktop, panel and hotkeys, but the order in
@@ -51,7 +55,7 @@ Reload a running session after rebuilding: `make dev` (from `./build`) or `sudo 
 
 | Keys | Action |
 |------|--------|
-| `Super` (press and release) | Open / close the Start menu — type to search |
+| `Super` (press and release), `Ctrl+Esc` | Open / close the Start menu — type to search (on Wayland with labwc older than 0.7.3: `Super+Space`) |
 | `Super+S` | Search applications |
 | `Super+R`, `Alt+F2` | Run a command |
 | `Super+E` | File manager |
@@ -81,10 +85,10 @@ On the desktop: `Enter` open, `Alt+Enter` properties, `F2` rename, `Delete` move
 | Program | Role |
 |---------|------|
 | `hde-session` | Session manager. `hde-session wm` switches the window manager live, `hde-session restart` restarts panel + desktop, `hde-session {logout,reboot,shutdown,suspend,lock}` |
-| `hde-panel` | Panel, Start menu, app search, notifications, OSD. `hde-panel --menu/--search/--run/--power/--osd-volume` control the running panel |
+| `hde-panel` | Panel, Start menu, app search, notifications, OSD. `hde-panel --menu/--search/--run/--power/--show-desktop/--osd-volume/--osd-brightness N` control the running panel (X11 ClientMessage or D-Bus `org.hyggshi.HDE.Panel`) |
 | `hde-desktop` | Wallpaper + desktop icons (icon menu, Cut/Copy/Paste compatible with GNOME/Xfce file managers) |
-| `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script; `--project` (the F8 window), `--display-mode pc\|duplicate\|extend\|second`, `--displays`, `--brightness [+N\|-N\|N]`, `--about` (this computer, the system, the RAM HDE uses) |
-| `hde-hotkeys` | System shortcuts (Xlib + XInput2) |
+| `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script; `--project` (the F8 window), `--display-mode pc\|duplicate\|extend\|second`, `--displays`, `--brightness [+N\|-N\|N]`, `--about` (this computer, the system, the RAM HDE uses), `--about-window`, `--wayland-config [DIR] [--reload]` (labwc's configuration for the Wayland session) |
+| `hde-hotkeys` | System shortcuts (Xlib + XInput2). `hde-hotkeys --action NAME` does one action (volume-up, brightness-down, screenshot-area, project, lock, …): what the key bindings of the Wayland session run |
 | `hde-screenshot` | Screenshot tool: `hde-screenshot [--area \| --window] [--delay N] [--file PATH \| --clipboard] [--no-clipboard] [--no-notify]`; `hde-screenshot --ui` = the Screenshot window |
 | `hde-xsettings` | XSETTINGS manager: live theme / Dark mode / icons / fonts for all GTK apps; also HDE's input service: applies the touchpad / mouse settings (login, changes, hotplug, and back when another program changes them; keeps doing that when another XSETTINGS manager runs); and its display service: screens plugged in / unplugged, the layout chosen with F8 at login, software brightness and Night Light after a screen change. `--status`: devices vs Settings, screens, brightness method |
 
@@ -103,7 +107,15 @@ login), `treat_as_touchpad` (names of touchpads that X sees as a mouse, e.g. ins
 `pointer_speed` (0–1), `pointer_acceleration`, `display_connect` (when a screen is plugged in: `ask` = the F8 window,
 `extend`, `duplicate`, `second`, `nothing`), `display_mode` + `display_outputs` (the last F8 choice and for which
 screens), `night_light`, `night_light_temperature` (kelvin, default 4000), …
-Desktop wallpaper and icon positions: `~/.config/hde/config.ini`.
+Panel: `panel_position` (`bottom`/`top`), `panel_size`, `panel_opacity`, `panel_show_menu` / `_desktop` / `_run` /
+`_launchers` / `_taskbar` / `_workspaces` / `_tray` / `_status` / `_notifications` / `_clock`, `panel_taskbar_labels`,
+`panel_taskbar_group`, `clock_24h`, `clock_show_date`, `clock_show_seconds`, `panel_launchers` (pinned apps),
+`panel_applets` + one `[applet:ID]` group each (`type=cpu|memory|command|separator`, `label`, `command`, `interval`,
+`click`). Start menu: `menu_style` (`modern`, `kickoff`, `classic`), `menu_show_sidebar` / `_places` / `_favorites` /
+`_recent` / `_descriptions`, `menu_hover_switch`, `menu_icon_size`, `menu_size`, `menu_favorites`, `menu_button_label`,
+`menu_button_icon` (`menu`, `os`, `hde`, `none` or an icon name). All documented in `src/hde-panel-config.h`.
+Desktop wallpaper and icon positions: `~/.config/hde/config.ini`. The Wayland session's labwc configuration is
+written to `~/.config/hde/labwc/` from these settings (rewritten when they change).
 
 ## Tests
 
@@ -121,6 +133,13 @@ PC screen only checked with `xrandr`, the panel and desktop following, F6/F7 sof
 ramps), the layout restored at login, a screen plugged in opening the Project window, a (fake) laptop backlight, and
 the RAM the desktop uses. `tests/randr-plan-test.c` checks the layouts themselves without an X server.
 
+`tests/wayland-test.sh` runs the HDE (Wayland) session for real — labwc with its headless backend (no screen or GPU),
+started by `hde-start --wayland` — and checks the panel and desktop as layer-shell surfaces, the Start menu through
+D-Bus, the Super key and Ctrl+Esc as labwc key bindings, typing in the menu, the taskbar with a real window, Show
+Desktop, the volume key, PrtSc with `grim`, notifications, Settings and About on Wayland, the panel moved to the top,
+labwc reloading its configuration when a setting changes, and logging out. CI runs it on Debian 13. Needs
+`labwc grim wtype dbus zenity imagemagick`.
+
 `tests/input-test.sh` (CI only: needs root) checks the touchpad settings against the real X input drivers: Xorg with
 the libinput, synaptics and evdev drivers and virtual touchpads / mice created through `/dev/uinput`. It checks natural
 scrolling and tap to click on a fresh account, live changes, hotplug and remove/re-add (suspend/resume), changes made
@@ -136,8 +155,13 @@ line of `~/.cache/hde/session.log` show the commit HDE was built from.
 
 - `src/`: the GTK3 desktop programs (panel, desktop, settings pages, hotkeys, xsettings).
 - `apps/hde-session.c`: session manager. `src/hde-wm.h`: window-manager table shared with Settings.
-- `hde-core/`: backend-neutral APIs and core services; `backend/x11/`: X11 implementation;
-  `backend/wayland/`: placeholder for the next phase.
-- Panel IPC (`src/hde-ipc.h`): root property `_HDE_PANEL_WINDOW` + ClientMessage `_HDE_PANEL_COMMAND`.
+- `hde-core/`: backend-neutral APIs and core services; `backend/x11/`, `backend/wayland/`: session actions.
+- Panel IPC (`src/hde-ipc.h`): root property `_HDE_PANEL_WINDOW` + ClientMessage `_HDE_PANEL_COMMAND`; D-Bus
+  `org.hyggshi.HDE.Panel` (`Command(i command, u time, i argument)`) on both X11 and Wayland.
+- Wayland: `src/hde-wl.c` (layer-shell helpers, no-ops without gtk-layer-shell), `src/hde-wltaskbar.c`
+  (wlr-foreign-toplevel-management, `protocols/`), `src/hde-settings-wayland.c` (labwc's configuration),
+  `hde-session --wayland` (starts labwc, which starts `hde-session --wayland-inner`).
+- Start menu `src/hde-startmenu.c`, panel settings `src/hde-panel-config.c`, extensions `src/hde-applets.c`,
+  logos of the systems `src/hde-osinfo.c` + `src/hde-svgpath.c` + `data/logos/`.
 
 New features target `hde-core` APIs first; X11/Wayland-specific operations belong in `backend/*`.

@@ -1,5 +1,7 @@
 #!/bin/sh
 # hde-start — entry point of the HDE session (called by the display manager / startx).
+#   hde-start             the X11 session ("HDE" on the login screen)
+#   hde-start --wayland   the Wayland session ("HDE (Wayland)"): the labwc compositor with HDE inside
 # Log: ~/.cache/hde/session.log  (check this file if the session does not come up)
 
 LOGDIR="${XDG_CACHE_HOME:-$HOME/.cache}/hde"
@@ -9,7 +11,30 @@ if [ -w "$LOGDIR" ]; then
     exec >"$LOGDIR/session.log" 2>&1
 fi
 
-echo "hde-start: $(date)  DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset} XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unset}"
+echo "hde-start: $(date)  DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset} XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unset} ${1:-}"
+
+# The display manager's PATH sometimes lacks /usr/local/bin
+case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
+export PATH
+
+if [ "${1:-}" = "--wayland" ]; then
+    # ---- the Wayland session: hde-session writes labwc's configuration and starts labwc, labwc starts the rest
+    HERE="$(dirname "$(readlink -f "$0")")"
+    if [ -x "$HERE/hde-session" ]; then SESSION="$HERE/hde-session"
+    else SESSION="$(command -v hde-session)"; fi
+    if [ -z "$SESSION" ]; then echo "hde-start: hde-session not found (HERE=$HERE PATH=$PATH)"; exit 1; fi
+    if ! command -v labwc >/dev/null 2>&1; then
+        echo "hde-start: the HDE (Wayland) session needs the labwc compositor: sudo apt install labwc"
+        exit 1
+    fi
+    export XDG_CURRENT_DESKTOP=HDE XDG_SESSION_DESKTOP=HDE DESKTOP_SESSION=hde-wayland XDG_SESSION_TYPE=wayland
+    unset DISPLAY GDK_BACKEND GDK_CORE_DEVICE_EVENTS
+    echo "hde-start: running $SESSION --wayland (labwc $(labwc --version 2>/dev/null | head -n1))"
+    if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+        exec dbus-run-session -- "$SESSION" --wayland
+    fi
+    exec "$SESSION" --wayland
+fi
 
 export XDG_CURRENT_DESKTOP=HDE
 export XDG_SESSION_DESKTOP=HDE
@@ -25,10 +50,6 @@ if [ -z "${HDE_XI2:-}" ] && { [ -n "${HDE_CORE_EVENTS:-}" ] || [ -n "${WAYLAND_D
     export GDK_CORE_DEVICE_EVENTS=1
 fi
 
-# The display manager's PATH sometimes lacks /usr/local/bin
-case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
-export PATH
-
 # Prefer the hde-session next to this file (the copy that was just installed), then search PATH
 HERE="$(dirname "$(readlink -f "$0")")"
 if [ -x "$HERE/hde-session" ]; then SESSION="$HERE/hde-session"
@@ -39,7 +60,7 @@ else
 fi
 
 if [ -z "${DISPLAY:-}" ]; then
-    echo "hde-start: DISPLAY is not set — the HDE session needs X11 (pick the 'HDE' session on the login screen, not Wayland, or use startx)."
+    echo "hde-start: DISPLAY is not set — this is the X11 session (pick 'HDE' on the login screen or use startx; on Wayland pick 'HDE (Wayland)')."
     exit 1
 fi
 
