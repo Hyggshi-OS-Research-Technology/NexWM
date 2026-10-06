@@ -327,8 +327,8 @@ static void setup_check_device(Setup *s)
     g_strlcpy(s->hint_name, d.name, sizeof s->hint_name);
     s->hint_id = d.id;
     char *m = g_markup_printf_escaped("You scrolled with <b>%s</b>, which HDE sees as a mouse — usual inside a virtual "
-                                      "machine, or for a touchpad in mouse mode, and then the choice above changes "
-                                      "nothing. Is it your touchpad?", d.name);
+                                      "machine, or for a touchpad in mouse mode — so the choice above does not reach "
+                                      "it. Is it your touchpad?", d.name);
     gtk_label_set_markup(GTK_LABEL(s->hint_label), m);
     g_free(m);
     gtk_widget_show(s->hint);
@@ -661,16 +661,15 @@ void touchpad_setup_show(GtkWindow *parent)
     g_signal_connect(s->adj, "changed", G_CALLBACK(on_test_layout), s);
     g_signal_connect(sw, "scroll-event", G_CALLBACK(on_test_scroll_event), s);
 
-    GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    gtk_box_pack_start(GTK_BOX(outer), bottom, FALSE, FALSE, 0);
-    /* shown after the test page was scrolled with a device that HDE sees as a mouse */
+    /* a row shown after the test page was scrolled with a device that HDE sees as a mouse. The label asks for little
+     * width (it wraps to the width the window already has), so the window does not get wider when the row appears. */
     s->hint = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_style_context_add_class(gtk_widget_get_style_context(s->hint), "tp-hint");
     s->hint_label = gtk_label_new(NULL);
     gtk_label_set_xalign(GTK_LABEL(s->hint_label), 0);
     gtk_label_set_line_wrap(GTK_LABEL(s->hint_label), TRUE);
-    gtk_label_set_max_width_chars(GTK_LABEL(s->hint_label), 62);
-    gtk_label_set_width_chars(GTK_LABEL(s->hint_label), 40);
+    gtk_label_set_max_width_chars(GTK_LABEL(s->hint_label), 30);
+    gtk_label_set_width_chars(GTK_LABEL(s->hint_label), 20);
     gtk_box_pack_start(GTK_BOX(s->hint), s->hint_label, TRUE, TRUE, 0);
     GtkWidget *is_tp = gtk_button_new_with_mnemonic("It is my _touchpad");
     gtk_widget_set_valign(is_tp, GTK_ALIGN_CENTER);
@@ -682,7 +681,10 @@ void touchpad_setup_show(GtkWindow *parent)
     gtk_widget_show_all(s->hint);
     gtk_widget_hide(s->hint);
     gtk_widget_set_no_show_all(s->hint, TRUE);
-    gtk_box_pack_start(GTK_BOX(bottom), s->hint, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(outer), s->hint, FALSE, FALSE, 0);
+
+    GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_box_pack_start(GTK_BOX(outer), bottom, FALSE, FALSE, 0);
     GtkWidget *done = gtk_button_new_with_mnemonic("_Done");
     gtk_style_context_add_class(gtk_widget_get_style_context(done), "suggested-action");
     gtk_widget_set_size_request(done, 110, -1);

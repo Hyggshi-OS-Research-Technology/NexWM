@@ -312,8 +312,8 @@ Now:
 
 - **The test page knows which device scrolled it.** In the *Touchpad scrolling* window (*Settings → Input → Try
   both…*, or opened at the first login), scrolling the test page with a device that X sees as a mouse shows
-  *"You scrolled with “…”, which HDE sees as a mouse — usual inside a virtual machine, or for a touchpad in mouse mode,
-  and then the choice above changes nothing. Is it your touchpad?"* with an **It is my touchpad** button. From then on
+  *"You scrolled with “…”, which HDE sees as a mouse — usual inside a virtual machine, or for a touchpad in mouse mode —
+  so the choice above does not reach it. Is it your touchpad?"* with an **It is my touchpad** button. From then on
   that device follows the touchpad direction (*Like a phone* / *Like a mouse wheel*), applied at once, on every login,
   after hotplug and when another program changes it — like a real touchpad. Saved as `treat_as_touchpad` in
   `settings.ini`.
