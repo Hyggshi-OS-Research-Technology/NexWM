@@ -372,7 +372,8 @@ if command -v xdotool >/dev/null 2>&1; then
             pass "'Like a mouse wheel': a two-finger swipe UP over the test page goes back toward the TOP (${last#*test page: })"
         else fail "'Like a mouse wheel': a two-finger swipe UP over the test page goes back toward the TOP ($last)"; fi
         command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window root "$OUT/shot-22-touchpad-setup-mouse-wheel.png" 2>/dev/null
-        click_widget setup-done "$OUT/touchpad-setup.log"; sleep 1.2
+        click_widget setup-done "$OUT/touchpad-setup.log"
+        i=0; while [ "$i" -lt 40 ] && kill -0 "$TS" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
         if ! kill -0 "$TS" 2>/dev/null && grep -q "^touchpad_direction_chosen=true" "$INI"; then
             pass "Done closes the window and remembers that a direction was chosen"
         else fail "Done closes the window and remembers that a direction was chosen"; kill "$TS" 2>/dev/null; fi

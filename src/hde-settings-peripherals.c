@@ -103,5 +103,7 @@ void gsettings_sync_input(void)
     HdeInputPrefs p;
     hde_input_prefs_load(&p);
     int n = sync_schema(src, "org.gnome.desktop.peripherals", &p) + sync_schema(src, "org.cinnamon.desktop.peripherals", &p);
-    if (n) g_settings_sync();
+    /* hde-settings --apply exits right away: wait until dconf has the values. A window keeps running its main loop,
+     * which finishes the writes by itself (g_settings_sync() would block it until dconf answers). */
+    if (n && !gtk_main_level() && !g_application_get_default()) g_settings_sync();
 }
