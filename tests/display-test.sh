@@ -224,10 +224,14 @@ else fail "Night Light on: warmer colours (gamma ${g:-?})"; fi
 shot 05-night-light
 set_ini night_light false
 "$B/hde-settings" --brightness 100 > /dev/null 2>&1
-sleep 1.5
-g=$(verbose_field DUMMY0 Gamma); b0=$(verbose_field DUMMY0 Brightness)
-if [ "$g" = "1.0:1.0:1.0" ] && [ "$(pct "$b0")" = 100 ]; then pass "Night Light off + 100%: the screens are back to normal"
-else fail "Night Light off + 100%: back to normal (gamma $g, brightness $b0)"; fi
+# the display service notices the change of settings.ini within a second or so (it looks once a second): wait for it
+i=0; while [ "$i" -lt 50 ]; do
+    g=$(verbose_field DUMMY0 Gamma); b0=$(verbose_field DUMMY0 Brightness)
+    [ "$g" = "1.0:1.0:1.0" ] && [ "$(pct "$b0")" = 100 ] && break
+    sleep 0.1; i=$((i + 1))
+done
+if [ "$g" = "1.0:1.0:1.0" ] && [ "$(pct "$b0")" = 100 ]; then pass "Night Light off + 100%: the screens are back to normal (after $((i / 10)).$((i % 10)) s)"
+else fail "Night Light off + 100%: back to normal (gamma $g, brightness $b0 after 5 s; $(grep 'night light' "$LOG" | tail -n 2 | tr '\n' '|'))"; fi
 
 # ---------- 4. Duplicate (without a window) ----------
 "$B/hde-settings" --display-mode duplicate > "$OUT/duplicate.txt" 2>&1
