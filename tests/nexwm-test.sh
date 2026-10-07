@@ -45,6 +45,20 @@ if [ ! -x "$NEXWM" ]; then echo "tests/nexwm-test.sh: $NEXWM is not built (make 
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
 : > "$OUT/results.txt"
+
+# A watchdog for the whole test. A CI job that hangs tells nobody anything: if this is still running after
+# HDE_TEST_WATCHDOG seconds (900), the last line of results.txt is the evidence of where it got stuck, and the test
+# leaves with a failure the annotator can publish (tests/ci-annotate.py reads that file).
+MAIN_PID=$$
+# nothing of the watchdog goes to the stdout of the step: an orphan of a test that finished must not keep the pipe of a
+# CI step open (that alone would hang a job for as long as the sleep lasts)
+( sleep "${HDE_TEST_WATCHDOG:-900}"
+  kill -0 "$MAIN_PID" 2>/dev/null || exit 0          # the test is over: nothing to say
+  printf 'FAIL: nexwm: still running after %ss (the last thing it said: %s)\n' "${HDE_TEST_WATCHDOG:-900}" \
+         "$(tail -n 1 "$OUT/results.txt" 2>/dev/null | cut -c1-200)" >> "$OUT/results.txt"
+  kill -TERM "$MAIN_PID" 2>/dev/null ) >/dev/null 2>&1 &
+WATCHDOG_PID=$!
+trap 'kill -TERM "$WATCHDOG_PID" 2>/dev/null; wait "$WATCHDOG_PID" 2>/dev/null' 0
 FAILS=0
 pass() { echo "PASS: nexwm: $*" | tee -a "$OUT/results.txt"; }
 fail() { echo "FAIL: nexwm: $*" | tee -a "$OUT/results.txt"; FAILS=$((FAILS + 1)); }
@@ -138,6 +152,18 @@ wait_mapstate() {   # a window must end up in this map state: window, state, tri
         [ "$(mapstate "$1")" = "$2" ] && return 0
         i=$((i + 1)); sleep 0.25
     done
+    return 1
+}
+# A process that was asked to leave must really leave. `wait` on its own would block for ever when it does not — a CI
+# job that hangs tells nobody anything, so every wait here has a limit, and running out of it is a failure with the
+# state of the program in the message. After this, `wait PID` can be used to read the exit status: it is gone already.
+wait_gone() {   # pid, what it is (for the message), tries
+    i=0; n=${3:-40}
+    while [ "$i" -lt "$n" ]; do
+        kill -0 "$1" 2>/dev/null || return 0
+        i=$((i + 1)); sleep 0.25
+    done
+    info "$2 (pid $1) is still running after $((n / 4)) s"
     return 1
 }
 # one key of the configuration: press it, then require the line it must leave in the log
@@ -456,7 +482,13 @@ EOF
                 else
                     fail "the window was not asked to close (see $OUT/alpha.out)"
                 fi
-                wait "$ALPHA_PID" 2>/dev/null
+                if wait_gone "$ALPHA_PID" "the window that was asked to close" 40; then
+                    wait "$ALPHA_PID" 2>/dev/null
+                    pass "the window left by itself (a close is not a kill)"
+                else
+                    fail "the window is still there after being asked to close — it was not killed, so it must have been asked"
+                    kill "$ALPHA_PID" 2>/dev/null
+                fi
                 ALPHA_PID=""
                 if wait_root _NET_CLIENT_LIST "$BETA" 20; then
                     hasnt "the window is out of _NET_CLIENT_LIST" "$ALPHA" "$(rval _NET_CLIENT_LIST)"
@@ -470,8 +502,14 @@ EOF
                 wait_mapstate "$BETA" IsViewable 20
                 xdotool key super+shift+q 2>/dev/null
                 if wait_log "window(s) given back" 40; then
-                    wait "$WM_PID" 2>/dev/null
-                    pass "quit leaves the window manager with status 0"
+                    if wait_gone "$WM_PID" "the window manager that quit" 40; then
+                        wait "$WM_PID" 2>/dev/null; st=$?
+                        if [ "$st" = 0 ]; then pass "quit leaves the window manager with status 0"
+                        else fail "quit left the window manager with status $st (0 expected)"; fi
+                    else
+                        fail "quit said it gave the windows back, but the window manager is still running"
+                        kill "$WM_PID" 2>/dev/null
+                    fi
                 else
                     fail "quit did not make the window manager leave (log: $(tail -n 2 "$LOG" | tr '\n' '|'))"
                     kill "$WM_PID" 2>/dev/null
@@ -538,8 +576,14 @@ EOF
                     METACITY_PID=""
                     xdotool key super+shift+q 2>/dev/null
                     if wait_log_in "$OUT/nexwm2.log" "window(s) given back" 40; then
-                        wait "$WM2_PID" 2>/dev/null
-                        pass "and the second window manager leaves cleanly as well"
+                        if wait_gone "$WM2_PID" "the window manager that replaced Metacity" 40; then
+                            wait "$WM2_PID" 2>/dev/null; st=$?
+                            if [ "$st" = 0 ]; then pass "and the second window manager leaves cleanly as well"
+                            else fail "the second window manager left with status $st (0 expected)"; fi
+                        else
+                            fail "the second window manager said it gave the windows back, but it is still running"
+                            kill "$WM2_PID" 2>/dev/null
+                        fi
                     else
                         fail "the window manager that replaced Metacity did not leave"
                         kill "$WM2_PID" 2>/dev/null
@@ -550,6 +594,11 @@ EOF
         fi
     fi
 fi
+
+# What the window manager and the windows of the test said, at the end: when a check fails in CI, the log of the run is
+# not always reachable, and this is what is needed to see what happened (tests/ci-annotate.py publishes these lines).
+info "the window manager said: $(tail -n 4 "$LOG" 2>/dev/null | tr '\n' '|')"
+info "the test windows said: $(tail -n 2 "$OUT/alpha.out" 2>/dev/null | tr '\n' '|') $(tail -n 2 "$OUT/beta.out" 2>/dev/null | tr '\n' '|')"
 
 echo ""
 if [ "$FAILS" = 0 ]; then
