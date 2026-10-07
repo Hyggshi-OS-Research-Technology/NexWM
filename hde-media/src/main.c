@@ -116,12 +116,13 @@ static void usage(FILE *out)
             "  -h, --help             this help\n"
             "\n"
             "Keys: Left/Right previous and next picture, Home/End the first and the last, + and - zoom, 0 fit the\n"
-            "window, 1 as it is on disk, r and Shift+R rotate, s and Space the slideshow, i more information, f and\n"
-            "F11 full screen, Ctrl+O open a picture, Escape leaves full screen (again: closes), q closes the window.\n"
-            "The mouse wheel zooms, a double click goes full screen, dragging moves a picture bigger than the window.\n"
+            "window, 1 as it is on disk, r and Shift+R rotate, s the slideshow, Space the next picture, i more\n"
+            "information, f and F11 full screen, Ctrl+O open a picture, Escape leaves full screen (again: closes),\n"
+            "q closes the window. The mouse wheel zooms, a double click goes full screen, dragging moves a picture\n"
+            "bigger than the window, and a picture dropped on the window opens it.\n"
             "\n"
             "A picture opens its folder (the list the arrow keys walk through); a folder opens with its first\n"
-            "picture. The pictures of the last run are logged on stdout (the tests read those lines).\n");
+            "picture. What is shown is logged on stdout, one line per picture (the tests read those lines).\n");
 }
 
 /* the arguments of one invocation: the first one, or the one a second hde-media handed to the running window */

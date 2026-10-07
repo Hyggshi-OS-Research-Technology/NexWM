@@ -36,7 +36,7 @@
 
 struct _HdeMediaViewer {
     GtkApplication *app;
-    GtkWidget *window, *toolbar, *tools, *scrolled, *area, *status, *slideshow_button;
+    GtkWidget *window, *toolbar, *tools, *scrolled, *area, *status, *statusbar, *slideshow_button;
     HdeMediaView view;
     GdkPixbuf *loaded;          /* the file as it is on disk */
     GdkPixbuf *shown;           /* after rotation and zoom: what the drawing area paints */
@@ -541,8 +541,9 @@ static void viewer_build_window(HdeMediaViewer *w)
 {
     w->alive = 1;
     w->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    /* WM_CLASS comes from the program name (g_set_prgname("hde-media") in main.c), which is also what the menu
+     * entry's StartupWMClass names: setting it here would be deprecated in GTK 3.24 */
     gtk_window_set_default_size(GTK_WINDOW(w->window), 1100, 720);
-    gtk_window_set_wmclass(GTK_WINDOW(w->window), "hde-media", "Hde-media");
     gtk_window_set_icon_name(GTK_WINDOW(w->window), "image-x-generic");
     gtk_application_add_window(w->app, GTK_WINDOW(w->window));
 
