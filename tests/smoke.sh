@@ -1532,6 +1532,8 @@ else fail "Rename… (Menu key, R) opens the Rename dialog ($(fmenu))"; fi
 sleep 0.5; xdotool key ctrl+c; sleep 0.5
 check "Ctrl+C copies the selected file" fwait "hde-files: clipboard: copy 1 item(s): readme.txt" 10
 xdotool key ctrl+v; sleep 2
+check "... the status bar shows the operation with a progress bar and Cancel" fwait "hde-files: progress shown: " 5
+case "$(flast 'progress shown: ')" in *"[bar, Cancel]") ;; *) fail "... with a progress bar and Cancel ($(flast 'progress shown: '))" ;; esac
 if [ -f "$FT/readme (copy).txt" ]; then pass "Ctrl+V in the same folder makes \"readme (copy).txt\""
 else fail "Ctrl+V in the same folder makes \"readme (copy).txt\" ($(ls "$FT" | tr '\n' ' '))"; fi
 xdotool key ctrl+z; sleep 2
@@ -1547,6 +1549,7 @@ xdotool key ctrl+l; sleep 0.6; xdotool type --delay 30 "trash:///"; xdotool key 
 if fwait "hde-files: folder Trash: " 15 && [ -n "$(fitem big.bin)" ]; then
     pass "the Trash (trash:///, no GVfs needed) lists what was deleted ($(flast 'folder Trash:' | sed 's/.*Trash: //'))"
 else fail "the Trash lists what was deleted ($(flast 'folder Trash'))"; fi
+check "... with the trash bar: Restore, Empty Trash" fwait "hde-files: trash bar: Restore, Empty Trash" 5
 shot 21d-files-trash
 xdotool type --delay 60 "bi"; sleep 0.6; xdotool key Menu; sleep 1
 case "$(fmenu)" in

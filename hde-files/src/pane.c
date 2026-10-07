@@ -1,8 +1,10 @@
 /* pane.c — Hyggshi Files: one tab.
  *
- * GtkListStore (one row per file) -> GtkTreeModelFilter (hidden files, the search words) -> GtkTreeModelSort
- * (folders first, natural order: file2 before file10), shown by a GtkIconView (icons, thumbnails) or a GtkTreeView
- * (list with Size / Type / Modified, sortable columns). A folder is read asynchronously in batches and watched
+ * GtkListStore (a row per file shown) -> GtkTreeModelSort (folders first, natural order: file2 before file10), shown
+ * by a GtkIconView (icons, thumbnails) or a GtkTreeView (list with Size / Type / Modified, sortable columns). Every item
+ * is kept in ENTRIES; the store only has those shown (hidden files, the words typed in the Trash / Recent), so showing
+ * hidden files adds rows instead of refiltering: a GtkTreeModelFilter under the GtkTreeModelSort made GTK lose count
+ * of the references of the views (Gtk-CRITICAL gtk_tree_model_sort_real_unref_node). A folder is read asynchronously in batches and watched
  * (GFileMonitor): files appearing, changing, renamed or removed by any program show at once.
  * Trash (trash:///, read from ~/.local/share/Trash, no GVfs needed), Recent (recent:///, GtkRecentManager) and the
  * search in subfolders are read by a worker thread that sends batches of results.
@@ -127,20 +129,17 @@ static void row_set(Pane *p, GtkTreeIter *it, GFile *file, GFileInfo *info, cons
 static gboolean store_iter_for(Pane *p, GFile *f, GtkTreeIter *it)
 {
     char *uri = g_file_get_uri(f);
-    GtkTreeRowReference *ref = g_hash_table_lookup(p->rows, uri);
+    GtkTreeIter *row = g_hash_table_lookup(p->rows, uri);   /* (GtkListStore's iters stay valid with their row) */
     g_free(uri);
-    if (!ref || !gtk_tree_row_reference_valid(ref)) return FALSE;
-    GtkTreePath *path = gtk_tree_row_reference_get_path(ref);
-    gboolean ok = gtk_tree_model_get_iter(GTK_TREE_MODEL(p->store), it, path);
-    gtk_tree_path_free(path);
-    return ok;
+    if (!row) return FALSE;
+    *it = *row;
+    return TRUE;
 }
 
 static GtkTreePath *view_path_for(Pane *p, GtkTreeIter *store_it)
 {
-    GtkTreeIter fit, sit;
-    if (!gtk_tree_model_filter_convert_child_iter_to_iter(GTK_TREE_MODEL_FILTER(p->filter), &fit, store_it)) return NULL;
-    if (!gtk_tree_model_sort_convert_child_iter_to_iter(GTK_TREE_MODEL_SORT(p->sort), &sit, &fit)) return NULL;
+    GtkTreeIter sit;
+    if (!gtk_tree_model_sort_convert_child_iter_to_iter(GTK_TREE_MODEL_SORT(p->sort), &sit, store_it)) return NULL;
     return gtk_tree_model_get_path(p->sort, &sit);
 }
 
@@ -172,42 +171,111 @@ static void maybe_thumb(Pane *p, GtkTreeIter *it)
 
 static void select_pending(Pane *p);
 
-static void row_add(Pane *p, GFile *file, GFileInfo *info, const char *extra, gint64 time_override)
+typedef struct {
+    GFile *file;
+    GFileInfo *info;
+    char *extra;
+    gint64 time;
+} Entry;
+
+static void entry_free(gpointer d)
+{
+    Entry *e = d;
+    g_object_unref(e->file);
+    g_object_unref(e->info);
+    g_free(e->extra);
+    g_free(e);
+}
+
+static gboolean info_hidden(GFileInfo *info)
+{
+    return g_file_info_get_is_hidden(info) || g_file_info_get_is_backup(info);
+}
+
+static gboolean words_match(const char *name, const char *query);
+
+static gboolean entry_visible(Pane *p, Entry *e)
+{
+    if (info_hidden(e->info) && !prefs.show_hidden && !p->is_trash && !p->is_search) return FALSE;
+    if (p->search && *p->search) {
+        const char *name = g_file_info_get_display_name(e->info);
+        return name && words_match(name, p->search);
+    }
+    return TRUE;
+}
+
+/* the item in the store, or not, as it should be; UPDATE: its row is filled again (new information) */
+static void show_entry(Pane *p, const char *uri, Entry *e, gboolean update)
 {
     GtkTreeIter it;
-    gboolean hidden = g_file_info_get_is_hidden(info) || g_file_info_get_is_backup(info);
-    if (store_iter_for(p, file, &it)) {
-        gboolean was_hidden;
-        gtk_tree_model_get(GTK_TREE_MODEL(p->store), &it, COL_HIDDEN, &was_hidden, -1);
-        p->n_hidden += (hidden ? 1 : 0) - (was_hidden ? 1 : 0);
-        row_set(p, &it, file, info, extra, time_override);
-    } else {
-        gtk_list_store_append(p->store, &it);
-        row_set(p, &it, file, info, extra, time_override);
-        GtkTreePath *path = gtk_tree_model_get_path(GTK_TREE_MODEL(p->store), &it);
-        g_hash_table_insert(p->rows, g_file_get_uri(file), gtk_tree_row_reference_new(GTK_TREE_MODEL(p->store), path));
-        gtk_tree_path_free(path);
-        p->n_items++;
-        if (hidden) p->n_hidden++;
+    GtkTreeIter *row = g_hash_table_lookup(p->rows, uri);
+    if (row) it = *row;
+    if (entry_visible(p, e)) {
+        if (!row) {
+            gtk_list_store_append(p->store, &it);
+            GtkTreeIter *copy = g_new(GtkTreeIter, 1);
+            *copy = it;
+            g_hash_table_insert(p->rows, g_strdup(uri), copy);
+            row_set(p, &it, e->file, e->info, e->extra, e->time);
+        } else if (update) row_set(p, &it, e->file, e->info, e->extra, e->time);
+        else return;
+        maybe_thumb(p, &it);
+    } else if (row) {
+        gtk_list_store_remove(p->store, &it);
+        g_hash_table_remove(p->rows, uri);
     }
-    maybe_thumb(p, &it);
+}
+
+static void row_add(Pane *p, GFile *file, GFileInfo *info, const char *extra, gint64 time_override)
+{
+    char *uri = g_file_get_uri(file);
+    Entry *e = g_hash_table_lookup(p->entries, uri);
+    if (e) {
+        if (info_hidden(e->info)) p->n_hidden--;
+        g_object_unref(e->info);
+        e->info = g_object_ref(info);
+        g_free(e->extra);
+        e->extra = g_strdup(extra);
+        e->time = time_override;
+    } else {
+        e = g_new0(Entry, 1);
+        e->file = g_object_ref(file);
+        e->info = g_object_ref(info);
+        e->extra = g_strdup(extra);
+        e->time = time_override;
+        g_hash_table_insert(p->entries, g_strdup(uri), e);
+        p->n_items++;
+    }
+    if (info_hidden(info)) p->n_hidden++;
+    show_entry(p, uri, e, TRUE);
+    g_free(uri);
 }
 
 static void row_remove(Pane *p, GFile *file)
 {
-    GtkTreeIter it;
-    if (!store_iter_for(p, file, &it)) return;
-    gboolean hidden;
-    gtk_tree_model_get(GTK_TREE_MODEL(p->store), &it, COL_HIDDEN, &hidden, -1);
-    gtk_list_store_remove(p->store, &it);
     char *uri = g_file_get_uri(file);
+    Entry *e = g_hash_table_lookup(p->entries, uri);
+    if (e) {
+        p->n_items--;
+        if (info_hidden(e->info)) p->n_hidden--;
+    }
+    GtkTreeIter it;
+    if (store_iter_for(p, file, &it)) gtk_list_store_remove(p->store, &it);
     g_hash_table_remove(p->rows, uri);
+    g_hash_table_remove(p->entries, uri);
     g_free(uri);
-    p->n_items--;
-    if (hidden) p->n_hidden--;
 }
 
-/* ------------------------------------------------------------------ filter, sort */
+/* hidden files shown or not, other words typed: add / remove rows */
+static void apply_visibility(Pane *p)
+{
+    GHashTableIter hi;
+    gpointer k, v;
+    g_hash_table_iter_init(&hi, p->entries);
+    while (g_hash_table_iter_next(&hi, &k, &v)) show_entry(p, k, v, FALSE);
+}
+
+/* ------------------------------------------------------------------ words, sorting */
 static gboolean words_match(const char *name, const char *query)
 {
     char *n = g_utf8_casefold(name, -1), *q = g_utf8_casefold(query, -1);
@@ -222,22 +290,6 @@ static gboolean words_match(const char *name, const char *query)
     g_free(n);
     g_free(q);
     return ok;
-}
-
-static gboolean visible_func(GtkTreeModel *m, GtkTreeIter *it, gpointer d)
-{
-    Pane *p = d;
-    gboolean hidden = FALSE;
-    gtk_tree_model_get(m, it, COL_HIDDEN, &hidden, -1);
-    if (hidden && !prefs.show_hidden && !p->is_trash && !p->is_search) return FALSE;
-    if (p->search && *p->search) {
-        char *name = NULL;
-        gtk_tree_model_get(m, it, COL_NAME, &name, -1);
-        gboolean ok = name && words_match(name, p->search);
-        g_free(name);
-        return ok;
-    }
-    return TRUE;
 }
 
 static int sort_func(GtkTreeModel *m, GtkTreeIter *a, GtkTreeIter *b, gpointer d)
@@ -760,6 +812,7 @@ void pane_reload(Pane *p)
         p->reload_id = 0;
     }
     g_hash_table_remove_all(p->rows);
+    g_hash_table_remove_all(p->entries);
     gtk_list_store_clear(p->store);
     p->n_items = p->n_hidden = 0;
     g_clear_pointer(&p->error, g_free);
@@ -863,9 +916,6 @@ void pane_up(Pane *p)
     g_object_unref(parent);
 }
 
-static GList *detach_views(Pane *p);
-static void attach_views(Pane *p, GList *sel);
-
 void pane_set_search(Pane *p, const char *text)
 {
     const char *t = text && *text ? text : NULL;
@@ -873,9 +923,7 @@ void pane_set_search(Pane *p, const char *text)
     g_free(p->search);
     p->search = g_strdup(t);
     if (p->is_trash || p->is_recent) {               /* only the list shown is filtered */
-        GList *sel = detach_views(p);
-        gtk_tree_model_filter_refilter(GTK_TREE_MODEL_FILTER(p->filter));
-        attach_views(p, sel);
+        apply_visibility(p);
         show_message(p);
         files_window_update_status(p->win);
         files_log("filter '%s': %d shown", t ? t : "", gtk_tree_model_iter_n_children(p->sort, NULL));
@@ -886,29 +934,9 @@ void pane_set_search(Pane *p, const char *text)
 }
 
 /* ------------------------------------------------------------------ preferences */
-/* The views let go of the model while the filter / the sorting change: GtkTreeModelSort above a GtkTreeModelFilter
- * loses count of the references a view holds on its rows when rows come and go under it (Gtk-CRITICAL
- * gtk_tree_model_sort_real_unref_node). The selection comes back afterwards. */
-static GList *detach_views(Pane *p)
-{
-    GList *sel = pane_selected_files(p);
-    gtk_icon_view_set_model(GTK_ICON_VIEW(p->icon_view), NULL);
-    gtk_tree_view_set_model(GTK_TREE_VIEW(p->list_view), NULL);
-    return sel;
-}
-
-static void attach_views(Pane *p, GList *sel)
-{
-    gtk_icon_view_set_model(GTK_ICON_VIEW(p->icon_view), p->sort);
-    gtk_tree_view_set_model(GTK_TREE_VIEW(p->list_view), p->sort);
-    if (sel) pane_select_files(p, sel);
-    files_list_free(sel);
-}
-
 void pane_apply_prefs(Pane *p)
 {
-    GList *sel = detach_views(p);
-    gtk_tree_model_filter_refilter(GTK_TREE_MODEL_FILTER(p->filter));
+    apply_visibility(p);
     int id;
     GtkSortType order;
     gtk_tree_sortable_get_sort_column_id(GTK_TREE_SORTABLE(p->sort), &id, &order);
@@ -923,7 +951,6 @@ void pane_apply_prefs(Pane *p)
         gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(p->sort), prefs.sort_by, want);
         g_signal_handlers_unblock_by_func(p->sort, on_sort_changed, p);
     }
-    attach_views(p, sel);
     show_message(p);
     schedule_geometry(p);
 }
@@ -1620,15 +1647,14 @@ Pane *pane_new(FilesWindow *w)
 {
     Pane *p = g_new0(Pane, 1);
     p->win = w;
-    p->rows = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)gtk_tree_row_reference_free);
+    p->rows = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    p->entries = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, entry_free);
     p->cancel = g_cancellable_new();
     p->store = gtk_list_store_new(N_COLS, G_TYPE_FILE, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_ICON, CAIRO_GOBJECT_TYPE_SURFACE,
                                   G_TYPE_BOOLEAN, G_TYPE_BOOLEAN, G_TYPE_INT64, G_TYPE_STRING, G_TYPE_INT64, G_TYPE_STRING,
                                   G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_INT,
                                   G_TYPE_BOOLEAN, G_TYPE_BOOLEAN, G_TYPE_INT);
-    p->filter = gtk_tree_model_filter_new(GTK_TREE_MODEL(p->store), NULL);
-    gtk_tree_model_filter_set_visible_func(GTK_TREE_MODEL_FILTER(p->filter), visible_func, p, NULL);
-    p->sort = gtk_tree_model_sort_new_with_model(p->filter);
+    p->sort = gtk_tree_model_sort_new_with_model(GTK_TREE_MODEL(p->store));
     for (int i = 0; i < SORT_N; i++) {
         SortData *sd = g_new0(SortData, 1);
         sd->p = p;
@@ -1791,9 +1817,9 @@ void pane_free(Pane *p)
     if (p->tab_box) g_signal_handlers_disconnect_by_data(p->tab_box, p);
     g_object_unref(p->cancel);
     g_object_unref(p->sort);
-    g_object_unref(p->filter);
     g_object_unref(p->store);
     g_hash_table_unref(p->rows);
+    g_hash_table_unref(p->entries);
     files_list_free(p->back);
     files_list_free(p->forward);
     if (p->location) g_object_unref(p->location);

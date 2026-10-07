@@ -206,6 +206,9 @@ void files_windows_jobs_changed(void)
     for (GList *l = windows; l; l = l->next) {
         FilesWindow *w = l->data;
         if (text) {
+            if (!gtk_widget_get_visible(w->job_box))
+                files_log("progress shown: %s%s", text, gtk_widget_get_visible(w->job_cancel) &&
+                          gtk_widget_get_visible(w->job_bar) ? " [bar, Cancel]" : " (no bar / Cancel button)");
             gtk_label_set_text(GTK_LABEL(w->job_label), text);
             if (frac >= 0) gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(w->job_bar), frac);
             else gtk_progress_bar_pulse(GTK_PROGRESS_BAR(w->job_bar));
@@ -490,6 +493,9 @@ void files_window_update(FilesWindow *w)
     pathbar_rebuild(w);
     if (p->location) gtk_places_sidebar_set_location(GTK_PLACES_SIDEBAR(w->sidebar), p->location);
     gtk_widget_set_visible(w->trash_bar, p->is_trash);
+    if (p->is_trash)
+        files_log("trash bar: %s", gtk_widget_get_visible(w->trash_restore_btn) && gtk_widget_get_visible(w->trash_empty_btn)
+                                   ? "Restore, Empty Trash" : "(its buttons are hidden)");
     w->in_search_update = TRUE;
     gboolean searching = p->search && *p->search;
     if (searching) {
@@ -1714,9 +1720,9 @@ FilesWindow *files_window_new(GtkApplication *app, GFile *location)
     gtk_style_context_add_class(gtk_widget_get_style_context(w->trash_empty_btn), "destructive-action");
     g_signal_connect(w->trash_empty_btn, "clicked", G_CALLBACK(on_empty_clicked), w);
     gtk_box_pack_start(GTK_BOX(w->trash_bar), w->trash_empty_btn, FALSE, FALSE, 0);
-    gtk_widget_set_no_show_all(w->trash_bar, TRUE);
-    gtk_widget_show_all(w->trash_bar);
+    gtk_widget_show_all(w->trash_bar);              /* (before no_show_all: show_all does nothing after it) */
     gtk_widget_hide(w->trash_bar);
+    gtk_widget_set_no_show_all(w->trash_bar, TRUE);
     gtk_box_pack_start(GTK_BOX(right), w->trash_bar, FALSE, FALSE, 0);
     w->notebook = gtk_notebook_new();
     gtk_notebook_set_scrollable(GTK_NOTEBOOK(w->notebook), TRUE);
@@ -1750,9 +1756,9 @@ FilesWindow *files_window_new(GtkApplication *app, GFile *location)
     gtk_box_pack_start(GTK_BOX(w->job_box), w->job_label, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(w->job_box), w->job_bar, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(w->job_box), w->job_cancel, FALSE, FALSE, 0);
-    gtk_widget_set_no_show_all(w->job_box, TRUE);
     gtk_widget_show_all(w->job_box);
     gtk_widget_hide(w->job_box);
+    gtk_widget_set_no_show_all(w->job_box, TRUE);
     gtk_box_pack_start(GTK_BOX(status), w->job_box, FALSE, FALSE, 0);
     w->free_label = gtk_label_new("");
     gtk_style_context_add_class(gtk_widget_get_style_context(w->free_label), "dim-label");
