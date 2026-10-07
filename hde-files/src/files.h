@@ -117,7 +117,7 @@ struct _Pane {
     GtkTreeViewColumn *col_name, *col_size, *col_type, *col_mtime, *col_extra;
     GtkCellRenderer *icon_text_cell;
     GtkListStore *store;
-    GtkTreeModel *sort;          /* GtkTreeModelSort of STORE (no GtkTreeModelFilter: see pane.c) */
+    GtkTreeModel *sort;          /* = STORE, which sorts itself (no GtkTreeModelSort / Filter: see pane.c) */
     GHashTable *rows;            /* uri -> GtkTreeIter of STORE: the items shown (GtkListStore's iters persist) */
     GHashTable *entries;         /* uri -> every item, shown or not (hidden files, filtered out) */
     GFile *location;

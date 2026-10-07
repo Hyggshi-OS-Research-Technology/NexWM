@@ -1,10 +1,12 @@
 /* pane.c — Hyggshi Files: one tab.
  *
- * GtkListStore (a row per file shown) -> GtkTreeModelSort (folders first, natural order: file2 before file10), shown
- * by a GtkIconView (icons, thumbnails) or a GtkTreeView (list with Size / Type / Modified, sortable columns). Every item
- * is kept in ENTRIES; the store only has those shown (hidden files, the words typed in the Trash / Recent), so showing
- * hidden files adds rows instead of refiltering: a GtkTreeModelFilter under the GtkTreeModelSort made GTK lose count
- * of the references of the views (Gtk-CRITICAL gtk_tree_model_sort_real_unref_node). A folder is read asynchronously in batches and watched
+ * A GtkListStore with a row per file shown, sorted by itself (folders first, natural order: file2 before file10),
+ * shown by a GtkIconView (icons, thumbnails) or a GtkTreeView (list with Size / Type / Modified, sortable columns).
+ * Every item is kept in ENTRIES; the store only has those shown (hidden files, the words typed in the Trash / Recent).
+ * No GtkTreeModelSort / GtkTreeModelFilter: GtkIconView releases the row at the path of a deleted row (after it went:
+ * another one) and rows it found when it got the model, and those models count references (Gtk-CRITICAL
+ * gtk_tree_model_sort_real_unref_node); a GtkListStore does not.
+ * A folder is read asynchronously in batches and watched
  * (GFileMonitor): files appearing, changing, renamed or removed by any program show at once.
  * Trash (trash:///, read from ~/.local/share/Trash, no GVfs needed), Recent (recent:///, GtkRecentManager) and the
  * search in subfolders are read by a worker thread that sends batches of results.
@@ -138,9 +140,7 @@ static gboolean store_iter_for(Pane *p, GFile *f, GtkTreeIter *it)
 
 static GtkTreePath *view_path_for(Pane *p, GtkTreeIter *store_it)
 {
-    GtkTreeIter sit;
-    if (!gtk_tree_model_sort_convert_child_iter_to_iter(GTK_TREE_MODEL_SORT(p->sort), &sit, store_it)) return NULL;
-    return gtk_tree_model_get_path(p->sort, &sit);
+    return gtk_tree_model_get_path(GTK_TREE_MODEL(p->store), store_it);   /* (the views show the store itself) */
 }
 
 static void on_thumb(GFile *file, cairo_surface_t *surface, gpointer data)
@@ -1120,8 +1120,7 @@ static void select_path(Pane *p, GtkTreePath *path, gboolean on)
 }
 
 /* GtkIconView keeps a "scroll to" row reference for an item it has not placed yet and does not follow the rows that
- * move or go meanwhile; freed later it releases a row of the GtkTreeModelSort it never held (Gtk-CRITICAL
- * gtk_tree_model_sort_real_unref_node). So the cursor goes to an item only once the view has placed it. */
+ * move or go meanwhile (it may scroll to another item). So the cursor goes to an item once the view has placed it. */
 static gboolean icon_item_placed(Pane *p, GtkTreePath *path)
 {
     GdkRectangle r = { 0, 0, 0, 0 };
@@ -1698,7 +1697,7 @@ Pane *pane_new(FilesWindow *w)
                                   G_TYPE_BOOLEAN, G_TYPE_BOOLEAN, G_TYPE_INT64, G_TYPE_STRING, G_TYPE_INT64, G_TYPE_STRING,
                                   G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_INT,
                                   G_TYPE_BOOLEAN, G_TYPE_BOOLEAN, G_TYPE_INT);
-    p->sort = gtk_tree_model_sort_new_with_model(GTK_TREE_MODEL(p->store));
+    p->sort = GTK_TREE_MODEL(g_object_ref(p->store));
     for (int i = 0; i < SORT_N; i++) {
         SortData *sd = g_new0(SortData, 1);
         sd->p = p;
