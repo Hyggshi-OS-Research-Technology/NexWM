@@ -68,6 +68,25 @@ running() {
     return 1
 }
 pixel() { convert "$1" -format "%[fx:int(255*r)] %[fx:int(255*g)] %[fx:int(255*b)]" -crop "1x1+$2+$3" info: 2>/dev/null; }
+# session_pid: the hde-session of the session under test. It is asked of the panel, which hde-session started and to
+# which it exported HDE_SESSION_PID. The environment of the test itself is no use: run inside another session (the
+# Fedora job runs this test inside the X11 session), it belongs to *that* session, and `logout` would end it.
+session_pid() {
+    p=$(pgrep -x hde-panel 2>/dev/null | head -n 1)
+    [ -n "$p" ] || return 1
+    sp=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^HDE_SESSION_PID=//p' | head -n 1)
+    [ -n "$sp" ] || return 1
+    echo "$sp"
+}
+# session_count SESSIONPID NAME...: how many processes of that name belong to session SESSIONPID (same HDE_SESSION_PID):
+# this is how a check about "what this session started" stays true when another session is running around it.
+session_count() {
+    sp=$1; shift; n=0
+    for p in $(pgrep -x "$1" 2>/dev/null); do
+        [ "$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^HDE_SESSION_PID=//p' | head -n 1)" = "$sp" ] && n=$((n + 1))
+    done
+    echo "$n"
+}
 
 info "labwc: $(labwc --version 2>/dev/null | head -n 1); gtk-layer-shell: $(pkg-config --modversion gtk-layer-shell-0 2>/dev/null || echo ?)"
 sh "$HERE/../data/hde-start" --wayland > "$OUT/hde-start.out" 2>&1 &
@@ -96,8 +115,16 @@ sleep 2
 check "hde-start --wayland starts labwc ($sock)" running labwc
 for p in hde-panel hde-desktop; do check "$p is running inside labwc" running $p; done
 check "hde-session runs as the session inside labwc" grep -q "^hde-session: HDE build .*, Wayland session inside labwc" "$LOG"
-if ! running hde-hotkeys && ! running hde-xsettings && ! running metacity; then pass "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"
-else fail "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"; fi
+SPID=$(session_pid 2>/dev/null || true)
+if [ -z "${SPID:-}" ]; then
+    # no panel to ask (the session did not come up): fall back to the plain check
+    if ! running hde-hotkeys && ! running hde-xsettings && ! running metacity; then pass "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"
+    else fail "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"; fi
+else
+    n=$(session_count "$SPID" 'hde-hotkeys|hde-xsettings|metacity|marco|xfwm4|openbox')
+    if [ "$n" = 0 ]; then pass "no hde-hotkeys daemon / hde-xsettings / window manager in this session (Wayland needs none)"
+    else fail "this session started $n of hde-hotkeys / hde-xsettings / a window manager (Wayland needs none)"; fi
+fi
 check "labwc's configuration is written from settings.ini (rc.xml, menu.xml, environment, themerc-override)" \
     grep -q "hde-settings: wayland: labwc .* configuration in .*/hde/labwc: rc.xml, menu.xml, environment, themerc-override" "$LOG"
 RC="$XDG_CONFIG_HOME/hde/labwc/rc.xml"
@@ -246,10 +273,13 @@ else fail "a changed setting rewrites rc.xml and labwc reloads it"; fi
 printf '[settings]\n' > "$INI"; sleep 2
 
 # ---------- 7. logout ----------
-# HDE_SESSION_PID points at the session of the caller when this test runs inside one (the Fedora job runs it inside
-# the X11 session): hand hde-session the pid of *this* session ($START: hde-start execs hde-session, which starts labwc)
-# so that `logout` cannot end somebody else's session through the /proc fallback.
-HDE_SESSION_PID=$START "$B/hde-session" logout >/dev/null 2>&1
+# The pid of *this* session's hde-session, asked of the panel (see session_pid): the environment of the test itself is
+# no use here. $START is the process hde-start turned into labwc, which is a child of the session — signalling it would
+# take the compositor down and leave the session to notice and end itself ("the Wayland compositor is gone"), without
+# ever running the shutdown that stops the compositor *and says so*. Handing `logout` the session's own pid keeps it
+# from ending somebody else's session through the /proc fallback too (the Fedora job runs this inside the X11 session).
+LOGOUT_PID=${SPID:-$START}
+HDE_SESSION_PID=$LOGOUT_PID "$B/hde-session" logout >/dev/null 2>&1
 # labwc is this shell's child ($START: hde-start -> exec hde-session -> exec labwc): reap it once it exited (a zombie
 # still matches pgrep)
 i=0

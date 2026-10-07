@@ -364,9 +364,10 @@ jobs:
       run: |
         cat /etc/fedora-release
         sh packaging/fedora/deps.sh install build
-        # Xvfb, python3, procps-ng, a font: the test harness, not HDE. No window manager, no icons, no NetworkManager.
-        dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb python3 procps-ng dejavu-sans-fonts ||
-          dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb python3 procps-ng
+        # Xvfb, dbus-tools (dbus-run-session: the test runs the session inside one), python3, procps-ng, rpm, a font:
+        # the test harness, not HDE. No window manager, no icons, no NetworkManager.
+        dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb dbus-tools python3 procps-ng rpm dejavu-sans-fonts ||
+          dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb dbus-tools python3 procps-ng rpm
         for p in metacity openbox xfwm4 NetworkManager labwc; do
           if rpm -q "$p" >/dev/null 2>&1; then echo "::warning::$p is installed: this is not a base Fedora any more"; fi
         done
@@ -380,6 +381,13 @@ jobs:
       run: |
         set -o pipefail
         make check-unit 2>&1 | tee -a build.log
+
+    - name: Unit test results on the summary (the failures; the log above has the rest)
+      if: always()
+      run: |
+        mkdir -p /tmp/hde-fedora-units
+        grep -E "^(PASS|FAIL|==) " build.log > /tmp/hde-fedora-units/results.txt || true
+        python3 tests/ci-annotate.py /tmp/hde-fedora-units results "HDE unit tests on a base Fedora"
 
     - name: Fedora base test (a session without any desktop package)
       if: always()

@@ -45,6 +45,20 @@ fail() { echo "FAIL: sddm: $*" | tee -a "$OUT/results.txt"; FAILS=$((FAILS + 1))
 info() { echo "INFO: sddm: $*" | tee -a "$OUT/results.txt"; }
 check() { d=$1; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
+# same FILE1 FILE2: byte for byte? cmp is the natural tool but it lives in diffutils, which a minimal Fedora does not
+# install (the Fedora CI found this): sha256sum is coreutils, so it is always there. Two missing files are NOT "the
+# same": the emptiness of the two hashes must not be read as equality.
+if have cmp; then
+    same() { cmp -s "$1" "$2"; }
+elif have sha256sum; then
+    same() {
+        h1=$(sha256sum "$1" 2>/dev/null | cut -d' ' -f1)
+        h2=$(sha256sum "$2" 2>/dev/null | cut -d' ' -f1)
+        [ -n "$h1" ] && [ "$h1" = "$h2" ]
+    }
+else
+    same() { return 1; }
+fi
 skip() { echo "SKIP: sddm: $*" | tee -a "$OUT/results.txt"; }
 
 info "theme: $THEME ($(find "$THEME" -name '*.qml' | wc -l) QML files, $(du -sk "$THEME" | cut -f1) KiB)"
@@ -221,7 +235,7 @@ if [ -x "$INSTALL" ] || [ -f "$INSTALL" ]; then
     DEST="$ROOT/usr/share/sddm/themes/hde"
     diffs=""
     for f in $(cd "$DEST" && find . -type f | sed 's|^\./||'); do
-        if ! cmp -s "$THEME/$f" "$DEST/$f"; then
+        if ! same "$THEME/$f" "$DEST/$f"; then
             if [ "$f" = "metadata.desktop" ] &&
                [ "$(sed -n 's/^QtVersion=//p' "$THEME/$f")" != "$(sed -n 's/^QtVersion=//p' "$DEST/$f")" ] &&
                [ "$(grep -v '^QtVersion=' "$THEME/$f")" = "$(grep -v '^QtVersion=' "$DEST/$f")" ]; then
@@ -292,11 +306,17 @@ else
                 fail "the greeter did not stay up with --test or --test-mode: $(tail -n 3 "$OUT/greeter.log" | tr '\n' '|')"
             else
                 pass "the greeter starts and stays up with the theme ($GREETER)"
-                # the greeter read *our* theme (not a fallback: SDDM silently falls back when the metadata is wrong)
-                if grep -q "Loading theme configuration from $THEME/theme.conf" "$OUT/greeter.log"; then
+                # the greeter read *our* theme, not a fallback (SDDM falls back silently when the metadata is wrong).
+                # It says "Loading theme configuration from \"path\"" on some versions and nothing at all on others:
+                # with no theme line in the log the check is skipped (the greeter staying up plus the file-for-file
+                # comparison of the installed theme are the proof that matters).
+                tlog=$(tr -d '"' < "$OUT/greeter.log" 2>/dev/null | grep -i "theme configuration\|theme.conf")
+                if [ -z "$tlog" ]; then
+                    skip "the greeter said nothing about the theme it loaded (nothing about a theme in its log)"
+                elif printf '%s\n' "$tlog" | grep -q "Loading theme configuration from $THEME/theme.conf"; then
                     pass "the greeter loaded this theme's configuration"
                 else
-                    fail "the greeter did not load $THEME/theme.conf: $(grep -i 'theme' "$OUT/greeter.log" | head -n 2 | tr '\n' '|')"
+                    fail "the greeter did not load $THEME/theme.conf: $(printf '%s\n' "$tlog" | head -n 2 | tr '\n' '|')"
                 fi
                 # no QML error: this is what a theme that only *looks* fine fails on
                 errs=$(grep -nE "failed to load component|Cannot find file|is not a type|ReferenceError|TypeError|SyntaxError|Unable to assign|Unable to determine|Cannot assign|is not a function" "$OUT/greeter.log" | head -n 5)

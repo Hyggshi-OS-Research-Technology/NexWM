@@ -81,6 +81,7 @@ sddm
 TEST="
 xorg-x11-server-Xvfb
 xdotool
+diffutils
 xterm
 xprop|xorg-x11-utils
 xwininfo|xorg-x11-utils

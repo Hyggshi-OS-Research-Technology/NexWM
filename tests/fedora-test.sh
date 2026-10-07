@@ -31,14 +31,17 @@ esac
 XT="python3 $HERE/xtool.py"
 
 if [ -z "${HDE_FEDORA_INNER:-}" ]; then
-    for t in Xvfb dbus-run-session python3 rpm; do
-        command -v $t >/dev/null 2>&1 || { echo "missing $t (dnf install xorg-x11-server-Xvfb dbus-tools python3 rpm)"; exit 2; }
-    done
     rm -rf "$OUT"
     # .cache/hde is where the session writes its log (hde-start and the session both do): without it the shell cannot
     # even open the log file and the session never starts
     mkdir -p "$OUT/home/.config/hde" "$OUT/home/.cache/hde" "$OUT/home/.local/share/applications" "$OUT/home/Desktop" "$OUT/run"
     chmod 700 "$OUT/run"
+    : > "$OUT/results.txt"
+    # a tool this test cannot do without: said in the results too, so it is on the job summary and not only in the log
+    for t in Xvfb dbus-run-session python3 rpm; do
+        command -v $t >/dev/null 2>&1 ||
+            { echo "FAIL: fedora: missing $t (dnf install xorg-x11-server-Xvfb dbus-tools python3 rpm)" | tee -a "$OUT/results.txt"; exit 2; }
+    done
     printf '[settings]\nwm=auto\n' > "$OUT/home/.config/hde/settings.ini"
     printf '[Desktop Entry]\nType=Application\nName=Fedora Test App\nComment=HDE on Fedora\nExec=touch %s/fedora-test-app\nIcon=applications-utilities\nCategories=Utility;\n' \
         "$OUT" > "$OUT/home/.local/share/applications/fedora-test-app.desktop"
