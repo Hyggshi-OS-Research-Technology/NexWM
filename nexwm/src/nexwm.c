@@ -26,30 +26,50 @@
 int nexwm_x11_run(const char *config_path, int replace);
 int nexwm_wayland_run(const char *config_path, int replace);
 
+/* What this build has. NexWM is one program with two sides and each one is compiled in only when its library was
+ * there (the Makefile looks for libxcb and wlroots with pkg-config), so the program has to say which ones it is —
+ * otherwise a session that asked for a side this build does not have would look as if NexWM itself were broken.
+ * tests/nexwm-test.sh and tests/fedora-test.sh read these lines to know what they can ask of it. */
+static void build_report(FILE *out)
+{
+#ifdef NEXWM_HAVE_XCB
+    fprintf(out, "X11 window manager (XCB): yes\n");
+#else
+    fprintf(out, "X11 window manager (XCB): no — build with libxcb: libxcb1-dev on Debian/Ubuntu, libxcb-devel on Fedora\n");
+#endif
+#ifdef NEXWM_HAVE_WLROOTS
+    fprintf(out, "Wayland compositor (wlroots): yes (the compositor itself is still being written: nexwm/README.md)\n");
+#else
+    fprintf(out, "Wayland compositor (wlroots): no — build with libwlroots-dev (Debian/Ubuntu) or wlroots-devel (Fedora)\n");
+#endif
+}
+
 static void usage(FILE *out)
 {
     fprintf(out,
-            "Usage: nexwm [--x11|--wayland] [--replace] [--config FILE]\\n"
-            "%s %s — HDE's own window manager: X11 (XCB) and Wayland (wlroots).\\n"
-            "\\n"
-            "  --x11              run as the X11 window manager (the default when $DISPLAY is set)\\n"
-            "  --wayland          run as the Wayland compositor (a build made with wlroots)\\n"
-            "  --replace          take over from the window manager that is running (X11)\\n"
-            "  --config FILE      the configuration file (default %s)\\n"
-            "  -v, --version      print the version and the build\\n"
-            "  -h, --help         this help\\n"
-            "\\n"
-            "The configuration file (%s):\\n"
-            "  border 2                       the frame around a window, in pixels\\n"
-            "  focus click | mouse            click to focus (the default), or follow the pointer\\n"
-            "  desktops 4                     how many workspaces\\n"
-            "  colors 0x2a2a2a 0x3a86ff       the frame of an unfocused window, and of the focused one\\n"
-            "  key Super+Return spawn xterm   a key binding (Super, Ctrl, Alt, Shift + a key)\\n"
-            "\\n"
-            "Actions: spawn CMD, close, kill, next, prev, workspace N, move-to N, maximize, unmaximize, fullscreen,\\n"
-            "         snap left|right|up|down, quit. The defaults are in the README (nexwm/README.md), and what the\\n"
-            "         running window manager listens to is the _NEXWM_KEYS property of the root window (xprop).\\n",
+            "Usage: nexwm [--x11|--wayland] [--replace] [--config FILE]\n"
+            "%s %s — HDE's own window manager: X11 (XCB) and Wayland (wlroots).\n"
+            "\n"
+            "  --x11              run as the X11 window manager (the default when $DISPLAY is set)\n"
+            "  --wayland          run as the Wayland compositor (a build made with wlroots)\n"
+            "  --replace          take over from the window manager that is running (X11)\n"
+            "  --config FILE      the configuration file (default %s)\n"
+            "  -v, --version      print the version and the build\n"
+            "  -h, --help         this help\n"
+            "\n"
+            "The configuration file (%s):\n"
+            "  border 2                       the frame around a window, in pixels\n"
+            "  focus click | mouse            click to focus (the default), or follow the pointer\n"
+            "  desktops 4                     how many workspaces\n"
+            "  colors 0x2a2a2a 0x3a86ff       the frame of an unfocused window, and of the focused one\n"
+            "  key Super+Return spawn xterm   a key binding (Super, Ctrl, Alt, Shift + a key)\n"
+            "\n"
+            "Actions: spawn CMD, close, kill, next, prev, workspace N, move-to N, maximize, unmaximize, fullscreen,\n"
+            "         snap left|right|up|down, quit. The defaults are in the README (nexwm/README.md), and what the\n"
+            "         running window manager listens to is the _NEXWM_KEYS property of the root window (xprop).\n",
             NEXWM_NAME, NEXWM_RELEASE, "~/.config/hde/nexwm.conf", "~/.config/hde/nexwm.conf");
+    fprintf(out, "\nWhat this build has:\n");
+    build_report(out);
 }
 
 int main(int argc, char **argv)
@@ -64,7 +84,7 @@ int main(int argc, char **argv)
         if (!strcmp(a, "--replace")) { replace = 1; continue; }
         if (!strcmp(a, "--config")) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "nexwm: --config needs a file\\n");
+                fprintf(stderr, "nexwm: --config needs a file\n");
                 return 1;
             }
             config = argv[++i];
@@ -72,14 +92,15 @@ int main(int argc, char **argv)
         }
         if (!strncmp(a, "--config=", 9)) { config = a + 9; continue; }
         if (!strcmp(a, "-v") || !strcmp(a, "--version")) {
-            printf("nexwm (%s) %s %s\\n", NEXWM_NAME, NEXWM_RELEASE, HDE_VERSION);
+            printf("nexwm (%s) %s %s\n", NEXWM_NAME, NEXWM_RELEASE, HDE_VERSION);
+            build_report(stdout);
             return 0;
         }
         if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
             usage(stdout);
             return 0;
         }
-        fprintf(stderr, "nexwm: unknown option '%s' (see nexwm --help)\\n", a);
+        fprintf(stderr, "nexwm: unknown option '%s' (see nexwm --help)\n", a);
         return 1;
     }
 
@@ -87,7 +108,7 @@ int main(int argc, char **argv)
         /* say it now rather than after taking the screen over */
         FILE *f = fopen(config, "r");
         if (!f) {
-            fprintf(stderr, "nexwm: cannot read the configuration file %s\\n", config);
+            fprintf(stderr, "nexwm: cannot read the configuration file %s\n", config);
             return 2;
         }
         fclose(f);
@@ -105,7 +126,7 @@ int main(int argc, char **argv)
     } else if (want_x11 || getenv("DISPLAY")) {
         rc = nexwm_x11_run(config, replace);
     } else {
-        fprintf(stderr, "nexwm: no display: set $DISPLAY for the X11 window manager, or start it with --wayland\\n");
+        fprintf(stderr, "nexwm: no display: set $DISPLAY for the X11 window manager, or start it with --wayland\n");
         rc = 3;
     }
     free(default_config);

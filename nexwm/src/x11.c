@@ -19,9 +19,12 @@
 
 #include "nexwm.h"
 
+#ifdef NEXWM_HAVE_XCB
 #include <xcb/xcb.h>
+#endif
 
 #include <errno.h>
+#include <stddef.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -30,6 +33,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifdef NEXWM_HAVE_XCB
 
 /* ---------------------------------------------------------------- saying what happens */
 
@@ -1042,6 +1047,28 @@ static void handle_map_request(xcb_map_request_event_t *ev)
     client_manage(ev->window);
 }
 
+/* The values of a ConfigureRequest follow its fixed part — the XCB event struct stops at value_mask and has no member
+ * (and no accessor) for the list, so it is read from where the X server put it: right after those 32 bytes, in the order
+ * of the mask's bits (X, Y, width, height, border width, sibling, stack mode), each one only when its bit is set. That
+ * is why the position of a value is not the position of its bit. */
+#define NEXWM_CONFIGURE_MASK_AT 26
+#define NEXWM_CONFIGURE_VALUES_AT 32
+static uint32_t configure_value(const xcb_configure_request_event_t *ev, uint32_t bit)
+{
+    static const uint32_t bits[] = { XCB_CONFIG_WINDOW_X, XCB_CONFIG_WINDOW_Y, XCB_CONFIG_WINDOW_WIDTH,
+                                     XCB_CONFIG_WINDOW_HEIGHT, XCB_CONFIG_WINDOW_BORDER_WIDTH,
+                                     XCB_CONFIG_WINDOW_SIBLING, XCB_CONFIG_WINDOW_STACK_MODE };
+    _Static_assert(offsetof(xcb_configure_request_event_t, value_mask) == NEXWM_CONFIGURE_MASK_AT,
+                   "the fixed part of a ConfigureRequest is 32 bytes (the values follow it)");
+    const uint32_t *values = (const uint32_t *)(const void *)((const char *)ev + NEXWM_CONFIGURE_VALUES_AT);
+    uint32_t nth = 0;
+    for (size_t i = 0; i < sizeof bits / sizeof bits[0]; i++) {
+        if (bits[i] == bit) return values[nth];
+        if (ev->value_mask & bits[i]) nth++;
+    }
+    return 0;
+}
+
 static void handle_configure_request(xcb_configure_request_event_t *ev)
 {
     NexwmClient *c = client_of_window(ev->window);
@@ -1055,14 +1082,15 @@ static void handle_configure_request(xcb_configure_request_event_t *ev)
         if (ev->value_mask & XCB_CONFIG_WINDOW_HEIGHT) values[n++] = ev->height;
         if (ev->value_mask & XCB_CONFIG_WINDOW_BORDER_WIDTH) values[n++] = ev->border_width;
         if (ev->value_mask & XCB_CONFIG_WINDOW_SIBLING) values[n++] = ev->sibling;
-        if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE) values[n++] = ev->stack;
+        if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE)
+            values[n++] = configure_value(ev, XCB_CONFIG_WINDOW_STACK_MODE);
         if (n) xcb_configure_window(wm.conn, ev->window, ev->value_mask, values);
         return;
     }
     if (c->maximized || c->fullscreen) {
         /* the size is ours while the window is maximized or full screen; the stack mode is still the client's */
         if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE) {
-            uint32_t mode = ev->stack;
+            uint32_t mode = configure_value(ev, XCB_CONFIG_WINDOW_STACK_MODE);
             xcb_configure_window(wm.conn, c->frame ? c->frame : c->id, XCB_CONFIG_WINDOW_STACK_MODE, &mode);
         }
         return;
@@ -1072,8 +1100,10 @@ static void handle_configure_request(xcb_configure_request_event_t *ev)
     if (ev->value_mask & XCB_CONFIG_WINDOW_X) c->x = ev->x + (c->framed ? wm.cfg.border : 0);
     if (ev->value_mask & XCB_CONFIG_WINDOW_Y) c->y = ev->y + (c->framed ? wm.cfg.border : 0);
     client_place(c);
-    if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE)
-        xcb_configure_window(wm.conn, c->frame ? c->frame : c->id, XCB_CONFIG_WINDOW_STACK_MODE, &ev->stack);
+    if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE) {
+        uint32_t mode = configure_value(ev, XCB_CONFIG_WINDOW_STACK_MODE);
+        xcb_configure_window(wm.conn, c->frame ? c->frame : c->id, XCB_CONFIG_WINDOW_STACK_MODE, &mode);
+    }
 }
 
 static void handle_unmap_notify(xcb_unmap_notify_event_t *ev)
@@ -1233,15 +1263,28 @@ static void handle_event(xcb_generic_event_t *ev)
 /* ---------------------------------------------------------------- becoming the window manager */
 
 /* the selection that says who the window manager is (WM_Sn on screen n) */
-static int wm_selection_claim(Nexwm *w, int screen_num)
+/* WM_S0 (or WM_S1, ...): the name of the window manager role on this screen. Interned before the screen is taken over
+ * because taking it over from another window manager means asking that one to give the selection up (wm_take_over). */
+static void wm_sn_intern(Nexwm *w, int screen_num)
 {
     char name[16];
     snprintf(name, sizeof name, "WM_S%d", screen_num);
     xcb_intern_atom_reply_t *r = xcb_intern_atom_reply(w->conn, xcb_intern_atom(w->conn, 0, (uint16_t)strlen(name), name),
                                                        NULL);
-    if (!r) return -1;
-    w->wm_sn = r->atom;
-    free(r);
+    if (r) {
+        w->wm_sn = r->atom;
+        free(r);
+    }
+}
+
+/* ICCCM: being the window manager *is* holding the WM_Sn selection. This is called once the screen is ours — holding
+ * SUBSTRUCTURE_REDIRECT is what makes it ours — and not before: a program that sets the selection while another window
+ * manager holds it takes the role away from it, and a well behaved one (Metacity, for one) then gives the screen up and
+ * exits. That is exactly what `--replace` asks for, and it happens in wm_take_over on purpose; a plain start must not do
+ * it, or starting a second window manager by mistake would end the session's. */
+static int wm_selection_claim(Nexwm *w)
+{
+    if (!w->wm_sn) return -1;
     xcb_set_selection_owner(w->conn, w->root, w->wm_sn, XCB_CURRENT_TIME);
     xcb_flush(w->conn);
     xcb_get_selection_owner_reply_t *owner = xcb_get_selection_owner_reply(
@@ -1371,8 +1414,7 @@ int nexwm_x11_run(const char *config_path, int replace)
 
     atom_intern_all(&wm);
 
-    if (wm_selection_claim(&wm, screen_num) != 0)
-        wm_log("the WM_S%d selection is held by another window manager", screen_num);
+    wm_sn_intern(&wm, screen_num);
     if (wm_take_over(&wm) != 0) {
         fprintf(stderr, "nexwm: another window manager is running on %s\n"
                         "       (log out, or start NexWM with --replace to take over)\n",
@@ -1381,6 +1423,8 @@ int nexwm_x11_run(const char *config_path, int replace)
         nexwm_config_free(&wm.cfg);
         return 3;
     }
+    if (wm_selection_claim(&wm) != 0)
+        wm_log("the WM_S%d selection could not be taken", screen_num);
 
     /* the pixel values of the frames: on a TrueColor screen (every screen this runs on) the pixel is the colour */
     wm.pixel_border = wm.cfg.border_color;
@@ -1445,3 +1489,19 @@ int nexwm_x11_run(const char *config_path, int replace)
     nexwm_config_free(&wm.cfg);
     return 0;
 }
+
+#else  /* !NEXWM_HAVE_XCB: the Makefile found no libxcb, so there is no window manager in this program (the rest of
+        * NexWM — --version, --help, the configuration file — works, and `nexwm --version` says what is missing) */
+
+int nexwm_x11_run(const char *config_path, int replace)
+{
+    (void)config_path;
+    (void)replace;
+    fprintf(stderr,
+            "nexwm: this build has no X11 window manager: it was made without libxcb.\n"
+            "       Install it and build again — Debian/Ubuntu: sudo apt install libxcb1-dev; Fedora: sudo dnf\n"
+            "       install libxcb-devel.\n");
+    return 3;
+}
+
+#endif /* NEXWM_HAVE_XCB */

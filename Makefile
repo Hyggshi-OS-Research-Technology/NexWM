@@ -161,15 +161,17 @@ $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h 
 $(BUILD)/nexwm: $(NEXWM_SRC) nexwm/src/nexwm.h $(VERSION_H) | $(BUILD)
 	@[ -n "$(XCB_CFLAGS)" ] || echo "NOTE: libxcb1-dev (pkg-config xcb) not found: this nexwm has no X11 window manager"
 	@[ -n "$(WLR_PC)" ] || echo "NOTE: libwlroots-dev (pkg-config wlroots) not found: this nexwm has no Wayland compositor"
-	$(CC) $(GUI_CFLAGS) -std=c11 -Inexwm/src -I$(BUILD) $(XCB_CFLAGS) $(WLR_CFLAGS) -o $@ $(filter %.c,$^) \
+	$(CC) $(GUI_CFLAGS) -std=c11 -Inexwm/src -Isrc -I$(BUILD) $(XCB_CFLAGS) $(WLR_CFLAGS) -o $@ $(filter %.c,$^) \
 	    $(XCB_LIBS) $(WLR_LIBS) -lm
 # NexWM's configuration file and key bindings (nexwm/src/config.c): no display, no X server, no window manager
 $(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/nexwm.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Inexwm/src -o $@ $(filter %.c,$^)
-# The window the test of the window manager puts on the screen (tests/nexwm-client.c): a plain XCB client
+# The window the test of the window manager puts on the screen (tests/nexwm-client.c): a plain XCB client, so it only
+# exists where libxcb does (both are needed by tests/nexwm-test.sh, which then drives a real NexWM in Xvfb)
+ifneq ($(XCB_CFLAGS),)
 $(BUILD)/nexwm-client: tests/nexwm-client.c | $(BUILD)
-	@[ -n "$(XCB_CFLAGS)" ] || echo "WARNING: libxcb1-dev (pkg-config xcb) not found: tests/nexwm-test.sh cannot run"
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 $(XCB_CFLAGS) -o $@ $< $(XCB_LIBS)
+endif
 $(BUILD):
 	mkdir -p $(BUILD)
 $(VERSION_H): FORCE | $(BUILD)
@@ -206,8 +208,14 @@ check-media: $(BUILD)/hde-media
 
 # NexWM in a real X server (Xvfb + a window of its own): the takeover, the frames, the key bindings, the workspaces,
 # the work area a panel reserves with its struts, the way out and --replace. See tests/nexwm-test.sh
+ifneq ($(XCB_CFLAGS),)
 check-nexwm: $(BUILD)/nexwm $(BUILD)/nexwm-client
 	sh tests/nexwm-test.sh
+else
+check-nexwm: $(BUILD)/nexwm
+	@echo "NOTE: libxcb1-dev (pkg-config xcb) not found: the window manager test needs a real X server and a NexWM"
+	@echo "      built with libxcb — nothing to drive here. (build/nexwm says what to install: nexwm --version.)"
+endif
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
 check: all check-unit

@@ -16,14 +16,17 @@
 #   5. the way out: `quit` gives every window back (no frame, no _NET_FRAME_EXTENTS, back to the root) and leaves the
 #      properties of the root clean;
 #   6. --replace: with Metacity running, `nexwm --x11` refuses to start (exit status 3) and `nexwm --replace` takes the
-#      screen over from it. Metacity is what HDE runs by default, so this is how a user meets NexWM mid-session.
+#      screen over from it. Metacity is what HDE runs by default, so this is how a user meets NexWM mid-session — and the
+#      refusal must leave it running: taking the WM_S0 selection away from a window manager is how you ask it to quit,
+#      which is what --replace does on purpose and a plain start must not do.
 #
 #   sh tests/nexwm-test.sh                       everything this machine can do
 #   HDE_TEST_OUT=/tmp/where sh tests/nexwm-test.sh
 #
 # Environment: HDE_NEXWM_DISPLAY (the X server to use; default :81, started with Xvfb here if nothing answers),
 # HDE_TEST_OUT (/tmp/hde-nexwm). Needs: Xvfb xdotool x11-utils (xprop, xwininfo) and the two programs the Makefile
-# builds (build/nexwm, build/nexwm-client); metacity is optional (step 6 is skipped without it).
+# builds (build/nexwm, build/nexwm-client); metacity is optional (step 6 is skipped without it) and so are python3 +
+# libX11 (tests/xtool.py owns that one check: nothing can read a selection through xprop).
 # Exit status = failures; results.txt has the PASS/FAIL lines (tests/ci-annotate.py reads it).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -38,7 +41,6 @@ CONF="$OUT/nexwm.conf"
 LOG="$OUT/nexwm.log"
 
 if [ ! -x "$NEXWM" ]; then echo "tests/nexwm-test.sh: $NEXWM is not built (make build/nexwm)" >&2; exit 2; fi
-if [ ! -x "$CLIENT" ]; then echo "tests/nexwm-test.sh: $CLIENT is not built (make build/nexwm-client)" >&2; exit 2; fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
@@ -48,6 +50,23 @@ pass() { echo "PASS: nexwm: $*" | tee -a "$OUT/results.txt"; }
 fail() { echo "FAIL: nexwm: $*" | tee -a "$OUT/results.txt"; FAILS=$((FAILS + 1)); }
 info() { echo "INFO: nexwm: $*" | tee -a "$OUT/results.txt"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+# A build made without libxcb has a nexwm that can do nothing on X11 but say what to install (the Makefile finds
+# libxcb with pkg-config, and `nexwm --version` reports what went into the program): nothing to drive then — a SKIP
+# line, not a failure, so a machine without the -dev package is not a failing machine. (make check-nexwm says the
+# same thing before it gets here; this is for a direct run.)
+BUILD_HAS_X11="$("$NEXWM" --version 2>/dev/null | grep -c "X11 window manager (XCB): yes")"
+if [ "$BUILD_HAS_X11" -eq 0 ]; then
+    info "this nexwm was built without libxcb, so it has no X11 window manager — the window manager test is skipped"
+    echo "SKIP: nexwm: no X11 window manager in this build (libxcb1-dev/libxcb-devel was not there at build time)" \
+        | tee -a "$OUT/results.txt"
+    exit 0
+fi
+if [ ! -x "$CLIENT" ]; then
+    info "$CLIENT is not built: nothing to put on the screen — the window manager test is skipped"
+    echo "SKIP: nexwm: $CLIENT is not built (make build/nexwm-client)" | tee -a "$OUT/results.txt"
+    exit 0
+fi
+
 # every check carries both values in its message: a failure in CI has to be readable without the machine
 eq() { if [ "$2" = "$3" ]; then pass "$1: $3"; else fail "$1: expected '$2', got '$3'"; fi; }
 has() { case "$3" in *"$2"*) pass "$1" ;; *) fail "$1 ('$2' is not in '$(printf '%s' "$3" | tr '\n' '|')')" ;; esac; }
@@ -71,6 +90,12 @@ mapstate() { xwininfo -id "$1" 2>/dev/null | sed -n 's/^  Map State: //p'; }
 parentof() { xwininfo -id "$1" 2>/dev/null | sed -n 's/^  Parent window id: \(0x[0-9a-f]*\).*/\1/p'; }
 rootid()   { xwininfo -root 2>/dev/null | sed -n 's/^xwininfo: Window id: \(0x[0-9a-f]*\).*/\1/p'; }
 id_of()    { sed -n 's/.*\(0x[0-9a-f]*\).*/\1/p' | head -n1; }         # the window id inside a property's value
+# the ICCCM name of the window manager role (WM_S0) is a *selection*, which xprop cannot read: tests/xtool.py can (it
+# talks to libX11 through ctypes, so python3 and libX11 both have to be there — when they are not, the check says so
+# instead of failing, the way a machine without xdotool or xprop skips the sections that need them)
+XT="python3 $HERE/xtool.py"
+have_xt() { [ -f "$HERE/xtool.py" ] && $XT selection-owner WM_S0 >/dev/null 2>&1; }
+sel_owner() { $XT selection-owner "$1" 2>/dev/null; }
 wm_name() {                                                            # the name the window manager published
     id=$(rval _NET_SUPPORTING_WM_CHECK | id_of)
     [ -n "$id" ] && wval "$id" _NET_WM_NAME | tr -d '"'
@@ -142,6 +167,19 @@ trap cleanup EXIT INT TERM HUP
 # ---- 1. what needs no display at all ---------------------------------------------------------------------
 out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --version 2>&1)
 has "the version says what this is" "NexWM" "$out"
+has "and which of its two sides went into this build (X11 here, or this test would not be running)" \
+    "X11 window manager (XCB): yes" "$out"
+has "and the same for the Wayland side (yes or no, with what to install)" "Wayland compositor (wlroots):" "$out"
+
+# the Wayland side of this build: either the compositor (still being written: it says where it is going, status 4) or
+# nothing at all (status 4 and what to install) — never a crash and never a silent success
+out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --wayland 2>&1); st=$?
+if [ "$st" = 4 ]; then
+    has "the Wayland side answers for itself (status 4: the compositor is the next step)" "compositor" "$out"
+else
+    fail "--wayland: expected status 4, got $st ('$out')"
+fi
+
 out=$("$NEXWM" --help 2>&1)
 has "the help names the X11 window manager" "--x11" "$out"
 has "the help names the Wayland side" "--wayland" "$out"
@@ -229,6 +267,16 @@ EOF
             fail "the window manager did not come up (log: $(tail -n 3 "$LOG" | tr '\n' '|'))"
         else
             has "it announces itself as the window manager of this screen" "NexWM" "$(wm_name)"
+            if have_xt; then
+                owner=$(sel_owner WM_S0)
+                if [ -n "$owner" ] && [ "$owner" != 0 ]; then
+                    pass "and it holds the WM_S0 selection, which is what being the window manager means (ICCCM)"
+                else
+                    fail "it does not hold the WM_S0 selection (owner '$owner')"
+                fi
+            else
+                info "tests/xtool.py cannot read a selection here: the WM_S0 check is skipped"
+            fi
             has "it says what it is doing in the log" "nexwm: NexWM" "$(cat "$LOG")"
             has "with the border of the configuration file" "frame 6 px" "$(cat "$LOG")"
             has "and the workspaces of the configuration file" "3 workspaces" "$(cat "$LOG")"
@@ -425,6 +473,9 @@ EOF
                 fi
                 WM_PID=""
                 has "it said what it gave back" "leaving:" "$(cat "$LOG")"
+                if have_xt; then
+                    eq "and the WM_S0 selection went back with it (the connection closed)" "0" "$(sel_owner WM_S0)"
+                fi
                 hasnt "_NET_SUPPORTING_WM_CHECK is gone from the root" "window id" "$(rprop _NET_SUPPORTING_WM_CHECK)"
                 hasnt "and the keys it published are gone too" "Super" "$(rprop _NEXWM_KEYS)"
                 hasnt "the frame extents of the window it managed are gone" "6, 6" "$(wprop "$BETA" _NET_FRAME_EXTENTS)"
@@ -455,6 +506,10 @@ EOF
                     else
                         fail "without --replace: expected status 3, got $st ('$out')"
                     fi
+                    # ... and it must not have touched it on the way out: taking the WM_S0 selection away from a window
+                    # manager that is running is how you ask it to leave, and a start that refuses has no business doing
+                    # that (Metacity would have quit, taking the session's window manager with it)
+                    eq "Metacity is still the window manager after that" "Metacity" "$(wm_name)"
 
                     "$NEXWM" --x11 --replace --config "$CONF" > "$OUT/nexwm2.log" 2>&1 &
                     WM2_PID=$!

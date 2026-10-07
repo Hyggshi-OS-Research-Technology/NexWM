@@ -367,7 +367,9 @@ else
     # ... and now the same base Fedora with the window manager HDE brings with it (nexwm, built from this repository):
     # nothing to install, and the session stops being a desktop without a window manager
     if [ ! -x "$NEXWM_PARKED" ]; then
-        skip "nexwm was not built (libxcb-devel missing?): nothing to check with HDE's own window manager"
+        skip "nexwm was not built: nothing to check with HDE's own window manager"
+    elif ! "$NEXWM_PARKED" --version 2>/dev/null | grep -q "X11 window manager (XCB): yes"; then
+        skip "this nexwm was built without libxcb-devel, so it has no X11 window manager: nothing to check with it"
     else
         kill -TERM "$SESSION" 2>/dev/null
         sleep 2

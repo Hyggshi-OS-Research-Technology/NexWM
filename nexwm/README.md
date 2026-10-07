@@ -88,8 +88,11 @@ xprop -root _NEXWM_KEYS        # "Super+Q close\0Super+9 workspace 3\0…", one 
 
 ## What the X11 side implements
 
-* **The window manager role**: the `WM_Sn` selection, `SUBSTRUCTURE_REDIRECT` on the root window, and `--replace`
-  (it clears the selection and waits for the window manager that is there to give the screen up).
+* **The window manager role**: `SUBSTRUCTURE_REDIRECT` on the root window, and the `WM_Sn` selection — taken once the
+  screen is its own, never before. (Holding the selection is what being the window manager *means* in ICCCM, so a
+  program that takes it from a window manager that is running is asking that one to leave: with `--replace` that is the
+  point — NexWM clears the selection and waits for the screen — while a start without it refuses with status 3 and
+  leaves the window manager that is there alone, instead of ending the session's window manager as a side effect.)
 * **EWMH**: `_NET_SUPPORTED`, `_NET_SUPPORTING_WM_CHECK` (+ `_NET_WM_NAME` = "NexWM" — that is what
   *Settings → About* shows), `_NET_CLIENT_LIST`(`_STACKING`), `_NET_ACTIVE_WINDOW`, `_NET_NUMBER_OF_DESKTOPS`,
   `_NET_DESKTOP_NAMES`, `_NET_CURRENT_DESKTOP`, `_NET_DESKTOP_GEOMETRY`, `_NET_DESKTOP_VIEWPORT`, `_NET_WM_DESKTOP`,
@@ -134,3 +137,9 @@ make check-nexwm            # NexWM in Xvfb: frames, keys, workspaces, panel str
 
 Build dependencies: `libxcb1-dev` (Debian/Ubuntu), `libxcb-devel` (Fedora/openSUSE) — and `libwlroots-dev` for the
 Wayland side. Running the shell test needs `xvfb xdotool x11-utils` (and `metacity` for the `--replace` part).
+
+Both of them are **optional at build time**, and the program says which ones it got: `nexwm --version` and the last
+lines of `nexwm --help` name each side with *yes* or *no* (and what to install for the missing one). A build without
+`libxcb` still compiles — `nexwm --x11` then explains what is missing and exits `3`, the same way `--wayland` does
+without wlroots and exits `4` — and `make check-nexwm` says there is nothing to drive instead of failing. That is how
+the window manager builds on a machine (or in a CI job) that has no X11 development files at all.
