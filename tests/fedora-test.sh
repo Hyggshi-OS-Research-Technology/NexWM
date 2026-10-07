@@ -40,7 +40,7 @@ if [ -z "${HDE_FEDORA_INNER:-}" ]; then
     # a tool this test cannot do without: said in the results too, so it is on the job summary and not only in the log
     for t in Xvfb dbus-run-session python3 rpm; do
         command -v $t >/dev/null 2>&1 ||
-            { echo "FAIL: fedora: missing $t (dnf install xorg-x11-server-Xvfb dbus-tools python3 rpm)" | tee -a "$OUT/results.txt"; exit 2; }
+            { echo "FAIL: fedora: missing $t (dnf install xorg-x11-server-Xvfb dbus-daemon python3 rpm)" | tee -a "$OUT/results.txt"; exit 2; }
     done
     printf '[settings]\nwm=auto\n' > "$OUT/home/.config/hde/settings.ini"
     printf '[Desktop Entry]\nType=Application\nName=Fedora Test App\nComment=HDE on Fedora\nExec=touch %s/fedora-test-app\nIcon=applications-utilities\nCategories=Utility;\n' \

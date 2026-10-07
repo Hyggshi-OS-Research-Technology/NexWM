@@ -234,8 +234,8 @@ m=$(log_mark); media_key R
 check_new "$m" "^hde-media: rotated left (now 0°)" "Shift+R: back the other way (0°)"
 m=$(log_mark); media_key r; media_key r
 check_new "$m" "rotated right (now 180°)" "twice more to the right: 180°"
-m=$(log_mark); media_key r; media_key r
-check_new "$m" "rotated left (now 0°)" "and twice more: back to where the file is"
+m=$(log_mark); media_key R; media_key R
+check_new "$m" "rotated left (now 0°)" "and twice more the other way (Shift+R): back to where the file is"
 
 # ---------------------------------------------------------------- the slideshow
 m=$(log_mark); media_key s

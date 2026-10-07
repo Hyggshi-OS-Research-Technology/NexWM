@@ -93,7 +93,11 @@ static void viewer_update_status(HdeMediaViewer *w)
     const char *name = cur ? hde_media_basename(cur) : "(no pictures)";
     snprintf(text, sizeof text, "%ld / %zu · %s · %d×%d", i + 1, n, name, w->shown_w, w->shown_h);
     if (w->view.zoom <= 0.0) {
-        int percent = w->shown_w > 0 && w->loaded ? (int)(100.0 * w->shown_w / gdk_pixbuf_get_width(w->loaded)) : 100;
+        /* the percentage is against the picture as shown, so a picture turned a quarter turn is not suddenly at 75 % */
+        int base = !w->loaded ? 0
+                 : (w->view.rotation == 90 || w->view.rotation == 270) ? gdk_pixbuf_get_height(w->loaded)
+                                                                       : gdk_pixbuf_get_width(w->loaded);
+        int percent = (w->shown_w > 0 && base > 0) ? (int)(100.0 * w->shown_w / base + 0.5) : 100;
         snprintf(text + strlen(text), sizeof text - strlen(text), " · fit %d %%", percent);
     } else {
         snprintf(text + strlen(text), sizeof text - strlen(text), " · %d %%", (int)(w->view.zoom * 100.0 + 0.5));
@@ -194,19 +198,20 @@ static void viewer_refresh(HdeMediaViewer *w)
     gtk_widget_set_halign(w->area, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(w->area, GTK_ALIGN_CENTER);
 
-    /* the line the tests read (and that tells the user what is on the screen):
+    /* the line the tests read (and that tells the user what is on the screen). The size is the size of the picture as
+     * it is on the screen (a picture turned a quarter turn is wider than it is tall, and the line says so):
      *   hde-media: showing 3/12: img10.png (640x480, fit 62 %)
-     *   hde-media: showing 4/12: pic4.jpg (2048x1536, 25 %, rotated right 90°) */
+     *   hde-media: showing 4/12: pic4.jpg (1536x2048, 25 %, rotated right 90°) */
     char where[64];
     if (w->view.zoom <= 0.0)
-        snprintf(where, sizeof where, "fit %d %%", (int)(100.0 * tw / (double)gdk_pixbuf_get_width(w->loaded) + 0.5));
+        snprintf(where, sizeof where, "fit %d %%", (int)(100.0 * tw / (double)rw + 0.5));
     else
         snprintf(where, sizeof where, "%d %%", (int)(w->view.zoom * 100.0 + 0.5));
-    const char *rot = w->view.rotation == 90  ? ", rotated right 90°"
+    const char *how = w->view.rotation == 90  ? ", rotated right 90°"
                     : w->view.rotation == 180 ? ", upside down"
                     : w->view.rotation == 270 ? ", rotated left 90°" : "";
     viewer_media_log("showing %ld/%zu: %s (%dx%d, %s%s)", w->view.index + 1, w->view.list.n, hde_media_basename(cur),
-                     gdk_pixbuf_get_width(w->loaded), gdk_pixbuf_get_height(w->loaded), where, rot);
+                     rw, rh, where, how);
     viewer_update_status(w);
     gtk_widget_queue_draw(w->area);
 }
@@ -608,7 +613,10 @@ static void viewer_build_window(HdeMediaViewer *w)
     g_signal_connect(w->area, "scroll-event", G_CALLBACK(viewer_on_scroll), w);
     g_signal_connect(w->scrolled, "size-allocate", G_CALLBACK(viewer_on_size_allocate), w);
 
-    if (w->view.slideshow) gtk_button_set_label(GTK_BUTTON(w->slideshow_button), "Stop slideshow");
+    if (w->view.slideshow) {
+        gtk_button_set_label(GTK_BUTTON(w->slideshow_button), "Stop slideshow");
+        viewer_media_log("slideshow on (%d s per picture)", (int)(w->view.interval + 0.5));   /* -s: it is on already */
+    }
     w->tick_id = g_timeout_add(250, viewer_on_tick, w);       /* four times a second: the slideshow is exact enough */
 }
 
@@ -620,7 +628,9 @@ HdeMediaViewer *hde_media_viewer_new(GtkApplication *app, const char *path, char
     HdeMediaViewer *w = g_new0(HdeMediaViewer, 1);
     w->app = app;
     hde_media_view_init(&w->view, sort, recursive, interval);
-    w->view.slideshow = slideshow ? 1 : 0;
+    /* -s: the slideshow is already running — and it starts counting now, so the first picture gets its whole interval
+     * (without this the clock of the last advance is still 0 and the first tick of the timer would skip picture one) */
+    if (slideshow) hde_media_view_slideshow(&w->view, 1, g_get_monotonic_time() / 1000);
     w->fullscreen = fullscreen ? 1 : 0;
 
     if (n_paths > 1) {
