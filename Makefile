@@ -140,9 +140,14 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # The unit tests: no X server, no window manager, no session — the screen layouts, the distribution logos, the
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
-UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test
+UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test tests/sddm-test.sh
 check-unit: $(UNIT_TESTS)
 	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; $$t || rc=1; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
+
+# The HDE login screen (login/sddm/hde): files, metadata, theme.conf, QML and the installer; with a display (and
+# SDDM's greeter installed) it renders the theme for real. See tests/sddm-test.sh
+check-login:
+	sh tests/sddm-test.sh
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
 check: all check-unit
@@ -151,6 +156,8 @@ check: all check-unit
 clean:
 	rm -rf $(BUILD) $(CORE_OBJ)
 PREFIX ?= /usr/local
+SDDM_THEMES ?= /usr/share/sddm/themes
+SDDM_THEME ?= hde
 XSESSIONS ?= /usr/share/xsessions
 WLSESSIONS ?= /usr/share/wayland-sessions
 PORTALS_DIR ?= /usr/share/xdg-desktop-portal
@@ -177,6 +184,15 @@ install: all
 	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop
 	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
+	# the HDE login screen (SDDM theme, login/sddm/): the files, and hde-login to install/choose it on a running
+	# system (it also writes /etc/sddm.conf.d/50-hde-theme.conf so SDDM uses the theme)
+	install -d $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME) $(DESTDIR)$(PREFIX)/bin
+	install -m644 login/sddm/$(SDDM_THEME)/theme.conf login/sddm/$(SDDM_THEME)/metadata.desktop login/sddm/$(SDDM_THEME)/Main.qml $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)/
+	cp -r login/sddm/$(SDDM_THEME)/components $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)/components
+	cp -r login/sddm/$(SDDM_THEME)/assets $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)/assets
+	chmod -R a+rX $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
+	install -m755 login/sddm/install.sh $(DESTDIR)$(PREFIX)/bin/hde-login
+	@command -v sddm >/dev/null 2>&1 || echo "NOTE: the HDE login screen needs SDDM (sudo apt install sddm / sudo dnf install sddm), then: sudo hde-login"
 # To see a new build WITHOUT LOGGING OUT:
 #   make dev                     restart desktop+panel+hotkeys+xsettings from ./build (no install needed)
 #   sudo make install && make reload   install into $(PREFIX), then ask hde-session to restart desktop+panel
@@ -198,5 +214,7 @@ uninstall:
 	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
 	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
+	rm -rf $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
+	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-.PHONY: all clean install uninstall components dev reload check check-unit FORCE
+.PHONY: all clean install uninstall components dev reload check check-unit check-login FORCE

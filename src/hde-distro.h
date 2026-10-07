@@ -49,6 +49,19 @@ static inline const char *hde_distro_os_release(void)
     return cached;
 }
 
+/* Our own string copy: strdup() is a POSIX extension glibc hides when the compiler is asked for strict ISO C
+ * (-std=c11), and there a missing declaration is not just a warning: with `int` as the return type every string this
+ * file hands out becomes a truncated pointer (which is exactly how the distro unit test crashed on CI). malloc +
+ * memcpy depends on nothing but the C standard. */
+static inline char *hde_distro_dup(const char *s)
+{
+    size_t n = strlen(s ? s : "") + 1;
+    char *p = malloc(n);
+    if (!p) return NULL;
+    memcpy(p, s ? s : "", n);
+    return p;
+}
+
 /* The value of one key of the os-release file (unquoted), or NULL. The caller frees it.
  * It is read on every call: the tests (and the ISO build) switch HDE_OS_RELEASE between files. */
 static inline char *hde_distro_value(const char *key)
@@ -74,7 +87,7 @@ static inline char *hde_distro_value(const char *key)
             v++;
         }
         free(res);
-        res = strdup(v);
+        res = hde_distro_dup(v);
     }
     fclose(f);
     return res;
@@ -92,7 +105,7 @@ static inline char *hde_distro_id(void)
     char *pretty = hde_distro_value("NAME");
     if (pretty && *pretty) return pretty;
     free(pretty);
-    return strdup("");
+    return hde_distro_dup("");
 }
 
 /* NAME / PRETTY_NAME, for messages ("Fedora Linux 42"): never NULL. */
@@ -104,13 +117,13 @@ static inline char *hde_distro_name(void)
     n = hde_distro_value("NAME");
     if (n && *n) return n;
     free(n);
-    return strdup("this system");
+    return hde_distro_dup("this system");
 }
 
 static inline char *hde_distro_version(void)
 {
     char *v = hde_distro_value("VERSION_ID");
-    return v && *v ? v : (free(v), strdup(""));
+    return v && *v ? v : (free(v), hde_distro_dup(""));
 }
 
 /* Does the id (or one of the ids in ID_LIKE) contain `want`? "debian" matches Ubuntu, Mint, Hyggshi OS. */
@@ -297,18 +310,18 @@ static inline char *hde_distro_ram_advice(void)
 {
     int fam = hde_distro_family();
     if (fam == HDE_FAMILY_RPM)
-        return strdup("Fedora asks for 2 GB of RAM for a Workstation install and recommends 4 GB (a Fedora Live image "
+        return hde_distro_dup("Fedora asks for 2 GB of RAM for a Workstation install and recommends 4 GB (a Fedora Live image "
                       "needs at least 2 GB, like every live system it runs from RAM).");
     if (fam == HDE_FAMILY_ARCH)
-        return strdup("Arch needs no more than 512 MB to install, but a desktop with a browser wants 2 GB or more.");
+        return hde_distro_dup("Arch needs no more than 512 MB to install, but a desktop with a browser wants 2 GB or more.");
     if (fam == HDE_FAMILY_SUSE)
-        return strdup("openSUSE recommends 2 GB of RAM for a desktop and 4 GB for comfortable work.");
+        return hde_distro_dup("openSUSE recommends 2 GB of RAM for a desktop and 4 GB for comfortable work.");
     if (hde_distro_is("ubuntu"))
-        return strdup("Ubuntu asks for at least 4 GB of RAM for its desktop (2 GB is the absolute minimum with swap).");
+        return hde_distro_dup("Ubuntu asks for at least 4 GB of RAM for its desktop (2 GB is the absolute minimum with swap).");
     if (fam == HDE_FAMILY_DEB)
-        return strdup("Debian asks for at least 1 GB of RAM for a desktop and recommends 2 GB (with swap; a live USB "
+        return hde_distro_dup("Debian asks for at least 1 GB of RAM for a desktop and recommends 2 GB (with swap; a live USB "
                       "stick needs more, it runs from RAM).");
-    return strdup("A desktop system with a browser wants at least 2 GB of RAM (4 GB is comfortable).");
+    return hde_distro_dup("A desktop system with a browser wants at least 2 GB of RAM (4 GB is comfortable).");
 }
 
 #endif

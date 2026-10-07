@@ -398,6 +398,62 @@ jobs:
   # HDE mostly runs on Debian-based systems (Hyggshi OS defaults to Debian 13): build with their compilers too.
   # Debian 13 has GCC 14 (implicit declarations and pointer/int mix-ups are errors); testing has the newest GCC,
   # which compiles C23 by default (bool/true/false are keywords, "f()" means "f(void)").
+  # The HDE login screen (login/sddm/): its own job, because a login screen fails in its own ways. The theme is
+  # checked on its own first (the files SDDM needs, metadata.desktop, the QML, theme.conf, the installer — no display
+  # needed), then installed the way a user installs it (sudo sh login/sddm/install.sh), and then rendered for real in
+  # SDDM's greeter in Xvfb: the test reads the greeter's log for QML errors and looks at the pixels of the screen (the
+  # dark background, the card, the accent line on it). Ubuntu's SDDM is the Qt 5 greeter; the Fedora job above renders
+  # the same theme in the Qt 6 greeter, so both greeters this theme claims to support are tested for real.
+  sddm-theme:
+    name: SDDM login theme (Qt 5 greeter)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install SDDM, its greeter, Xvfb and a screenshot tool
+      run: |
+        sudo apt-get update
+        DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
+          sddm xvfb imagemagick x11-utils python3
+        dpkg -l sddm | tail -n 1
+        command -v sddm-greeter-qt6 || command -v sddm-greeter || echo "::warning::no SDDM greeter binary found"
+
+    - name: The theme, its configuration and its installer (no display needed)
+      run: sh tests/sddm-test.sh --no-render
+
+    - name: Install it the way a user does, and check what lands where
+      run: |
+        sudo sh login/sddm/install.sh --dry-run
+        sudo sh login/sddm/install.sh --default-session
+        echo "--- /etc/sddm.conf.d/50-hde-theme.conf"
+        cat /etc/sddm.conf.d/50-hde-theme.conf
+        test -f /usr/share/sddm/themes/hde/Main.qml
+        test -f /usr/share/sddm/themes/hde/components/HdePassword.qml
+        test -f /usr/share/sddm/themes/hde/assets/background.png
+        grep -E "^(QtVersion|Theme-Id|Type)=" /usr/share/sddm/themes/hde/metadata.desktop
+        du -sh /usr/share/sddm/themes/hde
+
+    - name: Render the theme in SDDM's greeter (Xvfb)
+      run: sh tests/sddm-test.sh
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-sddm results "HDE login screen"
+
+    - name: Upload the pictures of the login screen
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-sddm-login
+        path: |
+          /tmp/hde-sddm/*.txt
+          /tmp/hde-sddm/*.log
+          /tmp/hde-sddm/shot-*.png
+
   build-debian:
     name: build (${{ matrix.image }})
     runs-on: ubuntu-24.04

@@ -1,0 +1,17 @@
+[SddmGreeterTheme]
+Name=HDE
+Description=The login screen of the Hyggshi Desktop Environment (HDE): the HDE logo, the users of this computer, a
+ session chooser (HDE, HDE (Wayland), NexWM, ...), the keyboard layout and the power buttons, on a dark background
+ with HDE's accent colour. Written for the Qt 5 and the Qt 6 greeter.
+Author=Hyggshi OS Research Technology
+Copyright=(c) 2025 NexWM Contributors
+License=MIT
+Type=sddm-theme
+Version=1.0
+Website=https://github.com/Hyggshi-OS-Research-Technology/NexWM
+MainScript=Main.qml
+ConfigFile=theme.conf
+Screenshot=assets/screenshot.png
+Theme-Id=hde
+Theme-API=2.0
+QtVersion=5

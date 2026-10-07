@@ -4,7 +4,13 @@
  * right advice in Settings > About. Built and run by `make check-unit` (build/distro-test): PASS/FAIL lines,
  * exit status = failures.
  *   cc -Isrc -o build/distro-test tests/distro-test.c
+ *
+ * The Makefile builds it with `-std=c11`, where glibc hides strdup(): this file copies strings with a helper of its
+ * own (see below) so that a missing declaration cannot turn a pointer into an int (it did, and the test crashed).
  */
+/* setenv/unsetenv are POSIX: ask for them explicitly, the Makefile builds this with -std=c11 */
+#define _POSIX_C_SOURCE 200809L
+
 #include "hde-distro.h"
 
 #include <stdio.h>
@@ -21,9 +27,18 @@ static int fails, passes;
 
 static char *root;
 
+/* our own copy: strdup() is POSIX, and it is not declared under -std=c11 */
+static char *dup_str(const char *s)
+{
+    size_t n = strlen(s) + 1;
+    char *p = malloc(n);
+    if (p) memcpy(p, s, n);
+    return p;
+}
+
 static void write_os_release(const char *name, const char *text)
 {
-    if (!root) root = strdup("/tmp/hde-distro-test");
+    if (!root) root = dup_str("/tmp/hde-distro-test");
     char path[512];
     snprintf(path, sizeof path, "%s/os-release-%s", root, name);
     FILE *f = fopen(path, "w");

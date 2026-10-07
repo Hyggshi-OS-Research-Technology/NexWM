@@ -35,7 +35,9 @@ if [ -z "${HDE_FEDORA_INNER:-}" ]; then
         command -v $t >/dev/null 2>&1 || { echo "missing $t (dnf install xorg-x11-server-Xvfb dbus-tools python3 rpm)"; exit 2; }
     done
     rm -rf "$OUT"
-    mkdir -p "$OUT/home/.config/hde" "$OUT/home/.local/share/applications" "$OUT/home/Desktop" "$OUT/run"
+    # .cache/hde is where the session writes its log (hde-start and the session both do): without it the shell cannot
+    # even open the log file and the session never starts
+    mkdir -p "$OUT/home/.config/hde" "$OUT/home/.cache/hde" "$OUT/home/.local/share/applications" "$OUT/home/Desktop" "$OUT/run"
     chmod 700 "$OUT/run"
     printf '[settings]\nwm=auto\n' > "$OUT/home/.config/hde/settings.ini"
     printf '[Desktop Entry]\nType=Application\nName=Fedora Test App\nComment=HDE on Fedora\nExec=touch %s/fedora-test-app\nIcon=applications-utilities\nCategories=Utility;\n' \
@@ -79,7 +81,14 @@ if grep -qE '^(ID=fedora|ID_LIKE=.*fedora)' /etc/os-release 2>/dev/null; then
 else
     fail "this is not Fedora: /etc/os-release has no ID=fedora / ID_LIKE=fedora"
 fi
-check "rpm knows the system (fedora-release is installed)" rpm -q fedora-release
+# (the container images of newer Fedoras ship no fedora-release package: what counts is that rpm and /etc/os-release
+# agree with each other)
+if rpm -q fedora-release >/dev/null 2>&1 || rpm -q fedora-release-common >/dev/null 2>&1 ||
+   [ "$(rpm -E '%{fedora}' 2>/dev/null)" != "" ] || rpm -q --whatprovides system-release >/dev/null 2>&1; then
+    pass "rpm knows the system ($(rpm -q fedora-release 2>/dev/null || rpm -q --whatprovides system-release 2>/dev/null | head -n1))"
+else
+    skip "rpm knows no fedora-release package (a container image: $(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '\"'))"
+fi
 info "dnf $(dnf --version 2>/dev/null | head -n1); gcc $(gcc -dumpversion 2>/dev/null)"
 
 # ---------- 2. the Fedora dependency list of this repository ----------
@@ -99,7 +108,8 @@ fi
 # ---------- 3. HDE speaks Fedora: dnf, Fedora's package names, Fedora's advice ----------
 "$B/hde-settings" --deps build > "$OUT/deps-build.txt" 2>&1
 if grep -q "^  sudo dnf install " "$OUT/deps-build.txt" && grep -q "gtk3-devel" "$OUT/deps-build.txt" &&
-   grep -q "libwnck3-devel" "$OUT/deps-build.txt" && ! grep -q "\-dev" "$OUT/deps-build.txt"; then
+   grep -q "libwnck3-devel" "$OUT/deps-build.txt" &&
+   ! grep -qE "(^| )(libgtk-3-dev|libwnck-3-dev|libxrandr-dev|libxi-dev|libx11-dev|libgtk-layer-shell-dev|libxi6)( |$)" "$OUT/deps-build.txt"; then
     pass "hde-settings --deps build: $(sed -n 's/^  //p' "$OUT/deps-build.txt" | tr -d '\n' | cut -c1-60)…"
 else
     fail "hde-settings --deps build prints a dnf command with Fedora's package names: $(tr '\n' '|' < "$OUT/deps-build.txt")"
@@ -153,6 +163,17 @@ check "hde-panel is running" pgrep -x hde-panel
 check "hde-desktop is running" pgrep -x hde-desktop
 check "hde-hotkeys is running" pgrep -x hde-hotkeys
 check "the session is still alive (it did not give up on anything missing)" sh -c "kill -0 $SESSION"
+
+# a session that did not come up: the log is the only witness, so put it in the results (they are the CI annotation)
+if ! pgrep -x hde-panel >/dev/null 2>&1 || ! kill -0 "$SESSION" 2>/dev/null; then
+    if [ -f "$LOG" ]; then
+        info "the session log so far ($LOG, $(wc -l < "$LOG") lines):"
+        tail -n 25 "$LOG" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+    else
+        info "there is no session log at $LOG (the session never started)"
+    fi
+    info "processes: $(pgrep -a hde 2>/dev/null | tr '\n' '|')"
+fi
 
 if [ "$MODE" = full ]; then
     # a window manager from Fedora, chosen by HDE's auto mode (GTK ones first)
@@ -260,7 +281,7 @@ if [ "$MODE" = full ]; then
     fi
 
     # the SDDM login screen theme (its own folder, login/sddm/): only when this Fedora has SDDM
-    if [ -x "$HERE/sddm-test.sh" ] && have sddm-greeter; then
+    if [ -x "$HERE/sddm-test.sh" ] && { have sddm-greeter || have sddm-greeter-qt6; }; then
         out=$(HDE_SDDM_DISPLAY="$DISPLAY" HDE_TEST_OUT="$OUT/sddm" sh "$HERE/sddm-test.sh" --theme "$HERE/../login/sddm/hde" 2>&1)
         case "$out" in
         *"0 failed"*) pass "the SDDM theme renders in Fedora's greeter ($(echo "$out" | tail -n 1))" ;;
