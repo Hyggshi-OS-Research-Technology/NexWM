@@ -151,7 +151,9 @@ static void usage(FILE *out)
             "whichever of them is installed (mpv is the one that can also pause and seek) — and says what to install\n"
             "when it is none of them (a video with mpv plays inside the window on X11, in a window of its own\n"
             "elsewhere). Keys: Space play/pause, Left/Right previous and next, Ctrl+Left/Right five\n"
-            "seconds back or forward, s stop, Up/Down or + and - the volume, m mute, z shuffle, r repeat, q closes.\n");
+            "seconds back or forward, s stop, Up/Down or + and - the volume, m mute, v the subtitles (the ones next\n"
+            "to a video, and the ones inside it: mpv shows them, the other engines do not), z shuffle, r repeat, q\n"
+            "closes.\n");
 }
 
 /* the arguments of one invocation: the first one, or the one a second hde-media handed to the running window */

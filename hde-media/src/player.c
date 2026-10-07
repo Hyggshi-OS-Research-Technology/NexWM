@@ -11,6 +11,7 @@
  *   Ctrl+Left / Ctrl+Right  back / forward 5 s inside the track (mpv only, like the seek bar)
  *   Up / Down, + / -     the volume (5 % at a time; 0 % and 100 % are reachable exactly)
  *   m                    mute / unmute
+ *   v                    show / hide the subtitles (mpv only: the ones next to the video, and the ones inside it)
  *   z                    shuffle on / off    r   repeat: off → all → one
  *   q or Escape          close the window (the sound stops with it)
  *
@@ -21,7 +22,9 @@
  * mpv is the only engine that can be talked to while it plays: it is started with --input-ipc-server, and this file
  * speaks its JSON protocol over that socket (pause, seek, volume, mute, and where we are in the track, twice a second).
  * The others (ffplay, gst-launch-1.0, paplay, aplay) are a process: this window can start them and end them, nothing
- * more — the buttons that cannot work are greyed out rather than pretending.
+ * more — the buttons that cannot work are greyed out rather than pretending. The subtitles are mpv's too: it loads the
+ * ones next to a video (clip.srt, clip.en.srt) and the ones embedded in it by itself, so what this file does is say
+ * which ones it found (playlist.c looks for them) and send the one command that shows or hides them.
  *
  * The program logs what it does on stdout with the "hde-media: player: " prefix (engine, the command line it runs,
  * which track of how many, the end of a track, the end of the list): tests/player-window-test.sh reads those.
@@ -52,7 +55,7 @@ struct _HdeMediaPlayer {
     GtkWidget *window;
     /* what is shown */
     GtkWidget *heading, *heading_sub, *hint, *video, *elapsed, *total, *seek;
-    GtkWidget *prev, *play, *stop, *next, *shuffle, *repeat, *volume, *mute_button, *list, *status;
+    GtkWidget *prev, *play, *stop, *next, *shuffle, *repeat, *subs, *volume, *mute_button, *list, *status;
     /* what plays */
     HdePlayer player;             /* the list lives in here too (player.list): one state, not two */
     HdeMediaEngineKind engine;
@@ -71,7 +74,8 @@ struct _HdeMediaPlayer {
     guint tick_id;
     double position, duration;
     /* guards: a value set by this program must not come back as a user action */
-    int setting_seek, setting_volume;
+    int setting_seek, setting_volume, setting_subs;
+    int subs_on;                  /* the subtitles are shown (mpv starts with them on) */
     int alive, quitting;
     int x11;                      /* the session is X11: only there can mpv be told where to draw a video */
     /* one wait on a process may still be in flight when the window closes and this state is freed: the shared flag
@@ -93,6 +97,10 @@ static void guard_unref(PlayerGuard *g)
 {
     if (g && --g->refs == 0) g_free(g);
 }
+
+/* what the buttons and the status line are about (the widgets are built once, the state changes under them) */
+static const HdeTrack *player_now(const HdeMediaPlayer *p);
+static void player_report_subtitles(HdeMediaPlayer *p, const HdeTrack *t);
 
 static void player_log(const char *fmt, ...)
 {
@@ -178,6 +186,13 @@ static void player_buttons_update(HdeMediaPlayer *p)
     gtk_widget_set_sensitive(p->volume, has);
     gtk_widget_set_sensitive(p->mute_button, has);
     gtk_button_set_label(GTK_BUTTON(p->play), p->player.playing && !p->player.paused ? "Pause" : "Play");
+
+    const HdeTrack *now = player_now(p);
+    int subbable = has && p->can_seek && now && now->kind == HDE_MEDIA_KIND_VIDEO;
+    gtk_widget_set_sensitive(p->subs, subbable);
+    gtk_widget_set_tooltip_text(p->subs, subbable ? "Show or hide the subtitles (v)"
+                                                  : "mpv shows the subtitles of a video: the ones next to it, and the "
+                                                    "ones inside it (v)");
 
     int seekable = p->can_seek && p->duration > 0;
     gtk_widget_set_sensitive(p->seek, seekable);
@@ -524,6 +539,13 @@ static void player_play_index(HdeMediaPlayer *p, long index)
     player_log("playing %ld/%d: %s", index + 1, (int)list->n, t->title);
     if (t->kind == HDE_MEDIA_KIND_VIDEO && wid)
         player_log("the video is drawn in this window (mpv --wid=%lu)", wid);
+    player_report_subtitles(p, t);
+    p->subs_on = 1;                                    /* a new track starts with them shown, as mpv does */
+    if (p->subs) {
+        p->setting_subs = 1;                           /* ... without that being taken for a key press */
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->subs), TRUE);
+        p->setting_subs = 0;
+    }
     player_log("run: %s", line ? line : hde_media_engine_kind_name(p->engine));
     g_free(line);
 
@@ -649,6 +671,53 @@ static void player_on_mute(GtkToggleButton *b, gpointer d)
     player_status_update(p);
 }
 
+/* the track that is playing now, or NULL (what the subtitles and the status line are about) */
+static const HdeTrack *player_now(const HdeMediaPlayer *p)
+{
+    if (p->player.index < 0 || (size_t)p->player.index >= p->player.list.n) return NULL;
+    return &p->player.list.items[p->player.index];
+}
+
+/* One line per video track: what is next to it. mpv loads the subtitles of a video by itself — the ones next to it and
+ * the ones inside it — so this is not something HDE has to hand over, it is something it can tell the user. */
+static void player_report_subtitles(HdeMediaPlayer *p, const HdeTrack *t)
+{
+    if (t->kind != HDE_MEDIA_KIND_VIDEO) return;                 /* a sound has no subtitles */
+    char *sub = hde_media_subtitle_for(t->path);
+    if (sub) {
+        if (p->engine == HDE_MEDIA_ENGINE_MPV) player_log("subtitles: %s", hde_media_basename(sub));
+        else player_log("subtitles: %s is there, but only mpv shows subtitles", hde_media_basename(sub));
+    } else if (p->engine == HDE_MEDIA_ENGINE_MPV) {
+        player_log("no subtitles next to %s", hde_media_basename(t->path));
+    }
+    g_free(sub);
+}
+
+/* the "v" key and the button: mpv is told to show or hide them while it plays */
+static void player_set_subtitles(HdeMediaPlayer *p, int on)
+{
+    p->subs_on = on ? 1 : 0;
+    const HdeTrack *t = player_now(p);
+    if (!t || t->kind != HDE_MEDIA_KIND_VIDEO) {
+        player_log("this track has no subtitles");
+        return;
+    }
+    if (!p->can_seek) {                    /* there is no socket: ffplay, gst-launch-1.0, paplay, aplay */
+        player_log("%s cannot show subtitles (only mpv does)", hde_media_engine_kind_name(p->engine));
+        return;
+    }
+    mpv_send(p, p->subs_on ? "{\"command\":[\"set_property\",\"sub-visibility\",true]}"
+                           : "{\"command\":[\"set_property\",\"sub-visibility\",false]}");
+    player_log(p->subs_on ? "subtitles on" : "subtitles off");
+}
+
+static void player_on_subs(GtkToggleButton *b, gpointer d)
+{
+    HdeMediaPlayer *p = d;
+    if (p->setting_subs) return;           /* the program setting the button is not a user action */
+    player_set_subtitles(p, gtk_toggle_button_get_active(b));
+}
+
 static void player_on_shuffle(GtkToggleButton *b, gpointer d)
 {
     HdeMediaPlayer *p = d;
@@ -703,6 +772,7 @@ static gboolean player_on_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
     case GDK_KEY_Down:
     case GDK_KEY_minus:
     case GDK_KEY_KP_Subtract: player_volume_step(p, -1); return TRUE;
+    case GDK_KEY_v:          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->subs), !p->subs_on); return TRUE;
     case GDK_KEY_z:          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->shuffle), !p->player.shuffle); return TRUE;
     case GDK_KEY_r:          player_repeat_next(p); return TRUE;
     case GDK_KEY_q:
@@ -828,6 +898,12 @@ static void player_build_window(HdeMediaPlayer *p)
     gtk_widget_set_tooltip_text(p->repeat, "Repeat: off → all → one (r)");
     g_signal_connect(p->repeat, "clicked", G_CALLBACK(player_on_repeat), p);
     gtk_box_pack_start(GTK_BOX(bar), p->repeat, FALSE, FALSE, 0);
+
+    p->subs = gtk_toggle_button_new_with_label("Subtitles");
+    gtk_widget_set_tooltip_text(p->subs, "Show or hide the subtitles (v)");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->subs), p->subs_on);
+    g_signal_connect(p->subs, "toggled", G_CALLBACK(player_on_subs), p);
+    gtk_box_pack_start(GTK_BOX(bar), p->subs, FALSE, FALSE, 0);
 
     /* the volume, to the right */
     GtkWidget *space = gtk_label_new("");

@@ -30,10 +30,17 @@ window, and a picture dropped on the window opens it.
 
 Player keys: `Space` play/pause (mpv only: the others cannot be paused), `Left`/`Right` (or `b`/`n`) previous and next,
 `Ctrl+Left`/`Ctrl+Right` five seconds back or forward, `s` stop, `Up`/`Down` or `+`/`-` the volume, `m` mute, `z`
-shuffle, `r` repeat (off, all, one), `q` closes the window — which stops the sound with it.
+shuffle, `r` repeat (off, all, one), `v` the subtitles (mpv only, and only a video), `q` closes the window — which stops
+the sound with it.
 
 A video is drawn *inside* this window when mpv is the engine and the session is X11 (mpv is given the X id of the black
 area above the seek bar); with ffplay, gst-launch-1.0, or on Wayland, it opens a window of its own.
+
+Subtitles are mpv's business: it loads the ones next to a video (`clip.srt`, and `clip.en.srt` when there is a language
+in the name) and the ones stored inside it (an `.mkv` with three subtitle tracks) by itself. What HDE does with them is
+look for the sidecar (`playlist.c`, `hde_media_subtitle_for`) and say in one line per video what it found — `subtitles:
+clip.srt` or `no subtitles next to clip.mp4` — and let `v` show or hide them over the socket while the video plays. The
+other engines show no subtitles at all, and the window says so instead of pretending.
 
 Running `hde-media` again while it is open shows the new picture in the window that is already there, and hands what it
 was given to the player if that is what is open (one process, one window per kind — what the file manager's "Open With"
@@ -90,7 +97,9 @@ install instead of doing nothing. Every check reads either the `hde-media: playe
 stand-in was told over the socket. The stand-in writes every position it reports down as well (`TIME	3.250`), and that
 is what lets the test judge a seek exactly: `Ctrl+Right` has to ask mpv for where the track *is* plus five seconds (the
 absolute 5 s would be a different bug), and on a 2.5-second video the same key has to stop at the 2.5 s end of the track
-instead of running past it.
+instead of running past it. The video of the last phase also comes with a `clip.srt` next to it and a second video
+(`zebra.mp4`) that has none: the log has to name the one and say there is nothing next to the other, and `v` has to send
+mpv the one command that hides the subtitles and, again, the one that shows them.
 
 The picture-viewer test needs `xvfb xdotool metacity imagemagick dbus-x11`, opens a folder of solid-coloured pictures of known
 sizes and checks what the log says and what is on the screen: the arrows (wrapping included), the zoom keys and the
@@ -104,7 +113,7 @@ sound server's own player, and gives everything else to the first of these that 
 
 | | | |
 | --- | --- | --- |
-| `mpv` | everything | the best of them: with its IPC socket the window can pause, seek and set the volume; on X11 a video can even be drawn inside the window (everywhere else it opens its own) |
+| `mpv` | everything | the best of them: with its IPC socket the window can pause, seek, set the volume and show or hide the subtitles; on X11 a video can even be drawn inside the window (everywhere else it opens its own) |
 | `ffplay` | everything | part of ffmpeg, its own window, no control but stopping it |
 | `gst-launch-1.0` | everything | part of GStreamer, its own window, no control but stopping it |
 | `paplay` | sound only | PulseAudio/PipeWire's own player, for WAV/AU/AIFF |
@@ -115,5 +124,5 @@ With none of them installed the window says so and gives the two commands (`sudo
 
 ## What comes next in this folder
 
-Subtitles: mpv reads them, the other engines do not. Then the panel showing what is playing (HDE's own MPRIS
-interface), the multimedia keys of `hde-hotkeys`, the volume on the screen, and a screen recorder.
+The panel showing what is playing (HDE's own MPRIS interface), the multimedia keys of `hde-hotkeys`, the volume on the
+screen, and a screen recorder.

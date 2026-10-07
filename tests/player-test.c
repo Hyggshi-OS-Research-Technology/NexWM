@@ -595,6 +595,87 @@ static const char *argv_last(const HdeMediaEngine *e)
     return n && e->argv[n - 1] ? e->argv[n - 1] : "";
 }
 
+/* the subtitles: the file next to a video (playlist.h, hde_media_subtitle_for) */
+static void test_subtitles(void)
+{
+    char p[512], want[512], *got;
+
+    /* The fixtures of this section are made here and not in main(): the folder the tests above walk is counted there,
+     * and a file that only this section needs should not go into that count. sub/ is not touched either. */
+    char cmd[512];
+    snprintf(cmd, sizeof cmd, "mkdir -p %s/subs/deep", root);
+    if (system(cmd) != 0) { /* nothing to make */ }
+    write_bytes("clip.srt", "1\n00:00:01,000 --> 00:00:02,000\nHello\n", 36);   /* next to the clip.mp4 of main() */
+    write_bytes("tune.srt", "subs\n", 5);                      /* next to an .ogg: still not subtitles */
+    write_bytes("only.srt", "subs\n", 5);                      /* a subtitle with no video of that name */
+    write_bytes("subs/LOUD.mp4", "video", 5);
+    write_bytes("subs/LOUD.SRT", "subs\n", 5);
+    write_bytes("subs/shot.mp4", "video", 5);
+    write_bytes("subs/shot.ass", "subs\n", 5);
+    write_bytes("subs/multi.mp4", "video", 5);
+    write_bytes("subs/multi.vtt", "subs\n", 5);
+    write_bytes("subs/multi.sub", "subs\n", 5);
+    write_bytes("subs/quiet.mp4", "video", 5);
+    write_bytes("subs/quiet.fr.srt", "subs\n", 5);
+    write_bytes("subs/quiet.en.srt", "subs\n", 5);
+    write_bytes("subs/bare.mp4", "video", 5);
+    write_bytes("subs/deep/clip2.mp4", "video", 5);             /* a video with a folder of its own */
+    write_bytes("subs/deep/clip2.srt", "subs\n", 5);
+
+    path_of(p, sizeof p, "clip.mp4");
+    path_of(want, sizeof want, "clip.srt");
+    got = hde_media_subtitle_for(p);
+    CHECK(got && !strcmp(got, want), "the .srt next to a video is found (%s)", got ? got : "nothing");
+    free(got);
+
+    path_of(p, sizeof p, "subs/LOUD.mp4");
+    path_of(want, sizeof want, "subs/LOUD.SRT");
+    got = hde_media_subtitle_for(p);
+    CHECK(got && !strcmp(got, want), "the extension may be in either case (LOUD.mp4 -> LOUD.SRT)");
+    free(got);
+
+    path_of(p, sizeof p, "subs/shot.mp4");
+    path_of(want, sizeof want, "subs/shot.ass");
+    got = hde_media_subtitle_for(p);
+    CHECK(got && !strcmp(got, want), "an .ass is a subtitle too");
+    free(got);
+
+    path_of(p, sizeof p, "subs/multi.mp4");
+    path_of(want, sizeof want, "subs/multi.vtt");
+    got = hde_media_subtitle_for(p);
+    CHECK(got && !strcmp(got, want), "and .vtt comes before .sub (the order of the list)");
+    free(got);
+
+    path_of(p, sizeof p, "subs/quiet.mp4");
+    path_of(want, sizeof want, "subs/quiet.en.srt");
+    got = hde_media_subtitle_for(p);
+    CHECK(got && !strcmp(got, want), "a language in the name counts (quiet.en.srt, the first of the two)");
+    free(got);
+
+    path_of(p, sizeof p, "subs/deep/clip2.mp4");
+    path_of(want, sizeof want, "subs/deep/clip2.srt");
+    got = hde_media_subtitle_for(p);
+    CHECK(got && !strcmp(got, want), "a video in a folder of its own is looked after there (%s)", got ? got : "nothing");
+    free(got);
+
+    path_of(p, sizeof p, "subs/bare.mp4");
+    got = hde_media_subtitle_for(p);
+    CHECK(!got, "a video with nothing next to it has no subtitles");
+    free(got);
+
+    path_of(p, sizeof p, "tune.ogg");
+    got = hde_media_subtitle_for(p);
+    CHECK(!got, "a sound has no subtitles, even with an .srt next to it");
+    free(got);
+
+    path_of(p, sizeof p, "only.srt");
+    got = hde_media_subtitle_for(p);
+    CHECK(!got, "and a subtitle is not a video");
+    free(got);
+
+    CHECK(hde_media_subtitle_for(NULL) == NULL && hde_media_subtitle_for("") == NULL, "no path, no subtitles");
+}
+
 static void test_engine(void)
 {
     saved_path = hde_media_strdup(getenv("PATH") ? getenv("PATH") : "");
@@ -766,6 +847,7 @@ int main(void)
     test_playlist_files();
     test_playback();
     test_titles();
+    test_subtitles();
     test_engine();
 
     snprintf(cmd, sizeof cmd, "rm -rf %s", root);

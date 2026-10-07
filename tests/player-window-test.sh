@@ -11,7 +11,9 @@
 # stop, play); the volume, mute, shuffle and repeat keys; that a second hde-media hands its song to the window that is
 # already open (one process, one window); that a track that ends plays the next one, that the end of the list stops, and
 # that repeat all goes back to the first; that with no engine at all the window says so instead of doing nothing; and
-# that closing the window ends the process with 0 (and takes the sound down with it).
+# that closing the window ends the process with 0 (and takes the sound down with it); and, for a video, the subtitles
+# next to it: that they are found and named in the log, that "v" hides and shows them again over mpv's socket, and that
+# a video with nothing next to it says so.
 #
 # Needs: Xvfb, xdotool, Metacity, python3 (tests/fake-mpv.py), dbus-run-session.
 #   sudo apt install xvfb xdotool metacity python3 dbus-x11
@@ -54,6 +56,8 @@ if [ -z "${HDE_PLAYER_INNER:-}" ]; then
     printf 'first of two\n' > "$MUSIC2/one.mp3"
     printf 'second of two\n' > "$MUSIC2/two.mp3"
     printf 'not really a video\n' > "$FILMS/clip.mp4"
+    printf '1\n00:00:01,000 --> 00:00:02,000\nHello\n' > "$FILMS/clip.srt"   # the subtitles "next to" the clip
+    printf 'not really a video either\n' > "$FILMS/zebra.mp4"                 # a video with nothing next to it
     # the engine the window finds in $PATH: an empty executable file is not enough (hde_media_find_program only looks at
     # $PATH, but the window *runs* it), so it is the python stand-in, under the name mpv
     ln -sf "$HERE/fake-mpv.py" "$FAKEBIN/mpv"
@@ -324,16 +328,25 @@ MPV_DURATION=2.5          # a short clip: the seek below has to stop at its end
 m23=$(mark)
 if player_start 60 --play "$FILMS"; then pass "a video opens the player too"
 else fail "a video opens the player too"; fi
-if wait_new "$m23" "playing 1/1: clip.mp4" 10; then pass "the video plays"
+if wait_new "$m23" "playing 1/2: clip.mp4" 10; then pass "the video plays"
 else fail "the video plays"; fi
 if wait_new "$m23" "the video is drawn in this window" 5; then
     pass "mpv is told to draw it inside the window (an X11 session)"
 else fail "mpv is told to draw the video inside the window"; fi
 if grep -q -e "--wid=[0-9]" "$ENGINE_LOG"; then pass "the command line carries the X id of the area"
 else fail "the command line carries the X id of the area (engine.log: $(head -n 1 "$ENGINE_LOG" | cut -c1-200))"; fi
+if wait_new "$m23" "subtitles: clip.srt" 5; then pass "the subtitles next to the video are found and named (clip.srt)"
+else fail "the subtitles next to the video are named"; fi
+m24=$(mark); player_key v
+if wait_new "$m24" "subtitles off" 5 && grep -q '"sub-visibility",false' "$ENGINE_LOG"; then
+    pass "v hides them (mpv is told over the socket)"
+else fail "v hides the subtitles (mpv told nothing: $(grep -c 'sub-visibility' "$ENGINE_LOG" 2>/dev/null) of those)"; fi
+m25=$(mark); player_key v
+if wait_new "$m25" "subtitles on" 5 && grep -q '"sub-visibility",true' "$ENGINE_LOG"; then pass "v again: they are back"
+else fail "v again shows the subtitles"; fi
 # five seconds on from a 2.5 s clip is its end: a seek is kept inside the track, it does not run past it
-m24=$(mark); player_key ctrl+Right
-if wait_new "$m24" "seek " 5; then
+m26=$(mark); player_key ctrl+Right
+if wait_new "$m26" "seek " 5; then
     seek_line=$(grep -n '"seek",[0-9.]*' "$ENGINE_LOG" | tail -n 1 | cut -d: -f1)
     [ -n "$seek_line" ] || seek_line=1     # nothing there: the check below fails, it does not blow up
     seek_to=$(sed -n "${seek_line}p" "$ENGINE_LOG" | grep -o '"seek",[0-9.]*' | cut -d, -f2)
@@ -341,6 +354,11 @@ if wait_new "$m24" "seek " 5; then
         pass "a seek stops at the end of the track (the clip is 2.5 s, it asked for ${seek_to}s)"
     else fail "a seek stops at the end of the track (asked for '${seek_to:-nothing}' in $ENGINE_LOG)"; fi
 else fail "the video phase reaches mpv with a seek too"; fi
+m27=$(mark); player_key Right
+if wait_new "$m27" "playing 2/2: zebra.mp4" 5; then pass "Right: the second video"
+else fail "Right: the second video"; fi
+if wait_new "$m27" "no subtitles next to zebra.mp4" 5; then pass "a video with nothing next to it says so"
+else fail "a video with nothing next to it says so"; fi
 shot 4-video
 if player_quit; then pass "q closes the video window with 0"
 else fail "q closes the video window with 0"; fi

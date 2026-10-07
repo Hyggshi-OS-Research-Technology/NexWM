@@ -73,6 +73,13 @@ const char *hde_media_kind_name(HdeMediaKind kind);             /* "audio" / "vi
 HdeMediaKind hde_media_kind_of(const char *name);               /* by extension */
 int   hde_media_is_media(const char *name);                     /* audio or video: what the player opens */
 
+/* The subtitles that go with a video, or NULL: the file next to it with the same name and one of the extensions the
+ * players read (.srt, .ass, .ssa, .vtt, .sub — the plain name first, then one with a language in it, clip.en.srt, and
+ * in either case: CLIP.SRT is clip.srt). NULL for anything that is not a video: a sound has no subtitles, and neither
+ * has a subtitle itself. mpv finds these by itself; this is what HDE tells the user it has, and what the "v" key of
+ * the window shows or hides. The string is malloc'ed. */
+char *hde_media_subtitle_for(const char *path);
+
 /* "3:07", "1:02:03"; seconds < 0 (unknown) gives "-:--". Returns what it wrote. */
 size_t hde_media_format_time(char *buf, size_t n, double seconds);
 /* the line the panel and the window show: "Artist — Title", or the file name when there are no tags */

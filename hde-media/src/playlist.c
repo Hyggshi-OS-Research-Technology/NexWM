@@ -62,6 +62,115 @@ HdeMediaKind hde_media_kind_of(const char *name)
     return HDE_MEDIA_KIND_UNKNOWN;
 }
 
+/* ---------------------------------------------------------------- the subtitles of a video */
+
+/* dir + "/" + name (the slash is left out when the directory already has one: hde_media_dirname("/") is "/") */
+static char *path_in(const char *dir, const char *name)
+{
+    size_t dl = strlen(dir);
+    int slash = !(dl && dir[dl - 1] == '/');
+    char *p = malloc(dl + (size_t)slash + strlen(name) + 1);
+    if (!p) return NULL;
+    memcpy(p, dir, dl);
+    if (slash) p[dl++] = '/';
+    memcpy(p + dl, name, strlen(name) + 1);
+    return p;
+}
+
+/* "<stem>.<ext>", the extension in the case asked for (a file system that tells CLIP.SRT from clip.srt is not rare) */
+static char *name_with_ext(const char *base, size_t stem, const char *ext, int upper)
+{
+    size_t el = strlen(ext);
+    char *name = malloc(stem + el + 2);
+    if (!name) return NULL;
+    memcpy(name, base, stem);
+    name[stem] = '.';
+    for (size_t k = 0; k < el; k++)
+        name[stem + 1 + k] = (char)(upper ? toupper((unsigned char)ext[k]) : tolower((unsigned char)ext[k]));
+    name[stem + 1 + el] = '\0';
+    return name;
+}
+
+static int is_regular_file(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/* "clip.en.srt": the stem, a dot, something (the language), a dot and the extension. The plain name was tried first,
+ * so a name that is exactly the stem is not this. */
+static int is_subtitle_of(const char *name, const char *base, size_t stem, const char *ext)
+{
+    size_t nl = strlen(name), el = strlen(ext);
+    if (!nl || name[0] == '.') return 0;                       /* hidden files are not the video's subtitles either */
+    if (nl <= stem + el + 1) return 0;                         /* too short to have a language in it */
+    if (memcmp(name, base, stem) != 0 || name[stem] != '.') return 0;
+    return name[nl - el - 1] == '.' && strcasecmp(name + nl - el, ext) == 0;
+}
+
+char *hde_media_subtitle_for(const char *path)
+{
+    if (!path || !*path) return NULL;
+    if (hde_media_kind_of(path) != HDE_MEDIA_KIND_VIDEO) return NULL;   /* only a video has subtitles */
+
+    static const char *const exts[] = {"srt", "ass", "ssa", "vtt", "sub"};
+    const size_t n_exts = sizeof exts / sizeof exts[0];
+
+    const char *base = hde_media_basename(path);
+    const char *dot = strrchr(base, '.');
+    size_t stem = dot && dot != base ? (size_t)(dot - base) : strlen(base);
+    if (!stem) return NULL;
+
+    char *dir = hde_media_dirname(path);
+    if (!dir) return NULL;
+
+    /* 1. the plain name: clip.mp4 -> clip.srt, in the order of the extensions and both cases of each */
+    for (size_t i = 0; i < n_exts; i++) {
+        for (int upper = 0; upper < 2; upper++) {
+            char *name = name_with_ext(base, stem, exts[i], upper);
+            char *cand = name ? path_in(dir, name) : NULL;
+            free(name);
+            if (!cand) break;
+            if (is_regular_file(cand)) {
+                free(dir);
+                return cand;
+            }
+            free(cand);
+        }
+    }
+
+    /* 2. a language in the name: clip.en.srt. The same order of extensions, the shortest name of each (then the
+     * first alphabetically, so two runs of the program pick the same file) */
+    DIR *d = opendir(dir);
+    if (d) {
+        for (size_t i = 0; i < n_exts; i++) {
+            char *best = NULL;
+            struct dirent *e;
+            while ((e = readdir(d))) {
+                if (!is_subtitle_of(e->d_name, base, stem, exts[i])) continue;
+                if (!best || strlen(e->d_name) < strlen(best) ||
+                    (strlen(e->d_name) == strlen(best) && strcmp(e->d_name, best) < 0)) {
+                    char *copy = hde_media_strdup(e->d_name);
+                    if (!copy) break;
+                    free(best);
+                    best = copy;
+                }
+            }
+            rewinddir(d);
+            if (best) {
+                char *full = path_in(dir, best);
+                free(best);
+                closedir(d);
+                free(dir);
+                return full;
+            }
+        }
+        closedir(d);
+    }
+    free(dir);
+    return NULL;
+}
+
 int hde_media_is_media(const char *name) { return hde_media_kind_of(name) != HDE_MEDIA_KIND_UNKNOWN; }
 int hde_media_is_playlist(const char *name) { return in_list(PLAYLISTS, hde_media_extension(name)); }
 
