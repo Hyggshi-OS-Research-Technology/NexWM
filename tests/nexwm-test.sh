@@ -23,8 +23,10 @@
 #   sh tests/nexwm-test.sh                       everything this machine can do
 #   HDE_TEST_OUT=/tmp/where sh tests/nexwm-test.sh
 #
-# The test puts everything it starts away, and a watchdog (HDE_TEST_WATCHDOG seconds, 300 by default) ends it with a
-# FAIL line naming the last check if it ever hangs: a stuck CI job cannot be read, a failed one can.
+# The test puts everything it starts away, and a watchdog (tests/nexwm-watchdog.sh, HDE_TEST_WATCHDOG seconds, 300 by
+# default) ends it with a FAIL line naming the last check if it ever hangs: a stuck CI job cannot be read, a failed one
+# can. Every question asked of the X server is bounded too — a tool that waits for ever waits in the middle of a check,
+# and that is how a two-minute test becomes a step nobody can read.
 #
 # Environment: HDE_NEXWM_DISPLAY (the X server to use; default :81, started with Xvfb here if nothing answers),
 # HDE_TEST_OUT (/tmp/hde-nexwm). Needs: Xvfb xdotool x11-utils (xprop, xwininfo) and the two programs the Makefile
@@ -50,17 +52,22 @@ mkdir -p "$OUT/bin"
 : > "$OUT/results.txt"
 
 # A watchdog for the whole test. A CI job that hangs tells nobody anything: if this is still running after
-# HDE_TEST_WATCHDOG seconds (900), the last line of results.txt is the evidence of where it got stuck, and the test
-# leaves with a failure the annotator can publish (tests/ci-annotate.py reads that file).
+# HDE_TEST_WATCHDOG seconds (300 by default), the last line of results.txt is the evidence of where it got stuck, and
+# the test leaves with a failure the annotator can publish (tests/ci-annotate.py reads that file).
 MAIN_PID=$$
-# Nothing of the watchdog goes to the stdout of the step: a leftover of a test that finished must never keep the pipe of
-# a CI step open (that alone would hang a job until the runner gives up on it).
-( sleep "${HDE_TEST_WATCHDOG:-300}"
-  kill -0 "$MAIN_PID" 2>/dev/null || exit 0          # the test is over: nothing to say
-  printf 'FAIL: nexwm: still running after %ss (the last thing it said: %s)\n' "${HDE_TEST_WATCHDOG:-300}" \
-         "$(tail -n 1 "$OUT/results.txt" 2>/dev/null | cut -c1-200)" >> "$OUT/results.txt"
-  kill -TERM "$MAIN_PID" 2>/dev/null ) >/dev/null 2>&1 &
+# Every process this test starts is named here from the beginning, so the cleanup below can put all of them away even
+# when the test ends in the middle of a section.
+XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; METACITY_PID=""
+
+# The watchdog is tests/nexwm-watchdog.sh, a separate program with its own reasons written down at the top of it: it
+# says where a hanging test got stuck, asks it to leave, and kills what is left of it when the signal cannot be acted
+# on. It is started here with the pid of this shell, and nothing of it goes to the stdout of the step (see below).
+sh "$HERE/nexwm-watchdog.sh" "$MAIN_PID" "$OUT" "${HDE_TEST_WATCHDOG:-300}" >/dev/null 2>&1 &
 WATCHDOG_PID=$!
+
+# Every process this test starts is named here from the beginning, so the cleanup below can put all of them away even
+# when the test ends in the middle of a section.
+XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; METACITY_PID=""
 
 # What the test started is put away by the test, whatever way it ends: the X server, the window manager(s), the windows
 # and the tools that may be waiting for the X server. A test that leaves a process behind leaves a CI step that never
@@ -104,33 +111,44 @@ has() { case "$3" in *"$2"*) pass "$1" ;; *) fail "$1 ('$2' is not in '$(printf 
 hasnt() { case "$3" in *"$2"*) fail "$1 ('$2' is in '$(printf '%s' "$3" | tr '\n' '|')')" ;; *) pass "$1" ;; esac; }
 
 # ---- reading properties: xprop for properties, xwininfo for places, sizes and map states -----------------
-rprop() { xprop -root "$1" 2>/dev/null; }                              # the line of a root property
-wprop() { xprop -id "$1" "$2" 2>/dev/null; }                           # ... of a window property
+# Every question asked of the X server is bounded. xprop, xwininfo and xdotool wait for the server to answer, and a tool
+# that waits for ever is a test that hangs — and a CI job that hangs tells nobody anything. 15 s is many times what any
+# of these calls needs; reaching it is a failure with a readable message instead of a job nobody can read.
+if have timeout; then TMO="timeout 15"; else TMO=""; fi
+rprop() { $TMO xprop -root "$1" 2>/dev/null; }                         # the line of a root property
+# A window id that is empty is not a question xwininfo will answer: `xwininfo -id ""` reads it as "no window named" and
+# waits for a window to be clicked on — the test would hang until something else ended it. No id means no answer here.
+wprop() { [ -n "$1" ] || return 0; $TMO xprop -id "$1" "$2" 2>/dev/null; }  # ... of a window property
 # only its value. Most properties come as "NAME(TYPE) = value"; a property of type WINDOW comes as
 # "NAME(WINDOW): window id # 0x…" (no "=" at all — this is what _NET_SUPPORTING_WM_CHECK, _NET_CLIENT_LIST and
 # _NET_ACTIVE_WINDOW look like), and a property that is not there prints nothing once both forms are tried.
 xvalue() { sed -n -e 's/^[^=]*= *//p' -e 's/^.*window id # *//p'; }
 rval() { rprop "$1" | xvalue | head -n1; }
 wval() { wprop "$1" "$2" | xvalue | head -n1; }
-# a window's absolute place and size as "X Y W H" (empty when the window is not there any more)
+# a window's absolute place and size as "X Y W H" (empty when the window is not there any more, or when there is no id)
 xywh() {
-    xwininfo -id "$1" 2>/dev/null | awk '
+    [ -n "$1" ] || return 0
+    $TMO xwininfo -id "$1" 2>/dev/null | awk '
         /Absolute upper-left X:/ { x = $NF }
         /Absolute upper-left Y:/ { y = $NF }
         /^  Width:/  { w = $NF }
         /^  Height:/ { h = $NF }
         END { if (w != "" && x != "") printf "%s %s %s %s\n", x, y, w, h }'
 }
-mapstate() { xwininfo -id "$1" 2>/dev/null | sed -n 's/^  Map State: //p'; }
-parentof() { xwininfo -id "$1" 2>/dev/null | sed -n 's/^  Parent window id: \(0x[0-9a-f]*\).*/\1/p'; }
-rootid()   { xwininfo -root 2>/dev/null | sed -n 's/^xwininfo: Window id: \(0x[0-9a-f]*\).*/\1/p'; }
+mapstate() { [ -n "$1" ] || return 0; $TMO xwininfo -id "$1" 2>/dev/null | sed -n 's/^  Map State: //p'; }
+# the window a window is inside of. xwininfo prints how it is framed on the screen only when it is asked for the
+# children as well: plain `xwininfo -id X` has no "Parent window id" line at all, and asking it for the parent of
+# nothing is how a test waits for a mouse click that never comes.
+parentof() { [ -n "$1" ] || return 0; $TMO xwininfo -children -id "$1" 2>/dev/null \
+    | sed -n 's/^ *Parent window id: \(0x[0-9a-f]*\).*/\1/p'; }
+rootid()   { $TMO xwininfo -root 2>/dev/null | sed -n 's/^xwininfo: Window id: \(0x[0-9a-f]*\).*/\1/p'; }
 id_of()    { sed -n 's/.*\(0x[0-9a-f]*\).*/\1/p' | head -n1; }         # the window id inside a property's value
 # the ICCCM name of the window manager role (WM_S0) is a *selection*, which xprop cannot read: tests/xtool.py can (it
 # talks to libX11 through ctypes, so python3 and libX11 both have to be there — when they are not, the check says so
 # instead of failing, the way a machine without xdotool or xprop skips the sections that need them)
 XT="python3 $HERE/xtool.py"
 have_xt() { [ -f "$HERE/xtool.py" ] && $XT selection-owner WM_S0 >/dev/null 2>&1; }
-sel_owner() { $XT selection-owner "$1" 2>/dev/null; }
+sel_owner() { [ -n "$1" ] && $XT selection-owner "$1" 2>/dev/null; }
 wm_name() {                                                            # the name the window manager published
     id=$(rval _NET_SUPPORTING_WM_CHECK | id_of)
     [ -n "$id" ] && wval "$id" _NET_WM_NAME | tr -d '"'
@@ -188,7 +206,7 @@ wait_gone() {   # pid, what it is (for the message), tries
 }
 # one key of the configuration: press it, then require the line it must leave in the log
 pressed() {     # what it does, the key, the line the log must show
-    xdotool key "$2" >/dev/null 2>&1
+    $TMO xdotool key "$2" >/dev/null 2>&1
     if wait_log "$3" 20; then
         pass "$1 ($(grep -m1 -- "$3" "$LOG"))"
     else
@@ -205,14 +223,9 @@ at() {          # what it is, the window, "X Y W H"
 }
 
 # ---- what the test starts, and how it is cleaned up again -----------------------------------------------
-XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; METACITY_PID=""
-cleanup() {
-    for p in "$DOCK_PID" "$ALPHA_PID" "$BETA_PID" "$WM_PID" "$WM2_PID" "$METACITY_PID" "$XVFB_PID"; do
-        [ -n "$p" ] && kill "$p" 2>/dev/null
-    done
-    :
-}
-trap cleanup EXIT INT TERM HUP
+# The processes this test starts are named at the top of the file, and the cleanup and the traps there put them away.
+# (There used to be a second cleanup and a second trap here. A trap installed later replaces the one before it, so the
+# watchdog's signal ran that cleanup and then the test carried on — with an X server that no longer existed.)
 
 # ---- 1. what needs no display at all ---------------------------------------------------------------------
 out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --version 2>&1)
@@ -277,18 +290,18 @@ if ! have Xvfb || ! have xdotool || ! have xprop || ! have xwininfo; then
     fail "Xvfb, xdotool, xprop and xwininfo are needed for the rest (sudo apt install xvfb xdotool x11-utils)"
 else
     export DISPLAY="$DISP"
-    if xdotool getdisplaygeometry >/dev/null 2>&1; then
+    if $TMO xdotool getdisplaygeometry >/dev/null 2>&1; then
         info "using the X server already on $DISP"
     else
         Xvfb "$DISP" -screen 0 1024x768x24 -nolisten tcp > "$OUT/xvfb.log" 2>&1 &
         XVFB_PID=$!
         i=0
         while [ "$i" -lt 40 ]; do
-            xdotool getdisplaygeometry >/dev/null 2>&1 && break
+            $TMO xdotool getdisplaygeometry >/dev/null 2>&1 && break
             i=$((i + 1)); sleep 0.25
         done
     fi
-    geo=$(xdotool getdisplaygeometry 2>/dev/null)
+    geo=$($TMO xdotool getdisplaygeometry 2>/dev/null)
     if [ "$geo" != "1024 768" ]; then
         fail "no 1024x768 X server on $DISP (Xvfb said: $(tail -n 2 "$OUT/xvfb.log" 2>/dev/null | tr '\n' '|'))"
     else
@@ -366,6 +379,7 @@ EOF
                    "$(wval "$ALPHA" _NET_FRAME_EXTENTS)"
                 eq "the window kept the place it asked for" "60 60 600 400" "$(xywh "$ALPHA")"
                 FRAME=$(parentof "$ALPHA")
+                info "the window the test window sits in is '$FRAME' (xwininfo -children)"
                 eq "the frame around it is the window plus two borders" "54 54 612 412" "$(xywh "$FRAME")"
                 eq "and the window has the focus" "$ALPHA" "$(rval _NET_ACTIVE_WINDOW | id_of)"
                 has "the panel is told what it may ask the window to do" "_NET_WM_ACTION_CLOSE" \
@@ -518,9 +532,9 @@ EOF
                 has "the log says it let the window go" "unmanaging 0x${ALPHA#0x}" "$(cat "$LOG")"
 
                 # ---- 5. the way out: quit gives everything back ---------------------------------------------
-                xdotool key super+2 >/dev/null 2>&1                # to the workspace of the window that is left
+                $TMO xdotool key super+2 >/dev/null 2>&1            # to the workspace of the window that is left
                 wait_mapstate "$BETA" IsViewable 20
-                xdotool key super+shift+q >/dev/null 2>&1
+                $TMO xdotool key super+shift+q >/dev/null 2>&1
                 if wait_log "window(s) given back" 40; then
                     if wait_gone "$WM_PID" "the window manager that quit" 40; then
                         wait "$WM_PID" 2>/dev/null; st=$?
@@ -594,7 +608,7 @@ EOF
                         pass "Metacity left the screen to it"
                     fi
                     METACITY_PID=""
-                    xdotool key super+shift+q >/dev/null 2>&1
+                    $TMO xdotool key super+shift+q >/dev/null 2>&1
                     if wait_log_in "$OUT/nexwm2.log" "window(s) given back" 40; then
                         if wait_gone "$WM2_PID" "the window manager that replaced Metacity" 40; then
                             wait "$WM2_PID" 2>/dev/null; st=$?
