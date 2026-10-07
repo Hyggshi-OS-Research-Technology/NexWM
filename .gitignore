@@ -24,3 +24,7 @@ vgcore.*
 
 # Temporary files
 *.tmp
+
+# the byte-code of the test helpers that are python (tests/xtool.py, tests/fake-mpv.py)
+__pycache__/
+*.pyc
