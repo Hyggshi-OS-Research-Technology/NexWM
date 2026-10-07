@@ -863,6 +863,9 @@ void pane_up(Pane *p)
     g_object_unref(parent);
 }
 
+static GList *detach_views(Pane *p);
+static void attach_views(Pane *p, GList *sel);
+
 void pane_set_search(Pane *p, const char *text)
 {
     const char *t = text && *text ? text : NULL;
@@ -870,7 +873,9 @@ void pane_set_search(Pane *p, const char *text)
     g_free(p->search);
     p->search = g_strdup(t);
     if (p->is_trash || p->is_recent) {               /* only the list shown is filtered */
+        GList *sel = detach_views(p);
         gtk_tree_model_filter_refilter(GTK_TREE_MODEL_FILTER(p->filter));
+        attach_views(p, sel);
         show_message(p);
         files_window_update_status(p->win);
         files_log("filter '%s': %d shown", t ? t : "", gtk_tree_model_iter_n_children(p->sort, NULL));
@@ -881,8 +886,28 @@ void pane_set_search(Pane *p, const char *text)
 }
 
 /* ------------------------------------------------------------------ preferences */
+/* The views let go of the model while the filter / the sorting change: GtkTreeModelSort above a GtkTreeModelFilter
+ * loses count of the references a view holds on its rows when rows come and go under it (Gtk-CRITICAL
+ * gtk_tree_model_sort_real_unref_node). The selection comes back afterwards. */
+static GList *detach_views(Pane *p)
+{
+    GList *sel = pane_selected_files(p);
+    gtk_icon_view_set_model(GTK_ICON_VIEW(p->icon_view), NULL);
+    gtk_tree_view_set_model(GTK_TREE_VIEW(p->list_view), NULL);
+    return sel;
+}
+
+static void attach_views(Pane *p, GList *sel)
+{
+    gtk_icon_view_set_model(GTK_ICON_VIEW(p->icon_view), p->sort);
+    gtk_tree_view_set_model(GTK_TREE_VIEW(p->list_view), p->sort);
+    if (sel) pane_select_files(p, sel);
+    files_list_free(sel);
+}
+
 void pane_apply_prefs(Pane *p)
 {
+    GList *sel = detach_views(p);
     gtk_tree_model_filter_refilter(GTK_TREE_MODEL_FILTER(p->filter));
     int id;
     GtkSortType order;
@@ -898,6 +923,7 @@ void pane_apply_prefs(Pane *p)
         gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(p->sort), prefs.sort_by, want);
         g_signal_handlers_unblock_by_func(p->sort, on_sort_changed, p);
     }
+    attach_views(p, sel);
     show_message(p);
     schedule_geometry(p);
 }
@@ -1307,6 +1333,7 @@ static void on_drag_data_get(GtkWidget *w, GdkDragContext *ctx, GtkSelectionData
     int i = 0;
     for (GList *l = files; l; l = l->next) uris[i++] = g_file_get_uri(l->data);
     gtk_selection_data_set_uris(sd, uris);
+    g_signal_stop_emission_by_name(w, "drag-data-get");      /* (the views would add their own row data) */
     files_log("drag: %d item(s)", i);
     g_strfreev(uris);
     files_list_free(files);

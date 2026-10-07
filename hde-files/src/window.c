@@ -229,8 +229,10 @@ static void on_crumb(GtkButton *b, gpointer d)
 static gboolean scroll_end(gpointer d)
 {
     GtkWidget *sw = d;
-    GtkAdjustment *a = gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(sw));
-    gtk_adjustment_set_value(a, gtk_adjustment_get_upper(a));
+    if (!gtk_widget_in_destruction(sw) && gtk_widget_get_parent(sw)) {   /* (the window may have closed) */
+        GtkAdjustment *a = gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(sw));
+        if (a) gtk_adjustment_set_value(a, gtk_adjustment_get_upper(a));
+    }
     g_object_unref(sw);
     return G_SOURCE_REMOVE;
 }
