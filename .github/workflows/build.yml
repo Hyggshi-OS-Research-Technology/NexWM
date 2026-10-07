@@ -177,6 +177,53 @@ jobs:
           /tmp/hde-display/*.txt
           /tmp/hde-display/shot-*.png
 
+  # Hyggshi Media, the picture viewer (the first part of HDE's multimedia) driven for real in Xvfb: a folder of
+  # solid-coloured pictures of known sizes, the arrow keys, the zoom keys and the mouse wheel, the rotation, the
+  # slideshow running by itself, full screen, the pixels of the picture on the screen, and a second hde-media handing
+  # its picture to the window that is already open. See tests/media-test.sh
+  media:
+    name: Hyggshi Media, the picture viewer
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev xvfb xdotool metacity dbus-x11 imagemagick \
+          adwaita-icon-theme librsvg2-common python3
+
+    - name: Build
+      run: make -j"$(nproc)"
+
+    - name: Picture viewer test (arrows, zoom, rotation, slideshow, full screen, one window, one process)
+      run: sh tests/media-test.sh
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-media results "Hyggshi Media test"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-media checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-media-viewer
+        path: |
+          /tmp/hde-media/*.log
+          /tmp/hde-media/*.txt
+          /tmp/hde-media/shot-*.png
+
   # The "HDE (Wayland)" session for real, on Debian 13 (Hyggshi OS's base): labwc with its headless backend and the pixman
   # renderer (no screen or GPU needed), started by hde-start --wayland; grim takes the screenshots, wtype types keys.
   wayland:

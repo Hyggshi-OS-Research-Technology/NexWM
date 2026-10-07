@@ -59,19 +59,22 @@ SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-blue
              src/hde-settings-peripherals.c src/hde-measure.c
 # Hyggshi Files, the file manager (its own folder: hde-files/, which also has a Makefile to build it alone)
 FILES_SRC=$(wildcard hde-files/src/*.c) src/hde-theme.c
+# Hyggshi Media, the pictures (its own folder: hde-media/, which also has a Makefile to build it alone); the media
+# player and the recorder join it there
+MEDIA_SRC=$(wildcard hde-media/src/*.c) src/hde-theme.c
 # Build stamp (commit + date) shown in Settings > About, by --version and at the top of the session log, to tell at a
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
 VERSION_H = $(BUILD)/hde-version.h
 
-PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files
+PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
 # The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot $(BUILD)/hde-files
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -99,6 +102,11 @@ $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
 # Hyggshi Files (hde-files/): folders, tabs, search, trash, thumbnails, drag and drop; the default file manager of HDE
 $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-files/src -Isrc $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Media (hde-media/): the pictures — zoom, rotate, one after the other, full screen; the default picture viewer
+# of HDE. The state (the list, the order, the zoom, the slideshow) is plain C in hde-media/src/gallery.c, built and run
+# without a display by `make check-unit` (tests/media-test.c); tests/media-test.sh drives the window for real.
+$(BUILD)/hde-media: $(MEDIA_SRC) hde-media/src/media.h hde-media/src/viewer.h src/hde-theme.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) -Ihde-media/src -Isrc -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \
                         src/hde-randr.h src/hde-brightness.h src/hde-build.h $(VERSION_H) | $(BUILD)
@@ -118,6 +126,9 @@ $(BUILD)/power-test: tests/power-test.c src/hde-power.c src/hde-power.h | $(BUIL
 # files): `make check-unit` runs it everywhere, tests/fedora-test.sh checks Fedora with it
 $(BUILD)/distro-test: tests/distro-test.c src/hde-distro.h | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -o $@ $<
+# Hyggshi Media's own logic (hde-media/src/gallery.c): the list, the order, the zoom ladder, the slideshow clock
+$(BUILD)/media-test: tests/media-test.c hde-media/src/gallery.c hde-media/src/media.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
 # Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
 # `make check`
 $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
@@ -140,7 +151,7 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # The unit tests: no X server, no window manager, no session — the screen layouts, the distribution logos, the
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
-UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test tests/sddm-test.sh
+UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test $(BUILD)/media-test tests/sddm-test.sh
 check-unit: $(UNIT_TESTS)
 	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; $$t || rc=1; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
 
@@ -148,6 +159,11 @@ check-unit: $(UNIT_TESTS)
 # SDDM's greeter installed) it renders the theme for real. See tests/sddm-test.sh
 check-login:
 	sh tests/sddm-test.sh
+
+# Hyggshi Media, the picture viewer, in a real X server (Xvfb + Metacity): the keys, the pixels, full screen, a second
+# hde-media handing its picture to the window that is open. See tests/media-test.sh
+check-media: $(BUILD)/hde-media
+	sh tests/media-test.sh
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
 check: all check-unit
@@ -166,7 +182,7 @@ APPS_DIR ?= /usr/share/applications
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(XSESSIONS) $(DESTDIR)$(APPS_DIR)
 	install -m755 $(BUILD)/hde-session $(DESTDIR)$(PREFIX)/bin/hde-session
-	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files; do \
+	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media; do \
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
@@ -180,9 +196,10 @@ install: all
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hyggshi-settings.desktop > $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-screenshot.desktop > $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-files/hde-files.desktop > $(DESTDIR)$(APPS_DIR)/hde-files.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' hde-media/hde-media.desktop > $(DESTDIR)$(APPS_DIR)/hde-media.desktop
 	install -m644 hde-files/hde-mimeapps.list $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
-	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop
+	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop
 	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
 	# the HDE login screen (SDDM theme, login/sddm/): the files, and hde-login to install/choose it on a running
 	# system (it also writes /etc/sddm.conf.d/50-hde-theme.conf so SDDM uses the theme)
@@ -212,9 +229,9 @@ reload:
 uninstall:
 	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
 	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
-	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
+	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -rf $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-.PHONY: all clean install uninstall components dev reload check check-unit check-login FORCE
+.PHONY: all clean install uninstall components dev reload check check-unit check-login check-media FORCE

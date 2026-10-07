@@ -1,4 +1,18 @@
-# Default applications of HDE sessions (XDG_CURRENT_DESKTOP=HDE): folders open in Hyggshi Files.
+# Default applications of HDE sessions (XDG_CURRENT_DESKTOP=HDE): folders open in Hyggshi Files, pictures in Hyggshi
+# Media (hde-media, its own folder next to this one).
 # A choice made by the user (~/.config/mimeapps.list, "Open With" > "Always use it") comes first.
 [Default Applications]
 inode/directory=hde-files.desktop
+image/png=hde-media.desktop
+image/jpeg=hde-media.desktop
+image/gif=hde-media.desktop
+image/bmp=hde-media.desktop
+image/webp=hde-media.desktop
+image/tiff=hde-media.desktop
+image/avif=hde-media.desktop
+image/heic=hde-media.desktop
+image/heif=hde-media.desktop
+image/jxl=hde-media.desktop
+image/vnd.microsoft.icon=hde-media.desktop
+image/x-portable-pixmap=hde-media.desktop
+image/x-xpixmap=hde-media.desktop

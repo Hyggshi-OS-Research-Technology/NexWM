@@ -1,0 +1,22 @@
+[Desktop Entry]
+Name=Hyggshi Media
+GenericName=Image Viewer
+Comment=Look at your pictures: zoom, rotate, one after the other
+Exec=@PREFIX@/bin/hde-media %U
+Icon=image-x-generic
+Terminal=false
+Type=Application
+Categories=GTK;Graphics;2DGraphics;Viewer;Photography;
+Keywords=picture;photo;image;viewer;zoom;rotate;slideshow;wallpaper;
+MimeType=image/png;image/jpeg;image/gif;image/bmp;image/webp;image/tiff;image/x-portable-pixmap;image/x-xpixmap;image/x-icns;image/x-bmp;image/avif;image/heic;image/heif;image/jxl;image/vnd.microsoft.icon;
+StartupNotify=true
+StartupWMClass=hde-media
+Actions=Slideshow;FullScreen;
+
+[Desktop Action Slideshow]
+Name=Slideshow
+Exec=@PREFIX@/bin/hde-media -s %U
+
+[Desktop Action FullScreen]
+Name=Full Screen
+Exec=@PREFIX@/bin/hde-media -f %U
