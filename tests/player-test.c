@@ -1,11 +1,12 @@
-/* tests/player-test.c — the logic of the media player (hde-media/src/playlist.c) without a display and without a
- * sound card: the list of what is played, the order, the m3u/pls files, the tags read from the files themselves
- * (ID3v2/ID3v1, Ogg Vorbis, FLAC, WAV, an MP3 length estimated from its first frame) and the state of the playback
- * (next/previous, the end of the list, shuffle, repeat, the volume). All of it is plain C: built and run by
- * `make check-unit` on every machine.
+/* tests/player-test.c — the logic of the media player (hde-media/src/playlist.c, engine.c) without a display and
+ * without a sound card: the list of what is played, the order, the m3u/pls files, the tags read from the files themselves
+ * (ID3v2/ID3v1, Ogg Vorbis, FLAC, WAV, an MP3 length estimated from its first frame), the state of the playback
+ * (next/previous, the end of the list, shuffle, repeat, the volume) and which engine plays a file and with what command
+ * line (mpv / ffplay / gst-launch-1.0 / paplay / aplay — a fake $PATH of empty executable files, nothing is run). All
+ * of it is plain C: built and run by `make check-unit` on every machine.
  *
  *   cc -O2 -Wall -Wextra -std=c11 -Ihde-media/src -o build/player-test tests/player-test.c \
- *      hde-media/src/playlist.c hde-media/src/gallery.c -lm
+ *      hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/engine.c -lm
  *
  * The files it writes are tiny and made by hand, so every value the tests expect is in this file: an ID3v2.3 tag with
  * a TLEN frame, an ID3v2.4 tag whose title is UTF-16 (Vietnamese, so the encoding really is exercised), an MP3 with
@@ -18,6 +19,7 @@
 
 #include "player.h"
 #include "media.h"
+#include "engine.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -533,6 +535,173 @@ static void test_titles(void)
     hde_playlist_free(&p);
 }
 
+/* ---- which engine plays it, and with what command line (engine.c) --------------------- */
+
+/* hde_media_find_program() only looks at $PATH and at the execute bit: an empty file is enough, and nothing here is
+   ever run. The fake $PATH must not leak into the rest of the test (system() needs the real one). */
+static char fakepath[512];
+static char *saved_path;
+
+static void real_path(void) { if (saved_path) setenv("PATH", saved_path, 1); }
+static void fake_path_only(void) { setenv("PATH", fakepath, 1); }
+
+static void fake_program(const char *name, int present)
+{
+    real_path(); /* the shell commands below are the real ones */
+    char dir[512];
+    path_of(dir, sizeof dir, "fakebin");
+    char cmd[4096];
+    if (present)
+        snprintf(cmd, sizeof cmd, "mkdir -p %s && : > %s/%s && chmod 755 %s/%s", dir, dir, name, dir, name);
+    else
+        snprintf(cmd, sizeof cmd, "rm -f %s/%s", dir, name);
+    if (system(cmd) != 0) { printf("FAIL: player: cannot put %s in the fake $PATH\n", name); fails++; }
+    fake_path_only();
+}
+
+static int argv_len(const HdeMediaEngine *e)
+{
+    int n = 0;
+    if (e) while (e->argv && e->argv[n]) n++;
+    return n;
+}
+
+static int argv_has(const HdeMediaEngine *e, const char *arg)
+{
+    if (!e || !e->argv) return 0;
+    for (int i = 0; e->argv[i]; i++) if (!strcmp(e->argv[i], arg)) return 1;
+    return 0;
+}
+
+static int argv_prefix(const HdeMediaEngine *e, const char *arg) /* "--wid=" style options */
+{
+    if (!e || !e->argv) return 0;
+    for (int i = 0; e->argv[i]; i++) if (!strncmp(e->argv[i], arg, strlen(arg))) return 1;
+    return 0;
+}
+
+static const char *argv_last(const HdeMediaEngine *e)
+{
+    int n = argv_len(e);
+    return n && e->argv[n - 1] ? e->argv[n - 1] : "";
+}
+
+static void test_engine(void)
+{
+    saved_path = hde_media_strdup(getenv("PATH") ? getenv("PATH") : "");
+    path_of(fakepath, sizeof fakepath, "fakebin");
+
+    fake_program("mpv", 0); fake_program("ffplay", 0); fake_program("gst-launch-1.0", 0);
+    fake_program("paplay", 0); fake_program("aplay", 0);
+
+    /* nothing installed */
+    CHECK(hde_media_engine_find() == HDE_MEDIA_ENGINE_NONE, "with nothing in $PATH there is no engine");
+    CHECK(!strcmp(hde_media_engine_kind_name(HDE_MEDIA_ENGINE_NONE), "none"), "and its name is 'none'");
+    CHECK(strstr(hde_media_engine_hint(), "dnf install mpv") && strstr(hde_media_engine_hint(), "apt install mpv"),
+          "the hint names what to install, for Fedora and for Debian alike");
+    CHECK(hde_media_engine_new(HDE_MEDIA_ENGINE_NONE, "x.mp3", HDE_MEDIA_KIND_AUDIO, 0, NULL) == NULL,
+          "with no engine there is no command line to build");
+    hde_media_engine_free(NULL);
+    CHECK(1, "freeing no engine at all is not a crash");
+
+    /* ffplay alone: -nodisp for a sound, not for a video, and the file is the last word */
+    fake_program("ffplay", 1);
+    CHECK(hde_media_engine_find() == HDE_MEDIA_ENGINE_FFPLAY, "ffplay alone is found");
+    CHECK(!strcmp(hde_media_engine_kind_name(HDE_MEDIA_ENGINE_FFPLAY), "ffplay"), "... and is called ffplay");
+    HdeMediaEngine *e = hde_media_engine_new(HDE_MEDIA_ENGINE_FFPLAY, "/tmp/song.mp3", HDE_MEDIA_KIND_AUDIO, 0, NULL);
+    char found[600];
+    snprintf(found, sizeof found, "%s/ffplay", fakepath);
+    CHECK(e && !strcmp(e->program, found), "the program it will run is the one $PATH gave (%s)", e ? e->program : "");
+    CHECK(e && argv_has(e, "-nodisp"), "an mp3 gets -nodisp (no black window)");
+    CHECK(e && argv_has(e, "-autoexit") && argv_has(e, "-loglevel") && argv_has(e, "quiet"), "... and -autoexit -loglevel quiet");
+    CHECK(e && !strcmp(argv_last(e), "/tmp/song.mp3"), "... and the file is the last argument");
+    CHECK(e && !e->can_seek && !e->sound_only, "ffplay cannot be seeked, and it can show a video");
+    char *line = e ? hde_media_engine_line(e) : NULL;
+    CHECK(line && strstr(line, "ffplay") && strstr(line, "/tmp/song.mp3"), "the line for a human reads like a command (%s)", line ? line : "");
+    free(line);
+    if (e) hde_media_engine_free(e);
+    e = hde_media_engine_new(HDE_MEDIA_ENGINE_FFPLAY, "/tmp/clip.mp4", HDE_MEDIA_KIND_VIDEO, 0, NULL);
+    CHECK(e && !argv_has(e, "-nodisp"), "a video does not get -nodisp");
+    hde_media_engine_free(e);
+
+    /* gst-launch-1.0: the file goes in as a URI */
+    fake_program("ffplay", 0);
+    fake_program("gst-launch-1.0", 1);
+    CHECK(hde_media_engine_find() == HDE_MEDIA_ENGINE_GST, "gst-launch-1.0 alone is found");
+    e = hde_media_engine_new(HDE_MEDIA_ENGINE_GST, "/tmp/a b.mp3", HDE_MEDIA_KIND_AUDIO, 0, NULL);
+    CHECK(e && argv_has(e, "playbin"), "gst-launch-1.0 is asked for playbin");
+    CHECK(e && argv_has(e, "uri=file:///tmp/a%20b.mp3"), "the file is handed over as a URI, the space escaped (%s)",
+          e && e->argv ? e->argv[argv_len(e) - 1] : "");
+    hde_media_engine_free(e);
+
+    /* mpv: the first choice, the only one that can be seeked, and the only one that can be embedded */
+    fake_program("mpv", 1); fake_program("gst-launch-1.0", 1);
+    CHECK(hde_media_engine_find() == HDE_MEDIA_ENGINE_MPV, "with all three installed mpv wins");
+    e = hde_media_engine_new(HDE_MEDIA_ENGINE_MPV, "/tmp/song.mp3", HDE_MEDIA_KIND_AUDIO, 0, "/tmp/hde-media-ipc");
+    CHECK(e && argv_has(e, "--no-video") && argv_has(e, "--no-config"), "an mp3 is played with --no-video --no-config");
+    CHECK(e && argv_has(e, "--input-ipc-server=/tmp/hde-media-ipc"), "the socket it is told to listen on is passed (%s)", e && e->argv ? e->argv[3] : "");
+    CHECK(e && e->can_seek, "with a socket it can be paused and seeked");
+    CHECK(e && !argv_prefix(e, "--wid="), "nothing to embed is asked of it for a sound");
+    hde_media_engine_free(e);
+
+    e = hde_media_engine_new(HDE_MEDIA_ENGINE_MPV, "/tmp/clip.mp4", HDE_MEDIA_KIND_VIDEO, 0x5f00001, NULL);
+    CHECK(e && !argv_has(e, "--no-video"), "a video is not told --no-video");
+    CHECK(e && argv_has(e, "--wid=99614721"), "a video can be drawn in the window it is given (--wid=99614721: %s)",
+          e && e->argv ? e->argv[3] : "");
+    CHECK(e && !e->can_seek, "without a socket mpv cannot be seeked either");
+    hde_media_engine_free(e);
+
+    /* a name that looks like an option is not one */
+    e = hde_media_engine_new(HDE_MEDIA_ENGINE_MPV, "-weird.mp3", HDE_MEDIA_KIND_AUDIO, 0, NULL);
+    CHECK(e && !strcmp(argv_last(e), "./-weird.mp3"), "a file named -weird.mp3 becomes ./-weird.mp3 (%s)", argv_last(e));
+    hde_media_engine_free(e);
+
+    /* the uncompressed sounds: the sound server's own player first, lighter than a decoder */
+    fake_program("paplay", 1);
+    CHECK(hde_media_engine_find_for(HDE_MEDIA_KIND_AUDIO, "/tmp/sound.wav") == HDE_MEDIA_ENGINE_PAPLAY,
+          "a WAV goes to paplay, not to mpv");
+    CHECK(hde_media_engine_find_for(HDE_MEDIA_KIND_AUDIO, "/tmp/song.mp3") == HDE_MEDIA_ENGINE_MPV,
+          "an mp3 still goes to mpv");
+    CHECK(hde_media_engine_find_for(HDE_MEDIA_KIND_VIDEO, "/tmp/clip.mp4") == HDE_MEDIA_ENGINE_MPV, "and so does a video");
+    e = hde_media_engine_new(HDE_MEDIA_ENGINE_PAPLAY, "/tüne.wav", HDE_MEDIA_KIND_AUDIO, 0, NULL);
+    CHECK(e && e->sound_only && !strcmp(argv_last(e), "/tüne.wav") && argv_len(e) == 2, "paplay gets the file and nothing else");
+    hde_media_engine_free(e);
+    CHECK(hde_media_engine_new(HDE_MEDIA_ENGINE_PAPLAY, "/tmp/clip.mp4", HDE_MEDIA_KIND_VIDEO, 0, NULL) == NULL,
+          "asking the sound server for a video is refused, not answered with silence");
+
+    fake_program("paplay", 0); fake_program("aplay", 1);
+    CHECK(hde_media_engine_find_for(HDE_MEDIA_KIND_AUDIO, "/tmp/sound.au") == HDE_MEDIA_ENGINE_APLAY, "without paplay, aplay has it");
+    e = hde_media_engine_new(HDE_MEDIA_ENGINE_APLAY, "/tmp/sound.wav", HDE_MEDIA_KIND_AUDIO, 0, NULL);
+    CHECK(e && argv_has(e, "-q"), "aplay is asked to keep quiet about every file it opens");
+    hde_media_engine_free(e);
+    fake_program("aplay", 0);
+    CHECK(hde_media_engine_find_for(HDE_MEDIA_KIND_AUDIO, "/tmp/sound.wav") == HDE_MEDIA_ENGINE_MPV,
+          "with neither of them, the WAV goes to the general engine");
+
+    /* the URI, byte by byte */
+    char *uri = hde_media_file_uri("/tmp/a b#c.mp3");
+    CHECK(uri && !strcmp(uri, "file:///tmp/a%20b%23c.mp3"), "a URI escapes what a parser would trip over (%s)", uri ? uri : "");
+    free(uri);
+    uri = hde_media_file_uri("/nhạc/Cà phê.mp3");
+    CHECK(uri && !strcmp(uri, "file:///nh%E1%BA%A1c/C%C3%A0%20ph%C3%AA.mp3"),
+          "Vietnamese letters are UTF-8 bytes, escaped (%s)", uri ? uri : "");
+    free(uri);
+    uri = hde_media_file_uri("/a/b-c_d.e~f");
+    CHECK(uri && !strcmp(uri, "file:///a/b-c_d.e~f"), "and what is safe is left alone (%s)", uri ? uri : "");
+    free(uri);
+
+    /* looking a program up */
+    real_path();
+    CHECK(hde_media_find_program("sh") != NULL, "a program that is there is found through $PATH");
+    CHECK(hde_media_find_program("no-such-program-hde") == NULL, "one that is not there is not");
+    CHECK(hde_media_find_program("/bin/sh") && !strcmp(hde_media_find_program("/bin/sh"), "/bin/sh"), "a path with a / in it is used as it is");
+    CHECK(hde_media_find_program("/bin") == NULL, "a directory is not a program");
+
+    real_path();
+    free(saved_path);
+    saved_path = NULL;
+}
+
 int main(void)
 {
     snprintf(root, sizeof root, "/tmp/hde-player-test-%d", (int)getpid());
@@ -588,6 +757,7 @@ int main(void)
     test_playlist_files();
     test_playback();
     test_titles();
+    test_engine();
 
     snprintf(cmd, sizeof cmd, "rm -rf %s", root);
     if (system(cmd) != 0) { /* nothing to clean */ }

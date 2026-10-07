@@ -131,7 +131,7 @@ $(BUILD)/media-test: tests/media-test.c hde-media/src/gallery.c hde-media/src/me
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
 # Hyggshi Media's player (hde-media/src/playlist.c): what is played, the .m3u/.pls files other players write, the tags
 # read from the files themselves, and the state of the playback — plain C, no display and no sound card needed
-$(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/player.h hde-media/src/media.h | $(BUILD)
+$(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/engine.c hde-media/src/player.h hde-media/src/engine.h hde-media/src/media.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
 # Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
 # `make check`

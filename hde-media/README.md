@@ -47,6 +47,7 @@ The theme follows HDE: Light / Dark and the accent colour chosen in Settings, li
 | `src/main.c` | The program: the options, the one running window a second `hde-media` hands its picture to, the theme and its CSS. |
 | `src/player.h` | What the player promises: the list of what is played, the tags of a file, the state of the playback (which track, what follows, shuffle, repeat, the volume). Plain C too. |
 | `src/playlist.c` | The implementation of that: folder scans, the `.m3u`/`.m3u8`/`.pls` files other players write (relative paths included), and the tags read by hand — ID3v2.2/2.3/2.4 (all four text encodings, unsynchronisation) and ID3v1, the Vorbis comment of Ogg Vorbis/Opus/FLAC, FLAC's STREAMINFO, WAV's fmt/data chunks, and an estimate from the first frame of an MP3 with no TLEN. |
+| `src/engine.h`, `src/engine.c` | The hybrid engine's decision half: which of mpv / ffplay / gst-launch-1.0 / paplay / aplay this machine has, the command line that follows from it for a given file, the `file://` URI gst-launch-1.0 wants, and what to tell the user when none of them is installed. It starts nothing — the window does that. |
 | `hde-media.desktop` | The menu entry and the types of pictures that open here. |
 
 ## Tests
@@ -56,20 +57,38 @@ make check-unit            # tests/media-test.c and tests/player-test.c: no disp
 make check-media           # tests/media-test.sh: the window driven for real (Xvfb + Metacity), pixels included
 ```
 
-`tests/player-test.c` (92 checks) writes its own tiny files — an ID3v2.3 tag with a TLEN frame, a title in UTF-16, an
+`tests/player-test.c` (133 checks) writes its own tiny files — an ID3v2.3 tag with a TLEN frame, a title in UTF-16, an
 ID3v1 tag, an Ogg Vorbis comment header, a FLAC STREAMINFO, a WAV of a known size — and checks what the reader makes of
 them, the `.m3u`/`.pls` round trip, and the playback: next/previous wrapping, the end of a list, repeat off/all/one,
-shuffle (with a fixed seed, so the same order comes back), the volume steps.
+shuffle (with a fixed seed, so the same order comes back), the volume steps. The engine is checked with a fake `$PATH`
+of empty executable files — mpv wins over ffplay over gst-launch-1.0, a WAV goes to paplay or aplay when one of them is
+there, a sound never gets a window from ffplay, a video never goes to the sound server, a `-weird.mp3` is handed over as
+`./-weird.mp3`, and the URI of `/nhạc/Cà phê.mp3` comes out byte for byte.
 
 The second one needs `xvfb xdotool metacity imagemagick dbus-x11`, opens a folder of solid-coloured pictures of known
 sizes and checks what the log says and what is on the screen: the arrows (wrapping included), the zoom keys and the
 mouse wheel, the rotation, the slideshow running by itself, full screen and Escape, a second `hde-media` reusing the
 open window, one process, `q` closing with 0.
 
+## The engine (what plays it)
+
+HDE decodes nothing itself. It plays the pictures through gdk-pixbuf, hands an uncompressed sound (WAV, AU, AIFF) to the
+sound server's own player, and gives everything else to the first of these that is installed:
+
+| | | |
+| --- | --- | --- |
+| `mpv` | everything | the best of them: with its IPC socket the window can pause, seek and set the volume; on X11 a video can even be drawn inside the window (everywhere else it opens its own) |
+| `ffplay` | everything | part of ffmpeg, its own window, no control but stopping it |
+| `gst-launch-1.0` | everything | part of GStreamer, its own window, no control but stopping it |
+| `paplay` | sound only | PulseAudio/PipeWire's own player, for WAV/AU/AIFF |
+| `aplay` | sound only | ALSA's own player, for WAV/AU/AIFF |
+
+With none of them installed the window says so and gives the two commands (`sudo dnf install mpv` /
+`sudo apt install mpv`) instead of staying silent.
+
 ## What comes next in this folder
 
-The player's *window* (music and video, subtitles, the playlist panel) on top of `playlist.c`, with the hybrid engine:
-what HDE can do itself (the pictures through gdk-pixbuf, WAV, the tags, the playlists — all of that is here and tested)
-and GStreamer, mpv or ffplay — whichever of them is installed — for everything else, with a clear message when none of
-them is. Then the panel showing what is playing (HDE's own MPRIS interface), the multimedia keys of `hde-hotkeys`, the
-volume on the screen, and a screen recorder.
+The player's *window* (music and video, subtitles, the list of what plays next) on top of `playlist.c` and `engine.c` —
+both of them done and tested; what is missing is the GTK window that starts the engine and follows the list. Then the
+panel showing what is playing (HDE's own MPRIS interface), the multimedia keys of `hde-hotkeys`, the volume on the
+screen, and a screen recorder.
