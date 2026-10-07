@@ -147,9 +147,13 @@ fi
 
 # the greeter of this system
 if [ -n "$QT" ] && [ "$DRY" != 1 ]; then
-    sed -i "s/^QtVersion=.*/QtVersion=$QT/" "$DEST_THEME/metadata.desktop" 2>/dev/null ||
+    # in-place when sed can (GNU sed: -i), otherwise through a temporary file. Not `a || b && c`: in sh that is
+    # `(a || b) && c`, so the rename would also run after a *successful* in-place edit (this made the installer
+    # stop with "mv: cannot stat ...metadata.desktop.new" on the CI machines)
+    if ! sed -i "s/^QtVersion=.*/QtVersion=$QT/" "$DEST_THEME/metadata.desktop" 2>/dev/null; then
         sed "s/^QtVersion=.*/QtVersion=$QT/" "$DEST_THEME/metadata.desktop" > "$DEST_THEME/metadata.desktop.new" &&
-        mv "$DEST_THEME/metadata.desktop.new" "$DEST_THEME/metadata.desktop"
+            mv "$DEST_THEME/metadata.desktop.new" "$DEST_THEME/metadata.desktop"
+    fi
     say "  metadata:   QtVersion=$QT (the greeter installed here)"
 fi
 

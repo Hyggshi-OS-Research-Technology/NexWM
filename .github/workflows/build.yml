@@ -319,7 +319,9 @@ jobs:
         grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::fedora: /' || true
 
     - name: Fedora test (the Fedora package names, a session in Xvfb, SDDM, labwc)
-      run: sh tests/fedora-test.sh --full
+      run: |
+        set -o pipefail
+        sh tests/fedora-test.sh --full 2>&1 | tee -a build.log
 
     - name: Report results
       if: always()
@@ -375,9 +377,12 @@ jobs:
         make -j"$(nproc)" 2>&1 | tee build.log
 
     - name: Unit tests (no X server needed)
-      run: make check-unit
+      run: |
+        set -o pipefail
+        make check-unit 2>&1 | tee -a build.log
 
     - name: Fedora base test (a session without any desktop package)
+      if: always()
       run: sh tests/fedora-test.sh --base
 
     - name: Report results

@@ -83,11 +83,13 @@ else
 fi
 # (the container images of newer Fedoras ship no fedora-release package: what counts is that rpm and /etc/os-release
 # agree with each other)
-if rpm -q fedora-release >/dev/null 2>&1 || rpm -q fedora-release-common >/dev/null 2>&1 ||
-   [ "$(rpm -E '%{fedora}' 2>/dev/null)" != "" ] || rpm -q --whatprovides system-release >/dev/null 2>&1; then
-    pass "rpm knows the system ($(rpm -q fedora-release 2>/dev/null || rpm -q --whatprovides system-release 2>/dev/null | head -n1))"
+sysrel=$(rpm -q fedora-release 2>/dev/null | head -n1)
+[ -n "$sysrel" ] || sysrel=$(rpm -q --whatprovides system-release 2>/dev/null | head -n1)
+[ -n "$sysrel" ] || sysrel=$(rpm -q fedora-release-common 2>/dev/null | head -n1)
+if [ -n "$sysrel" ]; then
+    pass "rpm knows the system ($sysrel)"
 else
-    skip "rpm knows no fedora-release package (a container image: $(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | tr -d '\"'))"
+    skip "rpm knows no fedora-release package (the container images have none)"
 fi
 info "dnf $(dnf --version 2>/dev/null | head -n1); gcc $(gcc -dumpversion 2>/dev/null)"
 
@@ -242,18 +244,21 @@ if [ "$MODE" = full ]; then
         skip "notify-send is not installed (dnf install libnotify)"
     fi
 
-    # a screenshot with PrtSc (HDE's own screenshot tool, no ImageMagick needed)
-    rm -f "$HOME/Pictures/Screenshots"/shot-*.png 2>/dev/null
-    xdotool key Print; sleep 3
-    if ls "$HOME/Pictures/Screenshots"/shot-*.png >/dev/null 2>&1; then
-        pass "PrtSc wrote a screenshot: $(basename "$(ls -t "$HOME/Pictures/Screenshots"/shot-*.png | head -n1)")"
+    # a screenshot with PrtSc (HDE's own screenshot tool, no ImageMagick needed). The names of the tool are
+    # Screenshot_<date>_<time>.png; the shot-*.png files are the pictures this test itself takes with ImageMagick
+    SHOTS="$HOME/Pictures/Screenshots"
+    nshots() { ls "$SHOTS"/*.png 2>/dev/null | wc -l; }
+    n0=$(nshots); xdotool key Print; sleep 3; n1=$(nshots)
+    if [ "$n1" -gt "$n0" ]; then
+        pass "PrtSc wrote a screenshot: $(basename "$(ls -t "$SHOTS"/*.png | head -n1)")"
     else
-        fail "PrtSc did not write a screenshot ($(grep -i screenshot "$LOG" | tail -n 1))"
+        fail "PrtSc did not write a screenshot ($n0 -> $n1 in $SHOTS; $(grep -i screenshot "$LOG" | tail -n 1))"
     fi
 
-    # Fedora's GTK theme reaches HDE's XSETTINGS (the panel and the apps follow it)
-    if $XT xsettings 2>/dev/null | grep -q "gtk-theme-name"; then
-        pass "hde-xsettings publishes the theme of this Fedora: $($XT xsettings | grep -m1 gtk-theme-name)"
+    # Fedora's GTK theme reaches HDE's XSETTINGS (the panel and the apps follow it). The key names are the ones of the
+    # XSETTINGS protocol (Net/ThemeName), as HDE's manager publishes them
+    if $XT xsettings 2>/dev/null | grep -q "Net/ThemeName"; then
+        pass "hde-xsettings publishes the theme of this Fedora: $($XT xsettings | grep -m1 Net/ThemeName)"
     else
         fail "no XSETTINGS published ($($XT xsettings 2>&1 | head -n 2 | tr '\n' ' '))"
     fi
@@ -294,11 +299,14 @@ if [ "$MODE" = full ]; then
     # the Wayland session with labwc (Fedora has labwc): a quick check that HDE comes up on Wayland here too.
     # The deep test is tests/wayland-test.sh (run by the same CI job).
     if have labwc; then
-        out=$(WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 \
-              sh "$HERE/wayland-test.sh" 2>&1 | tail -n 3)
+        # env -u HDE_SESSION_PID: the Wayland test logs out of its own session, and `hde-session logout` would otherwise
+        # find *this* session (HDE_SESSION_PID, or the /proc fallback) and end it here as well
+        out=$(env -u HDE_SESSION_PID WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_HEADLESS_OUTPUTS=1 \
+              WLR_LIBINPUT_NO_DEVICES=1 sh "$HERE/wayland-test.sh" 2>&1)
         case "$out" in
-        *FAIL*) fail "the Wayland session on Fedora: $(echo "$out" | grep FAIL | head -n 1)" ;;
-        *)      pass "the Wayland session starts on Fedora ($(echo "$out" | grep -c '^PASS') checks)" ;;
+        *"all checks passed"*) pass "the Wayland session starts on Fedora ($(printf '%s\n' "$out" | grep -c '^PASS') checks)" ;;
+        *FAIL*)                fail "the Wayland session on Fedora: $(printf '%s\n' "$out" | grep FAIL | head -n 1)" ;;
+        *)                     info "the Wayland test said: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
         esac
     else
         skip "labwc is not installed (dnf install labwc)"

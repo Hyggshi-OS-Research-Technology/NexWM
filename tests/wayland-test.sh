@@ -246,7 +246,10 @@ else fail "a changed setting rewrites rc.xml and labwc reloads it"; fi
 printf '[settings]\n' > "$INI"; sleep 2
 
 # ---------- 7. logout ----------
-"$B/hde-session" logout >/dev/null 2>&1
+# HDE_SESSION_PID points at the session of the caller when this test runs inside one (the Fedora job runs it inside
+# the X11 session): hand hde-session the pid of *this* session ($START: hde-start execs hde-session, which starts labwc)
+# so that `logout` cannot end somebody else's session through the /proc fallback.
+HDE_SESSION_PID=$START "$B/hde-session" logout >/dev/null 2>&1
 # labwc is this shell's child ($START: hde-start -> exec hde-session -> exec labwc): reap it once it exited (a zombie
 # still matches pgrep)
 i=0
