@@ -394,6 +394,8 @@ else
         fi
         check "and it is the EWMH window manager of the session now" \
             sh -c "[ \"\$($XT root-window _NET_SUPPORTING_WM_CHECK)\" != 0 ]"
+        i=0
+        while [ "$i" -lt 40 ] && ! pgrep -x hde-panel >/dev/null; do sleep 0.25; i=$((i + 1)); done
         check "and the panel still runs under it" pgrep -x hde-panel
     fi
     if grep -q "sudo dnf install" "$LOG"; then

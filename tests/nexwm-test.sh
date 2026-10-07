@@ -75,8 +75,12 @@ hasnt() { case "$3" in *"$2"*) fail "$1 ('$2' is in '$(printf '%s' "$3" | tr '\n
 # ---- reading properties: xprop for properties, xwininfo for places, sizes and map states -----------------
 rprop() { xprop -root "$1" 2>/dev/null; }                              # the line of a root property
 wprop() { xprop -id "$1" "$2" 2>/dev/null; }                           # ... of a window property
-rval() { rprop "$1" | sed -n 's/^[^=]*= *//p' | head -n1; }            # only its value
-wval() { wprop "$1" "$2" | sed -n 's/^[^=]*= *//p' | head -n1; }
+# only its value. Most properties come as "NAME(TYPE) = value"; a property of type WINDOW comes as
+# "NAME(WINDOW): window id # 0x…" (no "=" at all — this is what _NET_SUPPORTING_WM_CHECK, _NET_CLIENT_LIST and
+# _NET_ACTIVE_WINDOW look like), and a property that is not there prints nothing once both forms are tried.
+xvalue() { sed -n -e 's/^[^=]*= *//p' -e 's/^.*window id # *//p'; }
+rval() { rprop "$1" | xvalue | head -n1; }
+wval() { wprop "$1" "$2" | xvalue | head -n1; }
 # a window's absolute place and size as "X Y W H" (empty when the window is not there any more)
 xywh() {
     xwininfo -id "$1" 2>/dev/null | awk '
@@ -264,7 +268,8 @@ EOF
         "$NEXWM" --x11 --config "$CONF" > "$LOG" 2>&1 &
         WM_PID=$!
         if ! wait_root _NET_SUPPORTING_WM_CHECK "0x" 40; then
-            fail "the window manager did not come up (log: $(tail -n 3 "$LOG" | tr '\n' '|'))"
+            alive=alive; kill -0 "$WM_PID" 2>/dev/null || alive=gone
+            fail "the window manager did not come up ($alive; log: $(tail -n 3 "$LOG" | tr '\n' '|'); xprop: $(rprop _NET_SUPPORTING_WM_CHECK | tr '\n' '|'))"
         else
             has "it announces itself as the window manager of this screen" "NexWM" "$(wm_name)"
             if have_xt; then
