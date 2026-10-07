@@ -39,6 +39,7 @@ libxkbcommon-x11-devel
 libinput-devel
 pixman-devel
 cairo-devel
+libxcb-devel
 xcb-util-wm-devel
 wlroots-devel|wlroots0.19-devel|wlroots0.18-devel|wlroots0.17-devel
 vte291-devel|vte291-gtk4-devel

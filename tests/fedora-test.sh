@@ -137,7 +137,7 @@ fi
 sed 's/^/INFO:   /' "$OUT/deps-build.txt" "$OUT/deps-runtime.txt" >> "$OUT/results.txt"
 
 # ---------- 4. the unit tests (no X server, no desktop packages needed) ----------
-for t in randr-plan-test svgpath-test power-test measure-test distro-test; do
+for t in randr-plan-test svgpath-test power-test measure-test distro-test nexwm-test; do
     if [ -x "$B/$t" ]; then
         if "$B/$t" > "$OUT/$t.txt" 2>&1; then
             pass "unit test $t: $(grep -c '^PASS' "$OUT/$t.txt") checks passed"
@@ -166,6 +166,17 @@ for p in "$B"/hde-panel "$B"/hde-desktop "$B"/hde-settings "$B"/hde-session "$B"
 done
 if [ -z "$miss" ]; then pass "ldd: every built program finds all of its libraries"
 else fail "ldd: missing libraries for:$miss"; ldd "$B/hde-panel" 2>/dev/null | grep "not found" | sed 's/^/INFO:   /' >> "$OUT/results.txt"; fi
+
+# NexWM: HDE's own window manager is built here, so a base Fedora without metacity or openbox would have a window
+# manager after all. The base part of this test is about the other path — a session that finds no window manager at all
+# and has to say so — so the one HDE brings is put aside for it; the phase after the base checks puts it back and looks
+# at what it does on a Fedora with nothing installed.
+NEXWM_BIN="$B/nexwm"
+NEXWM_PARKED="$B/nexwm.parked-for-the-base-test"
+if [ "$MODE" = base ] && [ -x "$NEXWM_BIN" ]; then
+    mv "$NEXWM_BIN" "$NEXWM_PARKED"
+    info "nexwm is put aside: the base Fedora part checks what a session does without a window manager"
+fi
 
 # ---------- 6. a session, with what this Fedora has ----------
 "$B/hde-session" > "$LOG" 2>&1 &
@@ -352,6 +363,37 @@ else
     check "hde-settings --power works without upower/power-profiles-daemon" "$B/hde-settings" --power
     check "hde-files --version works" "$B/hde-files" --version
     check "hde-hotkeys --help works" "$B/hde-hotkeys" --help
+
+    # ... and now the same base Fedora with the window manager HDE brings with it (nexwm, built from this repository):
+    # nothing to install, and the session stops being a desktop without a window manager
+    if [ ! -x "$NEXWM_PARKED" ]; then
+        skip "nexwm was not built (libxcb-devel missing?): nothing to check with HDE's own window manager"
+    else
+        kill -TERM "$SESSION" 2>/dev/null
+        sleep 2
+        mv "$NEXWM_PARKED" "$NEXWM_BIN"
+        LOG2="$OUT/session-nexwm.log"
+        "$B/hde-session" > "$LOG2" 2>&1 &
+        SESSION=$!
+        export HDE_SESSION_PID=$SESSION
+        i=0
+        while [ "$i" -lt 60 ]; do grep -q "starting window manager NexWM" "$LOG2" 2>/dev/null && break; sleep 0.2; i=$((i + 1)); done
+        if grep -q "starting window manager NexWM" "$LOG2"; then
+            pass "a base Fedora gets a window manager without installing one: $(grep -m1 'starting window manager' "$LOG2")"
+        else
+            fail "the session did not start NexWM: $(grep -i 'window manager' "$LOG2" | tail -n 2 | tr '\n' ' ')"
+        fi
+        i=0
+        while [ "$i" -lt 40 ]; do grep -q "^nexwm: NexWM" "$LOG2" 2>/dev/null && break; sleep 0.2; i=$((i + 1)); done
+        if grep -q "^nexwm: NexWM" "$LOG2"; then
+            pass "and NexWM says it took the screen over: $(grep -m1 '^nexwm: NexWM' "$LOG2")"
+        else
+            fail "NexWM did not come up on a base Fedora: $(tail -n 2 "$LOG2" | tr '\n' ' ')"
+        fi
+        check "and it is the EWMH window manager of the session now" \
+            sh -c "[ \"\$($XT root-window _NET_SUPPORTING_WM_CHECK)\" != 0 ]"
+        check "and the panel still runs under it" pgrep -x hde-panel
+    fi
     if grep -q "sudo dnf install" "$LOG"; then
         pass "the session log tells the user what to install with dnf: $(grep -m1 'sudo dnf install' "$LOG" | sed 's/^.*Install one: //')"
     else

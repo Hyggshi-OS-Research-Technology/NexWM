@@ -24,6 +24,16 @@ XRANDR_LIBS:=$(shell pkg-config --libs xrandr 2>/dev/null)
 # XFixes (libxfixes-dev, pulled in by libgtk-3-dev): the mouse pointer in screenshots (hde-screenshot --pointer)
 XFIXES_CFLAGS:=$(shell pkg-config --exists xfixes 2>/dev/null && echo "-DHAVE_XFIXES `pkg-config --cflags xfixes`")
 XFIXES_LIBS:=$(shell pkg-config --libs xfixes 2>/dev/null)
+# XCB (libxcb1-dev, libxcb-devel): NexWM, the window manager of HDE, speaks to the X server through it directly — no
+# libX11, no toolkit in between. Without it there is no `nexwm --x11` (the program says what to install).
+XCB_CFLAGS:=$(shell pkg-config --exists xcb 2>/dev/null && echo "-DNEXWM_HAVE_XCB `pkg-config --cflags xcb`")
+XCB_LIBS:=$(shell pkg-config --libs xcb 2>/dev/null)
+# wlroots (libwlroots-dev): the Wayland compositor of NexWM (`nexwm --wayland`, the "NexWM (Wayland)" session). wlroots
+# names its pkg-config file after its version (wlroots-0.19.pc since 0.17), older ones after the library itself.
+WLR_PC:=$(shell for n in wlroots wlroots-0.19 wlroots-0.18 wlroots-0.17 wlroots-0.16; do \
+                    pkg-config --exists $$n 2>/dev/null && { echo $$n; break; }; done)
+WLR_CFLAGS:=$(shell [ -n "$(WLR_PC)" ] && echo "-DNEXWM_HAVE_WLROOTS `pkg-config --cflags $(WLR_PC)`")
+WLR_LIBS:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --libs $(WLR_PC))
 # gtk-layer-shell (libgtk-layer-shell-dev): the "HDE (Wayland)" session — panel, desktop, Start menu and popups as
 # layer-shell surfaces. Without it HDE builds for X11 only. It must come before libwayland-client when linking.
 LAYER_CFLAGS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo "-DHAVE_GTK_LAYER_SHELL `pkg-config --cflags gtk-layer-shell-0`")
@@ -66,15 +76,18 @@ MEDIA_SRC=$(wildcard hde-media/src/*.c) src/hde-theme.c
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
 VERSION_H = $(BUILD)/hde-version.h
+# NexWM (nexwm/), the window manager of HDE: one program for both, told apart by --x11 (the window manager, XCB) and
+# --wayland (the compositor, wlroots). nexwm/src/config.c is the part that needs neither of them (nexwm.conf).
+NEXWM_SRC=$(wildcard nexwm/src/*.c)
 
-PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media
+PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media nexwm
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
 # The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/nexwm
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -140,6 +153,23 @@ $(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src
 $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(XRANDR_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(XRANDR_LIBS) \
 	    $(X11_LIBS) -lm
+# NexWM (nexwm/): the window manager of HDE, built into build/nexwm — the X11 side (nexwm/src/x11.c: a real window
+# manager, EWMH/ICCCM, XCB alone) and the Wayland side (nexwm/src/wayland.c: the compositor, wlroots), told apart by
+# --x11 and --wayland. Neither library is required to build it: a build without libxcb has no window manager inside, a
+# build without wlroots no compositor, and `nexwm --help`/the log say which one this is. `make check-unit` runs the
+# configuration and key binding tests without any display; tests/nexwm-test.sh drives the X11 side in Xvfb.
+$(BUILD)/nexwm: $(NEXWM_SRC) nexwm/src/nexwm.h $(VERSION_H) | $(BUILD)
+	@[ -n "$(XCB_CFLAGS)" ] || echo "NOTE: libxcb1-dev (pkg-config xcb) not found: this nexwm has no X11 window manager"
+	@[ -n "$(WLR_PC)" ] || echo "NOTE: libwlroots-dev (pkg-config wlroots) not found: this nexwm has no Wayland compositor"
+	$(CC) $(GUI_CFLAGS) -std=c11 -Inexwm/src -I$(BUILD) $(XCB_CFLAGS) $(WLR_CFLAGS) -o $@ $(filter %.c,$^) \
+	    $(XCB_LIBS) $(WLR_LIBS) -lm
+# NexWM's configuration file and key bindings (nexwm/src/config.c): no display, no X server, no window manager
+$(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/nexwm.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Inexwm/src -o $@ $(filter %.c,$^)
+# The window the test of the window manager puts on the screen (tests/nexwm-client.c): a plain XCB client
+$(BUILD)/nexwm-client: tests/nexwm-client.c | $(BUILD)
+	@[ -n "$(XCB_CFLAGS)" ] || echo "WARNING: libxcb1-dev (pkg-config xcb) not found: tests/nexwm-test.sh cannot run"
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 $(XCB_CFLAGS) -o $@ $< $(XCB_LIBS)
 $(BUILD):
 	mkdir -p $(BUILD)
 $(VERSION_H): FORCE | $(BUILD)
@@ -157,7 +187,8 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # The unit tests: no X server, no window manager, no session — the screen layouts, the distribution logos, the
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
-UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test tests/sddm-test.sh
+UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test \
+            $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/nexwm-test tests/sddm-test.sh
 check-unit: $(UNIT_TESTS)
 	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; $$t || rc=1; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
 
@@ -172,6 +203,11 @@ check-login:
 check-media: $(BUILD)/hde-media
 	sh tests/media-test.sh
 	sh tests/player-window-test.sh
+
+# NexWM in a real X server (Xvfb + a window of its own): the takeover, the frames, the key bindings, the workspaces,
+# the work area a panel reserves with its struts, the way out and --replace. See tests/nexwm-test.sh
+check-nexwm: $(BUILD)/nexwm $(BUILD)/nexwm-client
+	sh tests/nexwm-test.sh
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
 check: all check-unit
@@ -194,6 +230,7 @@ install: all
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
+	install -m755 $(BUILD)/nexwm $(DESTDIR)$(PREFIX)/bin/nexwm
 	install -d $(DESTDIR)$(PREFIX)/share/hde/logos $(DESTDIR)$(WLSESSIONS) $(DESTDIR)$(PORTALS_DIR)
 	install -m644 data/logos/*.svg data/logos/LICENSES.md $(DESTDIR)$(PREFIX)/share/hde/logos/
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop
@@ -201,12 +238,15 @@ install: all
 	install -m644 data/hde-portals.conf $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
 	@command -v labwc >/dev/null 2>&1 || echo "NOTE: the HDE (Wayland) session appears on the login screen once labwc is installed (sudo apt install labwc)"
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
+	# "NexWM" on the login screen: the HDE session with NexWM as its window manager (hde-start --wm nexwm)
+	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm.desktop > $(DESTDIR)$(XSESSIONS)/nexwm.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hyggshi-settings.desktop > $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-screenshot.desktop > $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-files/hde-files.desktop > $(DESTDIR)$(APPS_DIR)/hde-files.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-media/hde-media.desktop > $(DESTDIR)$(APPS_DIR)/hde-media.desktop
 	install -m644 hde-files/hde-mimeapps.list $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
-	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
+	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop
 	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
 	# the HDE login screen (SDDM theme, login/sddm/): the files, and hde-login to install/choose it on a running
@@ -236,10 +276,11 @@ reload:
 	$(PREFIX)/bin/hde-session restart
 uninstall:
 	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
-	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
+	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
+	      $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
 	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -rf $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-.PHONY: all clean install uninstall components dev reload check check-unit check-login check-media FORCE
+.PHONY: all clean install uninstall components dev reload check check-unit check-login check-media check-nexwm FORCE

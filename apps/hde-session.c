@@ -342,6 +342,7 @@ static const HdeWm *wm_cands[HDE_N_WMS + 1];
 static int wm_ncands, wm_idx;
 static HdeWm wm_custom;                 /* HDE_WM / wm= names a program that is not in the table */
 static char wm_custom_name[256];
+static char g_wm_arg[64];               /* --wm NAME: the window manager this session was started with */
 static pid_t g_wm = -1, g_wm_old = -1;
 static const HdeWm *wm_cur;
 static time_t wm_started, wm_old_deadline, wm_restart_at, wm_fail_window;
@@ -350,6 +351,9 @@ static int g_use_wm = 1;
 
 static const char *requested_wm(void)
 {
+    /* --wm NAME (hde-start --wm, i.e. a session of its own on the login screen, like "NexWM"): the session was
+     * started for that window manager, so it is not a suggestion and settings.ini does not override it */
+    if (g_wm_arg[0]) return g_wm_arg;
     /* Settings writes wm= ; HDE_WM (from hde-start or the user) is used while settings.ini has none */
     const char *s = hde_settings_get("wm", NULL);
     if (s && *s) return s;
@@ -438,6 +442,9 @@ static void wm_exited(int status)
 
 static void wm_switch(void)
 {
+    /* this session may have been started for one window manager (--wm, the "NexWM" entry on the login screen), but
+     * the user has just chosen one in Settings: that choice wins from here on */
+    g_wm_arg[0] = '\0';
     const char *req = requested_wm();
     printf("hde-session: switching window manager to '%s'\n", req);
     fflush(stdout);
@@ -696,7 +703,8 @@ static int action(const char *name)
 
 static void usage(void)
 {
-    printf("Usage: hde-session [--no-wm] [--no-desktop] [--no-panel]\n"
+    printf("Usage: hde-session [--wm NAME] [--no-wm] [--no-desktop] [--no-panel]\n"
+           "       (--wm NAME: this session runs that window manager, whatever Settings has chosen)\n"
            "       hde-session --wayland   the HDE (Wayland) session: starts the labwc compositor with HDE inside\n"
            "       hde-session restart   restart desktop + panel of the running session (no logout)\n"
            "       hde-session wm        switch to the window manager selected in Settings (no logout)\n"
@@ -728,6 +736,12 @@ int main(int argc, char **argv)
         if (request_signal(SIGUSR2) == 0) { printf("hde-session: window manager switch requested\n"); return 0; }
         fprintf(stderr, "hde-session: no running hde-session found; the window manager will change at next login\n");
         return 1;
+    }
+    for (int i = 1; i + 1 < argc; i++) {
+        if (!strcmp(argv[i], "--wm") && argv[i + 1][0]) {
+            snprintf(g_wm_arg, sizeof g_wm_arg, "%s", argv[i + 1]);
+            break;
+        }
     }
     if (argc > 1 && (!strcmp(argv[1], "--wayland") || !strcmp(argv[1], "--wayland-inner"))) {
         self_dir(g_bindir, sizeof(g_bindir), argv[0]);

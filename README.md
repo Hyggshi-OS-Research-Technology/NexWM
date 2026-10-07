@@ -24,7 +24,7 @@ manager), a session manager and a system-hotkeys daemon.
 | **Network** | Real Wi-Fi list (NetworkManager): scan, signal, security, connect with password, disconnect, forget, hidden networks; wired/VPN devices |
 | **Bluetooth** | Device list straight from BlueZ: paired + nearby devices, scan, pair (PIN/passkey/confirmation agent), connect, disconnect, remove |
 | **Dark mode** | Applies immediately to the panel, menus, Settings and **every running GTK app** (`hde-xsettings`), GTK4/libadwaita via the `color-scheme` setting; picks the dark variant of your theme automatically. The **accent colour** (*Settings → Appearance*) is *Automatic* by default: the colour of your GTK theme (Yaru's orange, Adwaita's blue), so HDE's highlights match the switches and selections the theme draws; a colour chosen there also goes on those switches, sliders and selections |
-| **Window managers** | GTK window managers **Metacity, Marco, Mutter, Muffin** (preferred — title bars follow the GTK theme and Dark mode), plus Xfwm4, Openbox, IceWM, Fluxbox, NexWM. Switch live from Settings, no logout |
+| **Window managers** | GTK window managers **Metacity, Marco, Mutter, Muffin** (preferred — title bars follow the GTK theme and Dark mode), plus Xfwm4, Openbox, IceWM, Fluxbox and **NexWM** — **HDE's own window manager** (`nexwm/`: a real X11 window manager, EWMH/ICCCM over XCB, with frames, workspaces, snap / maximize / full screen, the struts of HDE's panel, and the key bindings of `~/.config/hde/nexwm.conf`). Switch live from Settings, no logout; the login screen also has a **NexWM** session (`/usr/share/xsessions/nexwm.desktop` = HDE started with `hde-start --wm nexwm`). See `nexwm/README.md` |
 | **Session** | Restarts crashed components, XDG autostart (`~/.config/autostart`), polkit authentication agent, D-Bus activation environment |
 | **Touchpad & mouse** | Scroll direction picked on the touchpad itself: *Like a phone* (the content follows your fingers, the default) or *Like a mouse wheel* (swipe up to go back toward the top), shown as pictures in *Settings → Input* and in a *Touchpad scrolling* window with a test page that opens once at the first login with a touchpad. Tap to click, separate mouse wheel direction, pointer speed/acceleration. A touchpad that X sees as a mouse (inside a virtual machine, or in PS/2 / HID mouse mode) is recognised on the test page ("It is my touchpad") and then follows the touchpad direction. Applied at login, immediately when changed, to devices plugged in later or back after suspend, and again whenever another program (a window manager with its own touchpad settings, a script) changes them (libinput, synaptics and evdev drivers, no `xinput` needed). GNOME's own touchpad / mouse settings (`org.gnome.desktop.peripherals`, and Cinnamon's) are kept the same, so Mutter and Muffin agree with HDE. Scrolling over the panel's volume icon follows the fingers (up = louder) whatever the direction. `hde-xsettings --status` shows every device and whether it matches Settings |
 | **Settings that apply** | Sound (volume, mute, microphone, output device), keyboard layout + repeat, touchpad/mouse, screen timeout, text scale, wallpaper, icons, fonts, accent color, resolution, power mode, battery saver |
@@ -33,8 +33,9 @@ manager), a session manager and a system-hotkeys daemon.
 ## Install
 
 ```sh
-# build dependencies (libgtk-layer-shell-dev: for the Wayland session)
-sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libgtk-layer-shell-dev
+# build dependencies (libgtk-layer-shell-dev: for the Wayland session; libxcb1-dev: NexWM, HDE's own window manager)
+sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libgtk-layer-shell-dev \
+                 libxcb1-dev
 # recommended runtime packages
 sudo apt install metacity network-manager bluez pipewire-pulse policykit-1-gnome \
                  gnome-themes-extra libnotify-bin playerctl
@@ -44,7 +45,7 @@ make
 sudo make install          # PREFIX=/usr/local by default
 ```
 
-Log out and choose the **HDE** session on the login screen — or **HDE (Wayland)** (shown once `labwc` is installed).
+Log out and choose the **HDE** session on the login screen — **HDE (Wayland)** (shown once `labwc` is installed) or **NexWM**, which is the same HDE session with HDE's own window manager (`nexwm/README.md`).
 Logs: `~/.cache/hde/session.log`.
 Updating an older copy (or one unpacked from a ZIP that still had prebuilt programs in `build/`): run
 `make clean && make && sudo make install`, so that every program is rebuilt from the current sources.
@@ -100,6 +101,7 @@ new tab, `F5` reload, `F10` the menu, `Ctrl+?` all of them.
 | Program | Role |
 |---------|------|
 | `hde-session` | Session manager. `hde-session wm` switches the window manager live, `hde-session restart` restarts panel + desktop, `hde-session {logout,reboot,shutdown,suspend,lock}` |
+| `nexwm` | HDE's own window manager (`nexwm/`, in this repository). `nexwm [--x11\|--wayland] [--replace] [--config FILE]`, `--version`, `--help`. The X11 side is a window manager of its own (XCB only, no libX11, no toolkit): frames, focus, workspaces, snap / maximize / full screen, `_NET_WM_STRUT` of the panel, `_NET_SUPPORTING_WM_CHECK`, `--replace` to take over from another window manager without logging out. Keys and settings in `~/.config/hde/nexwm.conf`; what the running one listens to is `xprop -root _NEXWM_KEYS`. The Wayland compositor of the same program is the next step: `nexwm --wayland` says what this build has |
 | `hde-panel` | Panel, Start menu, Control Center, battery panel, app search, notifications, OSD. `hde-panel --menu/--search/--run/--power/--show-desktop/--osd-volume/--osd-brightness N/--control-center[=wifi\|bluetooth\|sound\|notifications]/--notifications/--battery` control the running panel (X11 ClientMessage or D-Bus `org.hyggshi.HDE.Panel`); `hde-panel --measure` has the panel measure the screen again and put itself right, then prints the screen, the panel window, the space reserved for it and the room windows get (exit status 0 = it fits) |
 | `hde-files` | Hyggshi Files, the file manager (`hde-files/`, which has its own Makefile too): `hde-files [FOLDER\|FILE\|URI…]` (a file: its folder with the file selected; `trash:///`, `recent:///`), `--select PATH…` (the folders with these items selected), `--new-window`, `--quit`. One process; while it runs it answers `org.freedesktop.FileManager1` (*Show in Folder*). In HDE sessions folders open in it (`hde-mimeapps.list`; a choice of your own in *Open With* wins). Its settings: `~/.config/hde/files.ini` |
 | `hde-desktop` | Wallpaper + desktop icons (icon menu, Cut/Copy/Paste compatible with GNOME/Xfce file managers) |
@@ -174,6 +176,13 @@ PC screen only checked with `xrandr`, the panel and desktop following, F6/F7 sof
 ramps), the layout restored at login, a screen plugged in opening the Project window, a (fake) laptop backlight, and
 the RAM the desktop uses. `tests/randr-plan-test.c` checks the layouts themselves without an X server.
 
+`tests/nexwm-test.sh` runs the window manager for real in Xvfb: NexWM takes the screen over and publishes what a
+session needs (`_NET_SUPPORTING_WM_CHECK`, `_NET_CLIENT_LIST`, work area, the bindings as `_NEXWM_KEYS`), frames a
+window with the border from its configuration file, follows its keys (workspaces, move-to, snap, maximize, full screen,
+spawn, close as a polite `WM_DELETE_WINDOW`), keeps a maximized window clear of a panel's struts, gives every window
+back when it quits, and takes over from a running Metacity with `--replace`; `tests/nexwm-test.c` checks the
+configuration file and the key bindings without any display (`make check-unit`). Both run with `make check-nexwm`.
+
 `tests/wayland-test.sh` runs the HDE (Wayland) session for real — labwc with its headless backend (no screen or GPU),
 started by `hde-start --wayland` — and checks the panel and desktop as layer-shell surfaces, the Start menu through
 D-Bus, the Super key and Ctrl+Esc as labwc key bindings, typing in the menu, the taskbar with a real window, Show
@@ -197,6 +206,8 @@ line of `~/.cache/hde/session.log` show the commit HDE was built from.
 - `src/`: the GTK3 desktop programs (panel, desktop, settings pages, hotkeys, xsettings).
 - `hde-files/`: Hyggshi Files, the file manager (`src/files.h` describes its parts).
 - `apps/hde-session.c`: session manager. `src/hde-wm.h`: window-manager table shared with Settings.
+- `nexwm/`: NexWM, HDE's own window manager (`src/nexwm.h`, `src/config.c` — the configuration file, `src/x11.c` — the
+  X11 window manager, `src/wayland.c` — the Wayland compositor, `src/nexwm.c` — the program itself).
 - `hde-core/`: backend-neutral APIs and core services; `backend/x11/`, `backend/wayland/`: session actions.
 - Panel IPC (`src/hde-ipc.h`): root property `_HDE_PANEL_WINDOW` + ClientMessage `_HDE_PANEL_COMMAND`; D-Bus
   `org.hyggshi.HDE.Panel` (`Command(i command, u time, i argument)`) on both X11 and Wayland.

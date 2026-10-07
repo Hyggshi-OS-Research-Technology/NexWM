@@ -4,7 +4,8 @@ bin/
 *.d
 *.a
 *.so
-nexwm
+# (no entry for "nexwm": nexwm/ is the source tree of HDE's own window manager and is tracked; the built program
+#  goes to $(BUILD)/nexwm — the "nexwm" entry that used to be here hid the whole source directory)
 build/
 bin
 

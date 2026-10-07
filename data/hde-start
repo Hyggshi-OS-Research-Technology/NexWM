@@ -27,6 +27,16 @@ install_hint() {
 case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
 export PATH
 
+# --wm NAME: the window manager this session must use (the "NexWM" entry on the login screen is HDE with
+# `hde-start --wm nexwm`). It is the same as exporting HDE_WM; Settings can still change it while the session runs.
+WM_ARG=""
+if [ "${1:-}" = "--wm" ] && [ -n "${2:-}" ]; then
+    HDE_WM="$2"
+    WM_ARG="$2"
+    export HDE_WM
+    shift 2
+fi
+
 if [ "${1:-}" = "--wayland" ]; then
     # ---- the Wayland session: hde-session writes labwc's configuration and starts labwc, labwc starts the rest
     HERE="$(dirname "$(readlink -f "$0")")"
@@ -80,8 +90,13 @@ fi
 # Root cursor: without one, X shows an "X" or nothing at all, which looks like the mouse is not working.
 command -v xsetroot >/dev/null 2>&1 && xsetroot -cursor_name left_ptr
 
-echo "hde-start: running $SESSION"
-if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
-    exec dbus-run-session -- "$SESSION"
+if [ -n "$WM_ARG" ]; then
+    set -- --wm "$WM_ARG"          # hde-session runs this window manager, whatever Settings has chosen
+else
+    set --
 fi
-exec "$SESSION"
+echo "hde-start: running $SESSION $*"
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- "$SESSION" "$@"
+fi
+exec "$SESSION" "$@"
