@@ -3,14 +3,16 @@
 
 It plays nothing. It writes down the arguments it was given (HDE_FAKE_MPV_LOG), opens the socket hde-media asked for
 (--input-ipc-server=PATH), answers the JSON commands it is sent over it (and writes those down too), stays "playing"
-for HDE_FAKE_MPV_SECONDS seconds and exits 0 — which is exactly what the player window sees when a track ends.
+for HDE_FAKE_MPV_SECONDS seconds and exits 0 — which is exactly what the player window sees when a track ends. Every
+position it reports is written down as well (`TIME<TAB>3.250`): that is what lets the test judge a seek — the window
+asks for where the track *is* plus five seconds, and only the stand-in knows where the track was.
 
 The player window is built against what a *real* mpv answers: {"data":...,"error":"success"} per command, one object
 per line, --wid / --no-video / --really-quiet / --no-config taken as they come (it ignores everything but its own two
 options). keep-open is not implemented on purpose: the window has to notice the process gone and play the next track.
 
 Environment:
-  HDE_FAKE_MPV_LOG       a file the arguments and the commands are appended to
+  HDE_FAKE_MPV_LOG       a file the arguments, the commands and the positions it reported are appended to
   HDE_FAKE_MPV_SECONDS   how long it "plays" before exiting (default 3)
   HDE_FAKE_MPV_DURATION  what it answers for the duration property (default 2.5; 0 = "not known")
 """
@@ -86,6 +88,7 @@ def handle(line):
             pos = offset + (time.time() - base)
             if duration > 0:
                 pos = min(pos, duration)
+            note("TIME\t%.3f" % pos)
             answer({"data": pos, "error": "success"})
         else:
             answer({"data": None, "error": "property unavailable"})

@@ -870,8 +870,11 @@ double hde_player_set_volume(HdePlayer *pl, double v)
 double hde_player_volume_step(HdePlayer *pl, int direction)
 {
     double v = pl->volume + (direction >= 0 ? 0.05 : -0.05);
-    /* 5 % at a time, and the ends are reached exactly (0 % and 100 % are where the user expects them) */
-    long percent = (long)(v * 100.0 + (direction >= 0 ? 0.5 : -0.5));
+    /* 5 % at a time, and the ends are reached exactly (0 % and 100 % are where the user expects them).
+     * Rounded half up on the way out: 85 % - 5 % is 0.7999999999999999 in a double, and truncating *that* towards
+     * zero (the tempting `(long)(v * 100.0 - 0.5)`) said 79 % — a step down of 6 %, which is what the window test
+     * of the player caught: Down after Up left the volume at 79 %. */
+    long percent = (long)(v * 100.0 + 0.5);
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
     pl->volume = (double)percent / 100.0;

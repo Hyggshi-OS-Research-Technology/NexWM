@@ -501,6 +501,15 @@ static void test_playback(void)
     CHECK(hde_player_set_volume(&pl, -1) == 0.0, "and below 0 %% at 0 %%");
     CHECK(hde_player_set_volume(&pl, 0.8) == 0.8, "80 %% is 80 %%");
     CHECK(hde_player_volume_step(&pl, 1) > 0.84 && hde_player_volume_step(&pl, 1) > 0.89, "the +/- keys step by 5 %%");
+    /* the awkward ones: 85 % - 5 % is 0.7999999999999999 in a double, and that used to come out as 79 % */
+    hde_player_set_volume(&pl, 0.85);
+    CHECK(hde_player_volume_step(&pl, -1) == 0.80, "down from 85 %% is 80 %% (got %.2f)", pl.volume);
+    CHECK(hde_player_volume_step(&pl, -1) == 0.75, "down again: 75 %% (got %.2f)", pl.volume);
+    CHECK(hde_player_volume_step(&pl, 1) == 0.80, "and up again: 80 %% (got %.2f)", pl.volume);
+    hde_player_set_volume(&pl, 0.05);
+    CHECK(hde_player_volume_step(&pl, -1) == 0.0, "down from 5 %% is 0 %% exactly (got %.2f)", pl.volume);
+    hde_player_set_volume(&pl, 0.95);
+    CHECK(hde_player_volume_step(&pl, 1) == 1.0, "up from 95 %% is 100 %% exactly (got %.2f)", pl.volume);
     for (int i = 0; i < 30; i++) hde_player_volume_step(&pl, 1);
     CHECK(pl.volume == 1.0, "step up all the way: exactly 100 %% (got %.2f)", pl.volume);
     for (int i = 0; i < 30; i++) hde_player_volume_step(&pl, -1);

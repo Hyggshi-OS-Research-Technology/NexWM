@@ -6,7 +6,8 @@
 # What it checks, on top of tests/player-test.c (the plain-C checks of the list, the tags, the state of the playback and
 # the command line of each engine): that a song opens the player and starts playing; that the *command line* the engine
 # is given is the one engine.c built (the file, --no-video, --input-ipc-server); that the window really talks to mpv
-# over that socket (pause, seek, the volume, the position); the transport keys (next/previous with the wrap-around,
+# over that socket (pause, seek, the volume, the position) — the seek judged against where mpv said the track was, and
+# kept inside the end of a track; the transport keys (next/previous with the wrap-around,
 # stop, play); the volume, mute, shuffle and repeat keys; that a second hde-media hands its song to the window that is
 # already open (one process, one window); that a track that ends plays the next one, that the end of the list stops, and
 # that repeat all goes back to the first; that with no engine at all the window says so instead of doing nothing; and
@@ -31,6 +32,8 @@ FILMS="$HOME_DIR/Films"
 FAKEBIN="$OUT/fakebin"
 PLAYER_LOG="$OUT/player.log"
 ENGINE_LOG="$OUT/engine.log"
+MPV_DURATION=600      # the length the stand-in says a track has: long, so a seek of five seconds has room (section 9
+                      # makes it short on purpose: there, a seek has to stop at the end of the track)
 
 if [ -z "${HDE_PLAYER_INNER:-}" ]; then
     rm -rf "$OUT"
@@ -109,12 +112,12 @@ check_log() {
     else fail "$2 (no '$1' in $PLAYER_LOG)"; fi
 }
 # player_start HOLDS ARGS...: run the player with the stand-in mpv in front of $PATH; HOLDS is how long the stand-in
-# "plays" before exiting (its exit IS the end of a track).
+# "plays" before exiting (its exit IS the end of a track). MPV_DURATION is the length the file is said to have.
 player_start() {
     hold=$1; shift
     PLAYER_WINDOW=
-    HDE_FAKE_MPV_SECONDS="$hold" HDE_FAKE_MPV_LOG="$ENGINE_LOG" PATH="$FAKEBIN:$PATH" \
-        "$B/hde-media" "$@" >> "$PLAYER_LOG" 2>&1 &
+    HDE_FAKE_MPV_SECONDS="$hold" HDE_FAKE_MPV_DURATION="${MPV_DURATION:-600}" HDE_FAKE_MPV_LOG="$ENGINE_LOG" \
+        PATH="$FAKEBIN:$PATH" "$B/hde-media" "$@" >> "$PLAYER_LOG" 2>&1 &
     PLAYER_PID=$!
     for i in $(seq 1 80); do
         PLAYER_WINDOW=$(xdotool search --onlyvisible --name "$TITLE" 2>/dev/null | head -n 1)
@@ -206,11 +209,18 @@ m5=$(mark); player_key space
 if wait_new "$m5" "playing on" 5 && grep -q '"pause",false' "$ENGINE_LOG"; then pass "Space again plays on"
 else fail "Space again plays on"; fi
 m6=$(mark); player_key ctrl+Right
-# the seek is *relative to where the track is* (a few tenths of a second in by now), so the command carries 5.x seconds
-seek_to=$(grep -o '"seek",[0-9.]*' "$ENGINE_LOG" 2>/dev/null | tail -n 1 | cut -d, -f2)
-if wait_new "$m6" "seek " 5 && [ -n "$seek_to" ] && awk "BEGIN { exit !($seek_to >= 5 && $seek_to <= 12) }"; then
-    pass "Ctrl+Right asks mpv to move five seconds further (seek to ${seek_to}s)"
-else fail "Ctrl+Right seeks five seconds further (seek to '${seek_to:-nothing}' in $ENGINE_LOG)"; fi
+if wait_new "$m6" "seek " 5; then
+    # The seek is relative to where the track is, not the absolute 5 s, so the test needs to know where the track was:
+    # the command mpv was given, and the position it reported just before that (the window asks for it twice a second,
+    # and the stand-in writes every position down as "TIME<TAB>3.250").
+    seek_line=$(grep -n '"seek",[0-9.]*' "$ENGINE_LOG" | tail -n 1 | cut -d: -f1)
+    [ -n "$seek_line" ] || seek_line=1     # nothing there: the check below fails, it does not blow up
+    seek_to=$(sed -n "${seek_line}p" "$ENGINE_LOG" | grep -o '"seek",[0-9.]*' | cut -d, -f2)
+    was_at=$(awk -v n="$seek_line" 'NR < n && $1 == "TIME" { t = $2 } END { if (t != "") print t }' "$ENGINE_LOG")
+    if [ -n "$seek_to" ] && [ -n "$was_at" ] && awk "BEGIN { d = $seek_to - $was_at; exit !(d > 4 && d < 6) }"; then
+        pass "Ctrl+Right asks mpv to move five seconds further (${was_at}s in, ${seek_to}s out)"
+    else fail "Ctrl+Right seeks five seconds further (mpv last said ${was_at:-?}s, the window asked for ${seek_to:-?}s)"; fi
+else fail "Ctrl+Right does not reach mpv (nothing was seeked in $ENGINE_LOG)"; fi
 m7=$(mark); player_key Up
 if wait_new "$m7" "volume 85 %" 5 && grep -q '"set_property","volume"' "$ENGINE_LOG"; then pass "Up is +5 % of the volume, and mpv is told"
 else fail "Up raises the volume by 5 % and tells mpv"; fi
@@ -310,6 +320,7 @@ else fail "the window closes with 0 even without an engine"; fi
 
 # ---------- 9. a video is drawn inside the window (mpv --wid, X11) ----------
 : > "$ENGINE_LOG"
+MPV_DURATION=2.5          # a short clip: the seek below has to stop at its end
 m23=$(mark)
 if player_start 60 --play "$FILMS"; then pass "a video opens the player too"
 else fail "a video opens the player too"; fi
@@ -320,6 +331,16 @@ if wait_new "$m23" "the video is drawn in this window" 5; then
 else fail "mpv is told to draw the video inside the window"; fi
 if grep -q -e "--wid=[0-9]" "$ENGINE_LOG"; then pass "the command line carries the X id of the area"
 else fail "the command line carries the X id of the area (engine.log: $(head -n 1 "$ENGINE_LOG" | cut -c1-200))"; fi
+# five seconds on from a 2.5 s clip is its end: a seek is kept inside the track, it does not run past it
+m24=$(mark); player_key ctrl+Right
+if wait_new "$m24" "seek " 5; then
+    seek_line=$(grep -n '"seek",[0-9.]*' "$ENGINE_LOG" | tail -n 1 | cut -d: -f1)
+    [ -n "$seek_line" ] || seek_line=1     # nothing there: the check below fails, it does not blow up
+    seek_to=$(sed -n "${seek_line}p" "$ENGINE_LOG" | grep -o '"seek",[0-9.]*' | cut -d, -f2)
+    if [ -n "$seek_to" ] && awk "BEGIN { exit !($seek_to > 2.4 && $seek_to < 2.6) }"; then
+        pass "a seek stops at the end of the track (the clip is 2.5 s, it asked for ${seek_to}s)"
+    else fail "a seek stops at the end of the track (asked for '${seek_to:-nothing}' in $ENGINE_LOG)"; fi
+else fail "the video phase reaches mpv with a seek too"; fi
 shot 4-video
 if player_quit; then pass "q closes the video window with 0"
 else fail "q closes the video window with 0"; fi

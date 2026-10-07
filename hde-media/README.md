@@ -73,7 +73,8 @@ make check-media           # tests/media-test.sh and tests/player-window-test.sh
 `tests/player-test.c` (133 checks) writes its own tiny files — an ID3v2.3 tag with a TLEN frame, a title in UTF-16, an
 ID3v1 tag, an Ogg Vorbis comment header, a FLAC STREAMINFO, a WAV of a known size — and checks what the reader makes of
 them, the `.m3u`/`.pls` round trip, and the playback: next/previous wrapping, the end of a list, repeat off/all/one,
-shuffle (with a fixed seed, so the same order comes back), the volume steps. The engine is checked with a fake `$PATH`
+shuffle (with a fixed seed, so the same order comes back), the volume steps (85 % down is 80 % — the awkward case a
+double turns into 0.7999999999999999, which used to come out as 79 %). The engine is checked with a fake `$PATH`
 of empty executable files — mpv wins over ffplay over gst-launch-1.0, a WAV goes to paplay or aplay when one of them is
 there, a sound never gets a window from ffplay, a video never goes to the sound server, a `-weird.mp3` is handed over as
 `./-weird.mp3`, and the URI of `/nhạc/Cà phê.mp3` comes out byte for byte.
@@ -86,7 +87,10 @@ stop and play again, the volume and mute, shuffle, repeat (off → all → one),
 the window that is already open, a track that ends playing the next one by itself, the end of the list stopping, closing
 the window with 0 and taking mpv down with it — and a run with no engine in `$PATH` at all, which has to say what to
 install instead of doing nothing. Every check reads either the `hde-media: player: ` lines of the program or what the
-stand-in was told over the socket.
+stand-in was told over the socket. The stand-in writes every position it reports down as well (`TIME	3.250`), and that
+is what lets the test judge a seek exactly: `Ctrl+Right` has to ask mpv for where the track *is* plus five seconds (the
+absolute 5 s would be a different bug), and on a 2.5-second video the same key has to stop at the 2.5 s end of the track
+instead of running past it.
 
 The picture-viewer test needs `xvfb xdotool metacity imagemagick dbus-x11`, opens a folder of solid-coloured pictures of known
 sizes and checks what the log says and what is on the screen: the arrows (wrapping included), the zoom keys and the
