@@ -210,7 +210,7 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
 UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test \
             $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test \
-            tests/choose-run-test.sh tests/sddm-test.sh
+            tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
 check-unit: $(UNIT_TESTS) $(BUILD)/hde-choose-stub
@@ -266,7 +266,10 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/share/hde/logos $(DESTDIR)$(WLSESSIONS) $(DESTDIR)$(PORTALS_DIR)
 	install -m644 data/logos/*.svg data/logos/LICENSES.md $(DESTDIR)$(PREFIX)/share/hde/logos/
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop
-	chmod 644 $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop
+	# "NexWM (Wayland)": HDE on HDE's own compositor; hde-session starts labwc instead on the machines where this
+	# nexwm has no compositor yet, so the entry works everywhere (labwc stays the compositor of "HDE (Wayland)")
+	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
+	chmod 644 $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
 	install -m644 data/hde-portals.conf $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
 	@command -v labwc >/dev/null 2>&1 || echo "NOTE: the HDE (Wayland) session appears on the login screen once labwc is installed (sudo apt install labwc)"
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
@@ -314,5 +317,6 @@ uninstall:
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -rf $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login
-	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
+	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop \
+	    $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
 .PHONY: all clean install uninstall components dev reload check check-unit check-login check-media check-nexwm FORCE

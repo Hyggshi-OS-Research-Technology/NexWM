@@ -243,9 +243,26 @@ else
     fail "--wayland: expected status 4, got $st ('$out')"
 fi
 
+# the compositor gets the session command from the session (hde-session --wayland --wm nexwm): it must be taken, not
+# refused as an unknown option — the compositor itself says what it does with it
+out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --wayland --session "/usr/bin/hde-session --wayland-inner" 2>&1); st=$?
+if [ "$st" = 4 ]; then
+    pass "the Wayland side takes the session command of a session (status 4: the compositor is the next step)"
+else
+    fail "--wayland --session: expected status 4, got $st ('$out')"
+fi
+hasnt "and it is not refused as an unknown option" "unknown option" "$out"
+out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --wayland --session 2>&1); st=$?
+if [ "$st" != 0 ]; then
+    pass "a --session without a command is a mistake, not a silent no-op (status $st)"
+else
+    fail "--wayland --session (no command): expected a failure, got status 0"
+fi
+
 out=$("$NEXWM" --help 2>&1)
 has "the help names the X11 window manager" "--x11" "$out"
 has "the help names the Wayland side" "--wayland" "$out"
+has "and the session command the Wayland session starts it with" "--session CMD" "$out"
 has "the help shows how a key is written" "key Super+Return spawn" "$out"
 
 out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --x11 2>&1); st=$?

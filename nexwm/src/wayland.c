@@ -16,7 +16,7 @@
 
 #include <stdio.h>
 
-int nexwm_wayland_run(const char *config_path, int replace)
+int nexwm_wayland_run(const char *config_path, int replace, const char *session)
 {
     (void)config_path;
     (void)replace;
@@ -24,8 +24,12 @@ int nexwm_wayland_run(const char *config_path, int replace)
     fprintf(stderr,
             "nexwm: the Wayland compositor of NexWM is being written; this build has wlroots, so it is the next step\n"
             "       (the X11 window manager works: nexwm --x11, or the HDE session on X11).\n");
+    if (session && *session)                     /* the session comes up on this compositor the day it is here */
+        fprintf(stderr, "nexwm: the session command `%s` runs inside the compositor, the way labwc gets it with -s\n",
+                session);
     return 4;
 #else
+    (void)session;
     fprintf(stderr,
             "nexwm: this build has no Wayland compositor: it was made without wlroots.\n"
             "       Install it and build again — Debian/Ubuntu: sudo apt install libwlroots-dev; Fedora: sudo dnf\n"

@@ -182,17 +182,65 @@ static void write_labwc_config(int reload)
     fflush(stdout);
 }
 
-/* hde-session --wayland (from hde-start --wayland, i.e. the login screen): become the labwc compositor, which then
- * starts `hde-session --wayland-inner` (the real session). */
+/* The compositor of "NexWM (Wayland)" (data/nexwm-wayland.desktop: hde-start --wm nexwm --wayland), i.e. HDE's own
+ * compositor, which gets the session command to run inside itself — the same thing labwc is given with -s.
+ *
+ * It is started as a child and watched for a moment first: a compositor that leaves at once (a nexwm built without
+ * wlroots, or the Wayland side of NexWM not written yet — `nexwm --wayland` says which and exits) must not leave the
+ * user at a black screen, so the session then says what it said and starts labwc instead. A compositor that is there
+ * stays, and the session lasts exactly as long as it does.
+ *
+ * Returns the status the session ends with, or -1 when NexWM did not take the screen (labwc is the next thing tried).
+ */
+static int wayland_launch_nexwm(const char *inner)
+{
+    char *nexwm = resolve_component("nexwm", g_bindir);
+    if (!nexwm) {
+        char *hint = hde_install_hint("nexwm");
+        fprintf(stderr, "hde-session: NexWM is not installed, so this session cannot run it: %s\n", hint);
+        free(hint);
+        return -1;
+    }
+    printf("hde-session: HDE build %s: starting the Wayland compositor: %s --wayland --session \"%s\"\n", HDE_VERSION,
+           nexwm, inner);
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("hde-session: fork");
+        free(nexwm);
+        return -1;
+    }
+    if (pid == 0) {
+        execl(nexwm, "nexwm", "--wayland", "--session", inner, (char *)NULL);
+        perror("hde-session: nexwm");
+        _exit(127);
+    }
+    int st = 0;
+    for (int i = 0; i < 30; ++i) {                 /* 3 s: a compositor that is really there is still running */
+        pid_t p = waitpid(pid, &st, WNOHANG);
+        if (p == pid) {
+            if (WIFEXITED(st))
+                printf("hde-session: NexWM's Wayland compositor left at once (status %d): the session uses labwc "
+                       "instead\n", WEXITSTATUS(st));
+            else
+                printf("hde-session: NexWM's Wayland compositor was ended by a signal: the session uses labwc "
+                       "instead\n");
+            fflush(stdout);
+            free(nexwm);
+            return -1;
+        }
+        usleep(100 * 1000);
+    }
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) { }      /* it is the compositor: the session lives in it */
+    free(nexwm);
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 0;
+}
+
+/* hde-session --wayland (from hde-start --wayland, i.e. the login screen): become the compositor, which then starts
+ * `hde-session --wayland-inner` (the real session). "HDE (Wayland)" is labwc; "NexWM (Wayland)" asks for HDE's own
+ * compositor with --wm nexwm and falls back to labwc on the machines where it cannot run yet. */
 static int wayland_launch(void)
 {
-    char *labwc = resolve_component("labwc", NULL);
-    if (!labwc) {
-        char *hint = hde_install_hint("labwc");
-        fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: %s\n", hint);
-        free(hint);
-        return 1;
-    }
     setenv("XDG_SESSION_TYPE", "wayland", 1);
     setenv("XDG_CURRENT_DESKTOP", "HDE", 1);
     setenv("XDG_SESSION_DESKTOP", "HDE", 1);
@@ -205,9 +253,20 @@ static int wayland_launch(void)
     unsetenv("GDK_BACKEND");                         /* GTK apps pick Wayland by themselves (X11 through Xwayland) */
     unsetenv("DISPLAY");                             /* labwc sets it for Xwayland */
     config_path(g_labwc_dir, sizeof g_labwc_dir, "labwc");
-    write_labwc_config(0);
     char cmd[8300];
     snprintf(cmd, sizeof cmd, "'%s/hde-session' --wayland-inner", g_bindir);   /* labwc: no shell, quotes ok */
+    if (g_wm_arg[0] && !strcmp(g_wm_arg, "nexwm")) {
+        int rc = wayland_launch_nexwm(cmd);
+        if (rc >= 0) return rc;                    /* NexWM had the screen: the session ended with it */
+    }
+    char *labwc = resolve_component("labwc", NULL);
+    if (!labwc) {
+        char *hint = hde_install_hint("labwc");
+        fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: %s\n", hint);
+        free(hint);
+        return 1;
+    }
+    write_labwc_config(0);
     printf("hde-session: HDE build %s: starting the Wayland compositor: %s -C %s -s \"%s\"\n", HDE_VERSION, labwc,
            g_labwc_dir, cmd);
     fflush(stdout);
@@ -706,6 +765,8 @@ static void usage(void)
     printf("Usage: hde-session [--wm NAME] [--no-wm] [--no-desktop] [--no-panel]\n"
            "       (--wm NAME: this session runs that window manager, whatever Settings has chosen)\n"
            "       hde-session --wayland   the HDE (Wayland) session: starts the labwc compositor with HDE inside\n"
+           "       hde-session --wayland --wm nexwm   the \"NexWM (Wayland)\" session: HDE's own compositor when this\n"
+           "                                          nexwm has one, labwc where it has not (it falls back by itself)\n"
            "       hde-session restart   restart desktop + panel of the running session (no logout)\n"
            "       hde-session wm        switch to the window manager selected in Settings (no logout)\n"
            "       hde-session {logout|reboot|shutdown|suspend|lock}\n");

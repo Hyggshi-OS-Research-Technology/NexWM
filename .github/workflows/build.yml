@@ -348,13 +348,18 @@ jobs:
     - name: The installed session
       run: |
         set -e
-        cat /usr/share/xsessions/hde.desktop /usr/share/xsessions/nexwm.desktop /usr/share/wayland-sessions/hde-wayland.desktop
+        cat /usr/share/xsessions/hde.desktop /usr/share/xsessions/nexwm.desktop \
+            /usr/share/wayland-sessions/hde-wayland.desktop /usr/share/wayland-sessions/nexwm-wayland.desktop
         for p in hde-start hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files nexwm; do
           test -x "/usr/bin/$p" || { echo "::error::/usr/bin/$p is missing"; exit 1; }
         done
         # the NexWM entry is the HDE session with HDE's own window manager (not the old NexDE one, which no longer exists)
         grep -q "^Exec=/usr/bin/hde-start --wm nexwm" /usr/share/xsessions/nexwm.desktop ||
           { echo "::error::the NexWM session entry does not start hde-start --wm nexwm"; exit 1; }
+        # "NexWM (Wayland)" is that session on HDE's own compositor; hde-session starts labwc instead on the machines
+        # where this nexwm has no compositor yet, so the entry comes up everywhere (labwc keeps "HDE (Wayland)")
+        grep -q "^Exec=/usr/bin/hde-start --wm nexwm --wayland" /usr/share/wayland-sessions/nexwm-wayland.desktop ||
+          { echo "::error::the NexWM (Wayland) entry is not hde-start --wm nexwm --wayland"; exit 1; }
         if command -v gcc; then echo "::error::the build tools were not removed"; exit 1; fi
         /usr/bin/hde-settings --version
         /usr/bin/hde-files --version

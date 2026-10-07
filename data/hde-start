@@ -38,22 +38,35 @@ if [ "${1:-}" = "--wm" ] && [ -n "${2:-}" ]; then
 fi
 
 if [ "${1:-}" = "--wayland" ]; then
-    # ---- the Wayland session: hde-session writes labwc's configuration and starts labwc, labwc starts the rest
+    # ---- the Wayland session: hde-session writes the compositor's configuration and starts it, and the compositor
+    # starts the rest of HDE inside itself. "HDE (Wayland)" is labwc; "NexWM (Wayland)" is
+    # `hde-start --wm nexwm --wayland` and asks for HDE's own compositor (hde-session uses labwc on the machines where
+    # this nexwm has no compositor yet, so that entry never ends at a black screen).
     HERE="$(dirname "$(readlink -f "$0")")"
     if [ -x "$HERE/hde-session" ]; then SESSION="$HERE/hde-session"
     else SESSION="$(command -v hde-session)"; fi
     if [ -z "$SESSION" ]; then echo "hde-start: hde-session not found (HERE=$HERE PATH=$PATH)"; exit 1; fi
-    if ! command -v labwc >/dev/null 2>&1; then
-        echo "hde-start: the HDE (Wayland) session needs the labwc compositor: $(install_hint labwc)"
-        exit 1
+    if [ "${WM_ARG:-}" = "nexwm" ]; then
+        if ! command -v nexwm >/dev/null 2>&1 && [ ! -x "$HERE/nexwm" ]; then
+            echo "hde-start: the NexWM (Wayland) session needs NexWM: $(install_hint nexwm)"
+            exit 1
+        fi
+        set -- --wayland --wm nexwm
+        echo "hde-start: running $SESSION --wayland --wm nexwm (NexWM, HDE's own compositor)"
+    else
+        if ! command -v labwc >/dev/null 2>&1; then
+            echo "hde-start: the HDE (Wayland) session needs the labwc compositor: $(install_hint labwc)"
+            exit 1
+        fi
+        set -- --wayland
+        echo "hde-start: running $SESSION --wayland (labwc $(labwc --version 2>/dev/null | head -n1))"
     fi
     export XDG_CURRENT_DESKTOP=HDE XDG_SESSION_DESKTOP=HDE DESKTOP_SESSION=hde-wayland XDG_SESSION_TYPE=wayland
     unset DISPLAY GDK_BACKEND GDK_CORE_DEVICE_EVENTS
-    echo "hde-start: running $SESSION --wayland (labwc $(labwc --version 2>/dev/null | head -n1))"
     if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
-        exec dbus-run-session -- "$SESSION" --wayland
+        exec dbus-run-session -- "$SESSION" "$@"
     fi
-    exec "$SESSION" --wayland
+    exec "$SESSION" "$@"
 fi
 
 export XDG_CURRENT_DESKTOP=HDE

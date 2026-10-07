@@ -24,7 +24,7 @@
 #include "hde-build.h"      /* HDE_VERSION: the commit this was built from */
 
 int nexwm_x11_run(const char *config_path, int replace);
-int nexwm_wayland_run(const char *config_path, int replace);
+int nexwm_wayland_run(const char *config_path, int replace, const char *session);
 
 /* What this build has. NexWM is one program with two sides and each one is compiled in only when its library was
  * there (the Makefile looks for libxcb and wlroots with pkg-config), so the program has to say which ones it is —
@@ -52,6 +52,8 @@ static void usage(FILE *out)
             "\n"
             "  --x11              run as the X11 window manager (the default when $DISPLAY is set)\n"
             "  --wayland          run as the Wayland compositor (a build made with wlroots)\n"
+            "  --session CMD      with --wayland: the session command to run inside the compositor (the one\n"
+            "                     hde-session --wayland --wm nexwm starts it with)\n"
             "  --replace          take over from the window manager that is running (X11)\n"
             "  --config FILE      the configuration file (default %s)\n"
             "  -v, --version      print the version and the build\n"
@@ -75,6 +77,7 @@ static void usage(FILE *out)
 int main(int argc, char **argv)
 {
     const char *config = NULL;
+    const char *session = NULL;                 /* --session: the session command a compositor runs inside itself */
     int want_wayland = 0, want_x11 = 0, replace = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -91,6 +94,15 @@ int main(int argc, char **argv)
             continue;
         }
         if (!strncmp(a, "--config=", 9)) { config = a + 9; continue; }
+        if (!strcmp(a, "--session")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "nexwm: --session needs a command (the session to run in the compositor)\n");
+                return 1;
+            }
+            session = argv[++i];
+            continue;
+        }
+        if (!strncmp(a, "--session=", 10)) { session = a + 10; continue; }
         if (!strcmp(a, "-v") || !strcmp(a, "--version")) {
             printf("nexwm (%s) %s %s\n", NEXWM_NAME, NEXWM_RELEASE, HDE_VERSION);
             build_report(stdout);
@@ -122,7 +134,7 @@ int main(int argc, char **argv)
 
     int rc;
     if (want_wayland) {
-        rc = nexwm_wayland_run(config, replace);
+        rc = nexwm_wayland_run(config, replace, session);
     } else if (want_x11 || getenv("DISPLAY")) {
         rc = nexwm_x11_run(config, replace);
     } else {
