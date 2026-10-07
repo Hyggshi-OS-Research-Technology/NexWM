@@ -206,8 +206,11 @@ m5=$(mark); player_key space
 if wait_new "$m5" "playing on" 5 && grep -q '"pause",false' "$ENGINE_LOG"; then pass "Space again plays on"
 else fail "Space again plays on"; fi
 m6=$(mark); player_key ctrl+Right
-if wait_new "$m6" "seek 5.0 s" 5 && grep -q '"seek"' "$ENGINE_LOG"; then pass "Ctrl+Right asks mpv for five seconds further"
-else fail "Ctrl+Right seeks five seconds further"; fi
+# the seek is *relative to where the track is* (a few tenths of a second in by now), so the command carries 5.x seconds
+seek_to=$(grep -o '"seek",[0-9.]*' "$ENGINE_LOG" 2>/dev/null | tail -n 1 | cut -d, -f2)
+if wait_new "$m6" "seek " 5 && [ -n "$seek_to" ] && awk "BEGIN { exit !($seek_to >= 5 && $seek_to <= 12) }"; then
+    pass "Ctrl+Right asks mpv to move five seconds further (seek to ${seek_to}s)"
+else fail "Ctrl+Right seeks five seconds further (seek to '${seek_to:-nothing}' in $ENGINE_LOG)"; fi
 m7=$(mark); player_key Up
 if wait_new "$m7" "volume 85 %" 5 && grep -q '"set_property","volume"' "$ENGINE_LOG"; then pass "Up is +5 % of the volume, and mpv is told"
 else fail "Up raises the volume by 5 % and tells mpv"; fi
