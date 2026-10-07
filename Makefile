@@ -103,9 +103,11 @@ $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
 $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-files/src -Isrc $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # Hyggshi Media (hde-media/): the pictures — zoom, rotate, one after the other, full screen; the default picture viewer
-# of HDE. The state (the list, the order, the zoom, the slideshow) is plain C in hde-media/src/gallery.c, built and run
-# without a display by `make check-unit` (tests/media-test.c); tests/media-test.sh drives the window for real.
-$(BUILD)/hde-media: $(MEDIA_SRC) hde-media/src/media.h hde-media/src/viewer.h src/hde-theme.h $(VERSION_H) | $(BUILD)
+# of HDE — and the music and the video (the player window, hde-media/src/player.c, on the plain-C state of playlist.c and
+# engine.c). What has nothing to do with a window is built and run without a display by `make check-unit`;
+# tests/media-test.sh drives the picture window for real.
+$(BUILD)/hde-media: $(MEDIA_SRC) hde-media/src/media.h hde-media/src/viewer.h hde-media/src/player.h hde-media/src/playlist.h \
+                    hde-media/src/engine.h src/hde-theme.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-media/src -Isrc -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \
@@ -131,7 +133,7 @@ $(BUILD)/media-test: tests/media-test.c hde-media/src/gallery.c hde-media/src/me
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
 # Hyggshi Media's player (hde-media/src/playlist.c): what is played, the .m3u/.pls files other players write, the tags
 # read from the files themselves, and the state of the playback — plain C, no display and no sound card needed
-$(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/engine.c hde-media/src/player.h hde-media/src/engine.h hde-media/src/media.h | $(BUILD)
+$(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/engine.c hde-media/src/playlist.h hde-media/src/engine.h hde-media/src/media.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
 # Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
 # `make check`

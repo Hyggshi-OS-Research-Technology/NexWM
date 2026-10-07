@@ -19,7 +19,7 @@
  */
 #define _POSIX_C_SOURCE 200809L    /* opendir/readdir/stat/strcasecmp: HDE is built with -std=c11, POSIX is not implied */
 
-#include "player.h"
+#include "playlist.h"
 #include "media.h"                 /* the shared helpers: hde_media_strdup, hde_media_extension, ... */
 
 #include <ctype.h>
@@ -574,7 +574,7 @@ int hde_media_read_tags(HdeTrack *t)
 
     if (track > 0) t->track = track;
     if (!t->kind) t->kind = hde_media_kind_of(t->path);
-    /* what player.h promises: the three strings are there even when the file has no tags at all */
+    /* what playlist.h promises: the three strings are there even when the file has no tags at all */
     if (!t->title) t->title = hde_media_strdup(hde_media_basename(t->path));
     if (!t->artist) t->artist = hde_media_strdup("");
     if (!t->album) t->album = hde_media_strdup("");

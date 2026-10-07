@@ -11,7 +11,7 @@
 #ifndef HDE_MEDIA_ENGINE_H
 #define HDE_MEDIA_ENGINE_H
 
-#include "player.h" /* HdeMediaKind */
+#include "playlist.h" /* HdeMediaKind */
 
 typedef enum {
     HDE_MEDIA_ENGINE_NONE = 0, /* nothing installed: the window says what to install */

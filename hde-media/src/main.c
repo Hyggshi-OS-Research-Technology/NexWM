@@ -1,5 +1,10 @@
 /* main.c — hde-media: the pictures, the music and the video of HDE (its own folder, hde-media/).
  *
+ * The pictures (viewer.c) and the music and video (player.c) are one program with one process: a picture opens the
+ * viewer, a song opens the player, and running hde-media again hands what it was given to the window that is already
+ * open. `--play` asks for the player whatever the files are (a folder of music is pictures without it: the folder is
+ * what decides, and a folder is a folder of pictures unless it is told otherwise).
+ *
  * This first part of the multimedia work is the picture viewer; the media player (music and video, with what this
  * program can do itself plus gstreamer/mpv/ffplay for the rest) and the screen recorder follow in this same folder.
  *
@@ -11,6 +16,9 @@
  *   hde-media --sort date FOLDER  the order: name (the natural one: img2 before img10), date or size
  *   hde-media -r FOLDER           also the pictures of the sub-folders (8 deep at most)
  *   hde-media -f PICTURE          start full screen
+ *   hde-media SONG...             play them (mpv / ffplay / gst-launch-1.0 / paplay / aplay, whichever is installed)
+ *   hde-media --play FOLDER       play the music and the video of a folder (with -r: of its sub-folders too)
+ *   hde-media --play              play the Music folder of this user
  *   hde-media --version, --help
  *
  * One process (GtkApplication org.hyggshi.Media): running it again shows the picture in the window that is already
@@ -23,6 +31,8 @@
  */
 #include "media.h"
 #include "viewer.h"
+#include "player.h"
+#include "playlist.h"   /* hde_media_kind_of / hde_media_is_playlist: which window the arguments ask for */
 #include "hde-theme.h"
 
 #include <gtk/gtk.h>
@@ -41,10 +51,12 @@ typedef struct {
     int    recursive;
     int    slideshow;
     int    fullscreen;
+    int    play;                 /* --play: the player, even for a folder that could be a folder of pictures */
     double interval;
 } MediaOptions;
 
 static HdeMediaViewer *g_win;
+static HdeMediaPlayer *g_player;
 static int g_status;                 /* what this process answers with: 0 shown, 2 nothing to show */
 static GtkCssProvider *css;
 
@@ -62,7 +74,12 @@ static void load_css(void)
         ".hde-media-statusbar { padding: 2px 6px; min-height: 24px;"
         "  border-top: 1px solid alpha(@theme_fg_color, 0.12); }"
         ".hde-media-status { font-size: 0.93em; opacity: 0.88; }"
-        ".hde-media-view { background-color: shade(@theme_bg_color, 0.90); }",
+        ".hde-media-view { background-color: shade(@theme_bg_color, 0.90); }"
+        ".hde-media-player-head { border-bottom: 1px solid alpha(@theme_fg_color, 0.12); }"
+        ".hde-media-heading { font-weight: bold; font-size: 1.12em; }"
+        ".hde-media-sub { font-size: 0.92em; opacity: 0.85; }"
+        ".hde-media-hint { background-color: alpha(@theme_fg_color, 0.07); border-radius: 6px; }"
+        ".hde-media-time { font-size: 0.9em; opacity: 0.8; }",
         accent, NULL);
     gtk_css_provider_load_from_data(css, data, -1, NULL);
     g_free(data);
@@ -122,7 +139,17 @@ static void usage(FILE *out)
             "bigger than the window, and a picture dropped on the window opens it.\n"
             "\n"
             "A picture opens its folder (the list the arrow keys walk through); a folder opens with its first\n"
-            "picture. What is shown is logged on stdout, one line per picture (the tests read those lines).\n");
+            "picture. What is shown is logged on stdout, one line per picture (the tests read those lines).\n"
+            "\n"
+            "The music and the video (hde-media SONG, or --play):\n"
+            "\n"
+            "      --play             play what is given (a folder: its music and video; nothing: ~/Music)\n"
+            "\n"
+            "A song or a video opens the player, a folder the picture viewer, and .m3u/.m3u8/.pls lists the player.\n"
+            "The player does not decode anything itself: it runs mpv, ffplay, gst-launch-1.0, paplay or aplay —\n"
+            "whichever of them is installed (mpv is the one that can also pause and seek) — and says what to install\n"
+            "when it is none of them. Keys: Space play/pause, Left/Right previous and next, s stop, Up/Down or +\n"
+            "and - the volume, m mute, z shuffle, r repeat, q closes.\n");
 }
 
 /* the arguments of one invocation: the first one, or the one a second hde-media handed to the running window */
@@ -135,6 +162,7 @@ static int options_parse(MediaOptions *o, char **argv, int argc)
                 if (o->n_paths < (int)(sizeof o->paths / sizeof o->paths[0])) o->paths[o->n_paths++] = strdup(argv[i]);
             break;
         }
+        if (!strcmp(a, "--play")) { o->play = 1; continue; }
         if (!strcmp(a, "-s") || !strcmp(a, "--slideshow")) { o->slideshow = 1; continue; }
         if (!strcmp(a, "-f") || !strcmp(a, "--fullscreen")) { o->fullscreen = 1; continue; }
         if (!strcmp(a, "-r") || !strcmp(a, "--recursive")) { o->recursive = 1; continue; }
@@ -172,9 +200,61 @@ static int options_parse(MediaOptions *o, char **argv, int argc)
     return 0;
 }
 
+/* --play, or the first thing given is music, video or a playlist: the player, not the viewer */
+static int wants_player(const MediaOptions *o)
+{
+    if (o->play) return 1;
+    if (o->n_paths == 0) return 0;
+    return hde_media_kind_of(o->paths[0]) != HDE_MEDIA_KIND_UNKNOWN || hde_media_is_playlist(o->paths[0]);
+}
+
+/* the player window (the music and the video): a new one, or the one that is already open */
+static void show_player(GtkApplication *app, MediaOptions *o)
+{
+    if (g_player && !hde_media_player_alive(g_player)) {
+        hde_media_player_free(g_player);            /* its window was closed: the state is gone with it */
+        g_player = NULL;
+    }
+
+    /* no path at all: the Music folder of this user, the way the viewer falls back to Pictures */
+    char *music = NULL;
+    char *one[1];
+    char *const *paths = o->paths;
+    int n_paths = o->n_paths;
+    if (n_paths == 0 && !g_player) {
+        const char *dir = g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
+        music = g_strdup(dir && *dir ? dir : g_get_home_dir());
+        one[0] = music;
+        paths = (char *const *)one;
+        n_paths = 1;
+    }
+
+    if (g_player) {
+        if (n_paths) hde_media_player_open(g_player, paths, n_paths, o->recursive);
+        hde_media_player_present(g_player);
+        g_free(music);
+        return;
+    }
+
+    g_player = hde_media_player_new(app, paths, n_paths, o->recursive);
+    if (!hde_media_player_has_tracks(g_player)) {
+        fprintf(stderr, "hde-media: nothing to play in %s\n"
+                        "           (give music or video, a folder of them, or a .m3u/.pls list: hde-media --play ~/Music)\n",
+                n_paths ? paths[0] : "the Music folder of this user");
+        GtkWidget *widget = hde_media_player_widget(g_player);
+        if (widget) gtk_widget_destroy(widget);
+        g_status = 2;
+    }
+    g_free(music);
+}
+
 /* the window that shows `o` (a new one, or the one that is already open) */
 static void show(GtkApplication *app, MediaOptions *o)
 {
+    if (wants_player(o)) {
+        show_player(app, o);
+        return;
+    }
     if (g_win && !hde_media_viewer_alive(g_win)) {
         hde_media_viewer_free(g_win);            /* its window was closed: the state is gone with it */
         g_win = NULL;
@@ -214,6 +294,7 @@ static int command_line_cb(GtkApplication *app, GApplicationCommandLine *cmd, gp
     o.recursive = defaults->recursive;
     o.slideshow = defaults->slideshow;
     o.fullscreen = defaults->fullscreen;
+    o.play = defaults->play;
 
     g_status = 0;
     if (options_parse(&o, argv, argc) != 0) {
@@ -235,6 +316,10 @@ static void shutdown_cb(GtkApplication *app, gpointer data)
     if (g_win) {
         hde_media_viewer_free(g_win);
         g_win = NULL;
+    }
+    if (g_player) {
+        hde_media_player_free(g_player);
+        g_player = NULL;
     }
     if (css) {
         g_object_unref(css);

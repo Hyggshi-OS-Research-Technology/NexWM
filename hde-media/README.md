@@ -1,12 +1,11 @@
 # Hyggshi Media (`hde-media`)
 
-The multimedia of HDE: the pictures first, then the music and the video. This folder is the whole of it — the window
-(`viewer.c`), the logic that has nothing to do with a window (`gallery.c`, `media.h`) and, as the work goes on, the
-player and the screen recorder.
+The multimedia of HDE: the pictures first, then the music and the video. This folder is the whole of it — the two
+windows (`viewer.c` for the pictures, `player.c` for the music and the video), the logic that has nothing to do with a
+window (`gallery.c`, `playlist.c`, `engine.c`) and, as the work goes on, the screen recorder.
 
 ```
 hde-media PICTURE...          the pictures given (the folder of the first one is the list the arrows walk through)
-hde-media TRACK...            (player, next step) music and video: the list, the tags, the playing
 hde-media FOLDER              the pictures of a folder
 hde-media                     the Pictures folder of this user
 hde-media -s FOLDER           start with the slideshow running
@@ -14,8 +13,14 @@ hde-media -i 2 FOLDER         seconds per picture in the slideshow (0.5 .. 600, 
 hde-media --sort date FOLDER  the order: name (natural: img2 before img10), date or size
 hde-media -r FOLDER           also the pictures of the sub-folders (8 deep at most)
 hde-media -f PICTURE          start full screen
+hde-media SONG...             play them (the player window)
+hde-media --play FOLDER       play the music and the video of a folder (with -r: of its sub-folders too)
+hde-media --play              play the Music folder of this user
 hde-media --version, --help
 ```
+
+A song or a video opens the player, a folder the picture viewer, and a `.m3u`/`.m3u8`/`.pls` list the player: what is
+given decides (a folder is a folder of pictures unless `--play` says otherwise).
 
 Keys: `Left`/`Right`/`PageUp`/`PageDown` previous and next, `Home`/`End` the first and the last, `+`/`-` zoom, `0` fit,
 `1` as it is on disk, `r` and `Shift+R` rotate, `s` the slideshow, `Space` the next picture, `i` more about the picture
@@ -23,9 +28,13 @@ Keys: `Left`/`Right`/`PageUp`/`PageDown` previous and next, `Home`/`End` the fir
 closes. The mouse wheel zooms, a double click goes full screen, dragging moves a picture that is bigger than the
 window, and a picture dropped on the window opens it.
 
-Running `hde-media` again while it is open shows the new picture in the window that is already there (one process, one
-window — what the file manager's "Open With" expects). In HDE sessions `hde-mimeapps.list` makes it the program that
-opens pictures.
+Player keys: `Space` play/pause (mpv only: the others cannot be paused), `Left`/`Right` (or `b`/`n`) previous and next,
+`s` stop, `Up`/`Down` or `+`/`-` the volume, `m` mute, `z` shuffle, `r` repeat (off, all, one), `q` closes the window —
+which stops the sound with it.
+
+Running `hde-media` again while it is open shows the new picture in the window that is already there, and hands what it
+was given to the player if that is what is open (one process, one window per kind — what the file manager's "Open With"
+expects). In HDE sessions `hde-mimeapps.list` makes it the program that opens pictures, music and video.
 
 ## Build and install
 
@@ -45,7 +54,8 @@ The theme follows HDE: Light / Dark and the accent colour chosen in Settings, li
 | `src/gallery.c` | The implementation of that: folder scans (hidden files left out, sub-folders 8 deep with `-r`), the natural order (digit runs compare as numbers), the zoom ladder (5 % .. 1600 %), the slideshow clock, the human sizes. |
 | `src/viewer.c` | The window: a drawing area painted with cairo, the toolbar, the status line, the keys, the wheel, the dragging, the dropped pictures. |
 | `src/main.c` | The program: the options, the one running window a second `hde-media` hands its picture to, the theme and its CSS. |
-| `src/player.h` | What the player promises: the list of what is played, the tags of a file, the state of the playback (which track, what follows, shuffle, repeat, the volume). Plain C too. |
+| `src/player.h`, `src/player.c` | The player window: what plays now, the seek bar, the transport, the list, the status line. It starts the engine and follows the list; it decodes nothing itself. |
+| `src/playlist.h` | What the player promises: the list of what is played, the tags of a file, the state of the playback (which track, what follows, shuffle, repeat, the volume). Plain C too (the window is `player.c`). |
 | `src/playlist.c` | The implementation of that: folder scans, the `.m3u`/`.m3u8`/`.pls` files other players write (relative paths included), and the tags read by hand — ID3v2.2/2.3/2.4 (all four text encodings, unsynchronisation) and ID3v1, the Vorbis comment of Ogg Vorbis/Opus/FLAC, FLAC's STREAMINFO, WAV's fmt/data chunks, and an estimate from the first frame of an MP3 with no TLEN. |
 | `src/engine.h`, `src/engine.c` | The hybrid engine's decision half: which of mpv / ffplay / gst-launch-1.0 / paplay / aplay this machine has, the command line that follows from it for a given file, the `file://` URI gst-launch-1.0 wants, and what to tell the user when none of them is installed. It starts nothing — the window does that. |
 | `hde-media.desktop` | The menu entry and the types of pictures that open here. |
@@ -88,7 +98,7 @@ With none of them installed the window says so and gives the two commands (`sudo
 
 ## What comes next in this folder
 
-The player's *window* (music and video, subtitles, the list of what plays next) on top of `playlist.c` and `engine.c` —
-both of them done and tested; what is missing is the GTK window that starts the engine and follows the list. Then the
-panel showing what is playing (HDE's own MPRIS interface), the multimedia keys of `hde-hotkeys`, the volume on the
-screen, and a screen recorder.
+mpv can be told to draw the video inside a window (its `--wid`), so a video can play inside this window instead of a
+window of its own — on X11, which is where the window ids come from; `engine.c` already takes the id. Subtitles: mpv
+reads them, the others do not. Then the panel showing what is playing (HDE's own MPRIS interface), the multimedia keys
+of `hde-hotkeys`, the volume on the screen, and a screen recorder.
