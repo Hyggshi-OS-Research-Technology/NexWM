@@ -8,6 +8,7 @@
  *   Space (or Play)      play / pause        (only mpv can pause: without it, "next" or "stop")
  *   Left / Right, b / n  previous / next track (the list wraps around)
  *   s (or Stop)          stop
+ *   Ctrl+Left / Ctrl+Right  back / forward 5 s inside the track (mpv only, like the seek bar)
  *   Up / Down, + / -     the volume (5 % at a time; 0 % and 100 % are reachable exactly)
  *   m                    mute / unmute
  *   z                    shuffle on / off    r   repeat: off → all → one
@@ -114,6 +115,7 @@ static void player_heading_update(HdeMediaPlayer *p)
 {
     long i = p->player.index;
     if (i < 0 || (size_t)i >= p->player.list.n) {
+        gtk_window_set_title(GTK_WINDOW(p->window), MEDIA_TITLE);
         gtk_label_set_text(GTK_LABEL(p->heading), "Nothing playing");
         gtk_label_set_text(GTK_LABEL(p->heading_sub),
                            p->engine == HDE_MEDIA_ENGINE_NONE ? hde_media_engine_hint()
@@ -125,6 +127,9 @@ static void player_heading_update(HdeMediaPlayer *p)
                                   p->player.paused ? "  (paused)" : (p->player.playing ? "" : "  (stopped)"));
     gtk_label_set_text(GTK_LABEL(p->heading), title);
     g_free(title);
+    char *wintitle = g_strdup_printf("%s — %s", t->title, MEDIA_TITLE);
+    gtk_window_set_title(GTK_WINDOW(p->window), wintitle);
+    g_free(wintitle);
 
     /* the second line: the tags when there are any, the folder when there are none (the file name is the title) */
     char *sub;
@@ -504,6 +509,25 @@ static void player_stop_here(HdeMediaPlayer *p)
     player_ui_update(p);
 }
 
+/* Ctrl+Left / Ctrl+Right: five seconds back or forward, the keyboard of a seek bar */
+static void player_seek_by(HdeMediaPlayer *p, double delta)
+{
+    if (!p->player.playing) return;
+    if (!p->can_seek) {
+        player_log("%s cannot be moved inside a track (only mpv can)", hde_media_engine_kind_name(p->engine));
+        return;
+    }
+    double to = p->position + delta;
+    if (to < 0) to = 0;
+    if (p->duration > 0 && to > p->duration) to = p->duration;
+    p->position = to;
+    char *cmd = g_strdup_printf("{\"command\":[\"seek\",%.3f,\"absolute\"]}", to);
+    mpv_send(p, cmd);
+    g_free(cmd);
+    player_log("seek %.1f s", to);
+    player_seek_update(p);
+}
+
 static void player_volume_step(HdeMediaPlayer *p, int direction)
 {
     double v = hde_player_volume_step(&p->player, direction);
@@ -621,9 +645,13 @@ static gboolean player_on_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
     case GDK_KEY_space:
     case GDK_KEY_p:          player_on_play(NULL, p); return TRUE;
     case GDK_KEY_Right:
-    case GDK_KEY_n:          player_skip(p, 1); return TRUE;
+    case GDK_KEY_n:
+        if (ev->state & GDK_CONTROL_MASK) { player_seek_by(p, 5.0); return TRUE; }
+        player_skip(p, 1); return TRUE;
     case GDK_KEY_Left:
-    case GDK_KEY_b:          player_skip(p, -1); return TRUE;
+    case GDK_KEY_b:
+        if (ev->state & GDK_CONTROL_MASK) { player_seek_by(p, -5.0); return TRUE; }
+        player_skip(p, -1); return TRUE;
     case GDK_KEY_s:          player_stop_here(p); return TRUE;
     case GDK_KEY_m:          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->mute_button), !p->player.muted); return TRUE;
     case GDK_KEY_plus:

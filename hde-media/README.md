@@ -29,8 +29,8 @@ closes. The mouse wheel zooms, a double click goes full screen, dragging moves a
 window, and a picture dropped on the window opens it.
 
 Player keys: `Space` play/pause (mpv only: the others cannot be paused), `Left`/`Right` (or `b`/`n`) previous and next,
-`s` stop, `Up`/`Down` or `+`/`-` the volume, `m` mute, `z` shuffle, `r` repeat (off, all, one), `q` closes the window —
-which stops the sound with it.
+`Ctrl+Left`/`Ctrl+Right` five seconds back or forward, `s` stop, `Up`/`Down` or `+`/`-` the volume, `m` mute, `z`
+shuffle, `r` repeat (off, all, one), `q` closes the window — which stops the sound with it.
 
 Running `hde-media` again while it is open shows the new picture in the window that is already there, and hands what it
 was given to the player if that is what is open (one process, one window per kind — what the file manager's "Open With"
@@ -64,7 +64,7 @@ The theme follows HDE: Light / Dark and the accent colour chosen in Settings, li
 
 ```sh
 make check-unit            # tests/media-test.c and tests/player-test.c: no display, no sound card needed
-make check-media           # tests/media-test.sh: the window driven for real (Xvfb + Metacity), pixels included
+make check-media           # tests/media-test.sh and tests/player-window-test.sh: the windows driven for real
 ```
 
 `tests/player-test.c` (133 checks) writes its own tiny files — an ID3v2.3 tag with a TLEN frame, a title in UTF-16, an
@@ -75,7 +75,17 @@ of empty executable files — mpv wins over ffplay over gst-launch-1.0, a WAV go
 there, a sound never gets a window from ffplay, a video never goes to the sound server, a `-weird.mp3` is handed over as
 `./-weird.mp3`, and the URI of `/nhạc/Cà phê.mp3` comes out byte for byte.
 
-The second one needs `xvfb xdotool metacity imagemagick dbus-x11`, opens a folder of solid-coloured pictures of known
+`tests/player-window-test.sh` needs `xvfb xdotool metacity python3 dbus-x11` and *no* player at all: a stand-in for mpv
+(`tests/fake-mpv.py`, an empty script that writes down what it was given, listens on the `--input-ipc-server` socket and
+answers the JSON the window sends — pause, seek, the volume, how far into the track it is) plays songs that last one
+second each, so the whole transport can be driven by the keyboard: the next and previous keys (and the wrap-around),
+stop and play again, the volume and mute, shuffle, repeat (off → all → one), a second `hde-media` handing its song to
+the window that is already open, a track that ends playing the next one by itself, the end of the list stopping, closing
+the window with 0 and taking mpv down with it — and a run with no engine in `$PATH` at all, which has to say what to
+install instead of doing nothing. Every check reads either the `hde-media: player: ` lines of the program or what the
+stand-in was told over the socket.
+
+The picture-viewer test needs `xvfb xdotool metacity imagemagick dbus-x11`, opens a folder of solid-coloured pictures of known
 sizes and checks what the log says and what is on the screen: the arrows (wrapping included), the zoom keys and the
 mouse wheel, the rotation, the slideshow running by itself, full screen and Escape, a second `hde-media` reusing the
 open window, one process, `q` closing with 0.

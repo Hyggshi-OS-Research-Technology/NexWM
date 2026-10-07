@@ -186,7 +186,7 @@ jobs:
   # slideshow running by itself, full screen, the pixels of the picture on the screen, and a second hde-media handing
   # its picture to the window that is already open. See tests/media-test.sh
   media:
-    name: Hyggshi Media, the picture viewer
+    name: Hyggshi Media (the pictures and the player)
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -220,15 +220,22 @@ jobs:
     - name: Picture viewer test (arrows, zoom, rotation, slideshow, full screen, one window, one process)
       run: sh tests/media-test.sh
 
+    - name: Player window test (the list, the transport, mpv over its socket, the end of a track)
+      run: sh tests/player-window-test.sh
+
     - name: Report results
       if: always()
-      run: python3 tests/ci-annotate.py /tmp/hde-media results "Hyggshi Media test"
+      run: |
+        python3 tests/ci-annotate.py /tmp/hde-media results "Hyggshi Media test"
+        python3 tests/ci-annotate.py /tmp/hde-player results "Hyggshi Media player test"
 
     - name: Publish screenshots
       if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: python3 tests/ci-annotate.py /tmp/hde-media checkruns
+      run: |
+        python3 tests/ci-annotate.py /tmp/hde-media checkruns
+        python3 tests/ci-annotate.py /tmp/hde-player checkruns
 
     - name: Upload test output
       if: always()
@@ -239,6 +246,9 @@ jobs:
           /tmp/hde-media/*.log
           /tmp/hde-media/*.txt
           /tmp/hde-media/shot-*.png
+          /tmp/hde-player/*.log
+          /tmp/hde-player/*.txt
+          /tmp/hde-player/shot-*.png
 
   # The "HDE (Wayland)" session for real, on Debian 13 (Hyggshi OS's base): labwc with its headless backend and the pixman
   # renderer (no screen or GPU needed), started by hde-start --wayland; grim takes the screenshots, wtype types keys.

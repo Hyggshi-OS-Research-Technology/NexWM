@@ -166,10 +166,12 @@ check-unit: $(UNIT_TESTS)
 check-login:
 	sh tests/sddm-test.sh
 
-# Hyggshi Media, the picture viewer, in a real X server (Xvfb + Metacity): the keys, the pixels, full screen, a second
-# hde-media handing its picture to the window that is open. See tests/media-test.sh
+# Hyggshi Media in a real X server (Xvfb + Metacity): the picture viewer (the keys, the pixels, full screen, a second
+# hde-media handing its picture to the window that is open — tests/media-test.sh) and then the player (the list, the
+# transport, mpv over its socket, the end of a track — tests/player-window-test.sh, with a stand-in for mpv)
 check-media: $(BUILD)/hde-media
 	sh tests/media-test.sh
+	sh tests/player-window-test.sh
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
 check: all check-unit
