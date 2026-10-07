@@ -13,7 +13,8 @@ The file manager of HDE (`hde-files`): GTK3, one process, no GVfs needed (it use
 - **Files**: copy / cut / paste (`Ctrl+C` / `Ctrl+X` / `Ctrl+V`, the same clipboard as the HDE desktop, Nautilus,
   Thunar…) and drag and drop (`Ctrl` copies, `Shift` moves, `Ctrl+Shift` links) in a worker thread with progress and
   Cancel in the status bar; when a name is taken: Replace, Skip, Keep Both or (folders) Merge, for one item or all of
-  them; pasting into the same folder makes `name (copy).ext`. Rename (`F2`: the name is selected, not the extension),
+  them; pasting into the same folder makes `name (copy).ext`. Rename (`F2`, or from the menu: the name is selected, not the extension — in HDE `F2` lowers the volume
+  while the F1–F3 sound keys are on, *Settings → Keyboard & Shortcuts*),
   new folder (`Ctrl+Shift+N`), new document (empty or from `~/Templates`), make a link, compress (`.zip`, `.tar.gz`) and
   extract (zip, tar.*, 7z, rar with the usual programs), open a terminal there.
 - **The Trash** (`Delete`): `trash:///` lists `~/.local/share/Trash` with where each item came from and when it was

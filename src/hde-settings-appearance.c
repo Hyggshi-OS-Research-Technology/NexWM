@@ -297,6 +297,14 @@ static void on_external_change(gpointer d)
     int idx = cfg_get_int("theme_index", 0);
     if (idx == 1 || idx == 2)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(idx == 2 ? dark_card : light_card), TRUE);
+    if (theme_combo) {                                /* e.g. gtk_theme=Yaru written by a script */
+        char *base = base_theme();
+        if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(theme_combo), base)) {
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(theme_combo), base, base);
+            gtk_combo_box_set_active_id(GTK_COMBO_BOX(theme_combo), base);
+        }
+        g_free(base);
+    }
     if (accent_combo) {
         accent_refresh_auto();
         int item = accent_item_now();

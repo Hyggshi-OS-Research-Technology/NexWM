@@ -78,7 +78,8 @@ gboolean    files_bookmark_has(GFile *f);
 gboolean    files_can_thumbnail(const char *content_type);
 GList      *files_list_copy(GList *files);   /* a list of GFile, each one referenced */
 void        files_list_free(GList *files);
-char       *files_names_text(GList *files, int max);   /* "a.txt, b.png and 3 more" */
+char       *files_names_text(GList *files, int max);
+char       *files_type_description(const char *content_type);   /* "Folder", "PNG image" */   /* "a.txt, b.png and 3 more" */
 
 /* ------------------------------------------------------------------ the model of a pane */
 enum {

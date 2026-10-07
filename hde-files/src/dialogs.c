@@ -278,7 +278,7 @@ static void props_show_size(Props *p)
 {
     char *size = files_format_size(p->bytes, TRUE);
     char *s;
-    guint64 dirs = p->is_dir ? (p->n_dirs ? p->n_dirs - 1 : 0) : p->n_dirs;   /* (one folder: what is inside) */
+    guint64 dirs = p->n_dirs;
     if (dirs || p->n_files > 1 || p->is_dir)
         s = g_strdup_printf("%s%s, %" G_GUINT64_FORMAT " file%s and %" G_GUINT64_FORMAT " folder%s", size,
                             p->pending ? " so far" : "", p->n_files, p->n_files == 1 ? "" : "s", dirs,
@@ -290,29 +290,81 @@ static void props_show_size(Props *p)
     g_free(size);
 }
 
-static void measure_progress(gboolean reporting, guint64 size, guint64 dirs, guint64 files, gpointer d)
+/* the size of what a folder holds: the files in it and in its subfolders (a worker thread) */
+typedef struct {
+    Props *p;                /* valid while CANCEL is not cancelled (the dialog closing cancels it) */
+    GCancellable *cancel;
+    GFile *file;
+    goffset bytes;
+    guint64 files, dirs;
+} Count;
+
+static void count_tree(Count *c, GFile *dir, int depth)
 {
-    (void)reporting; (void)size; (void)dirs; (void)files; (void)d;
+    if (g_cancellable_is_cancelled(c->cancel) || depth > 64) return;
+    GFileEnumerator *en = g_file_enumerate_children(dir, "standard::name,standard::type,standard::size",
+                                                    G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, c->cancel, NULL);
+    if (!en) return;
+    GFileInfo *i;
+    while ((i = g_file_enumerator_next_file(en, c->cancel, NULL))) {
+        GFileType t = g_file_info_get_file_type(i);
+        if (t == G_FILE_TYPE_DIRECTORY) {
+            c->dirs++;
+            GFile *child = g_file_get_child(dir, g_file_info_get_name(i));
+            count_tree(c, child, depth + 1);
+            g_object_unref(child);
+        } else {
+            c->files++;
+            if (t == G_FILE_TYPE_REGULAR) c->bytes += g_file_info_get_size(i);
+        }
+        g_object_unref(i);
+    }
+    g_object_unref(en);
 }
 
-static void measured(GObject *src, GAsyncResult *res, gpointer d)
+static void count_thread(GTask *t, gpointer so, gpointer data, GCancellable *cc)
 {
-    Props *p = d;
-    guint64 size = 0, dirs = 0, files = 0;
-    GError *e = NULL;
-    gboolean ok = g_file_measure_disk_usage_finish(G_FILE(src), res, &size, &dirs, &files, &e);
-    if (g_error_matches(e, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
-        g_error_free(e);
-        return;                                   /* (the dialog is gone: P too) */
-    }
-    if (ok) {
-        p->bytes += (goffset)size;
-        p->n_dirs += dirs;                         /* (each folder measured counts itself) */
-        p->n_files += files;
-    }
-    g_clear_error(&e);
+    (void)so; (void)cc;
+    Count *c = data;
+    count_tree(c, c->file, 0);
+    g_task_return_boolean(t, TRUE);
+}
+
+static void count_free(gpointer d)
+{
+    Count *c = d;
+    g_object_unref(c->cancel);
+    g_object_unref(c->file);
+    g_free(c);
+}
+
+static void count_done(GObject *so, GAsyncResult *res, gpointer d)
+{
+    (void)so;
+    Count *c = g_task_get_task_data(G_TASK(res));
+    (void)d;
+    if (g_cancellable_is_cancelled(c->cancel)) return;
+    Props *p = c->p;
+    p->bytes += c->bytes;
+    p->n_files += c->files;
+    p->n_dirs += c->dirs;
     p->pending--;
     props_show_size(p);
+}
+
+/* SELF: the folder itself counts as one (several items selected) */
+static void count_folder(Props *p, GFile *dir, gboolean self)
+{
+    Count *c = g_new0(Count, 1);
+    c->p = p;
+    c->cancel = g_object_ref(p->cancel);
+    c->file = g_object_ref(dir);
+    c->dirs = self ? 1 : 0;
+    p->pending++;
+    GTask *t = g_task_new(NULL, NULL, count_done, NULL);
+    g_task_set_task_data(t, c, count_free);
+    g_task_run_in_thread(t, count_thread);
+    g_object_unref(t);
 }
 
 static const char *const file_access[] = { "None", "Read-only", "Read and write" };
@@ -488,7 +540,7 @@ void files_properties_dialog(FilesWindow *w, GList *files)
         pango_attr_list_unref(al);
         gtk_grid_attach(GTK_GRID(grid), icon, 0, row, 1, 1);
         gtk_grid_attach(GTK_GRID(grid), nl, 1, row++, 1, 1);
-        char *type = ct ? g_content_type_get_description(ct) : g_strdup("?");
+        char *type = files_type_description(ct);
         char *type_full = ct ? g_strdup_printf("%s (%s)", type, ct) : g_strdup(type);
         grid_row(grid, &row, "Type", type_full);
         GFile *parent = g_file_get_parent(p->file);
@@ -511,9 +563,7 @@ void files_properties_dialog(FilesWindow *w, GList *files)
         p->size_value = grid_row(grid, &row, p->is_dir ? "Contents" : "Size", "");
         if (p->is_dir) {
             gtk_label_set_text(GTK_LABEL(p->size_value), "Counting…");
-            p->pending = 1;
-            g_file_measure_disk_usage_async(p->file, G_FILE_MEASURE_APPARENT_SIZE, G_PRIORITY_LOW, p->cancel,
-                                            measure_progress, p, measured, p);
+            count_folder(p, p->file, FALSE);
         } else {
             p->bytes = g_file_info_get_size(info);
             p->n_files = 1;
@@ -587,9 +637,7 @@ void files_properties_dialog(FilesWindow *w, GList *files)
             if (!i) continue;
             if (g_file_info_get_file_type(i) == G_FILE_TYPE_DIRECTORY) {
                 dirs++;
-                p->pending++;
-                g_file_measure_disk_usage_async(l->data, G_FILE_MEASURE_APPARENT_SIZE, G_PRIORITY_LOW, p->cancel,
-                                                measure_progress, p, measured, p);
+                count_folder(p, l->data, TRUE);
             } else {
                 p->bytes += g_file_info_get_size(i);
                 p->n_files++;
@@ -1030,7 +1078,7 @@ void files_shortcuts(GtkWindow *parent)
         { "Alt+Up, Backspace", "Up one folder / back" }, { "Alt+Home", "Home folder" }, { "Ctrl+L", "Type a location" },
         { "Ctrl+F", "Search" }, { "F5, Ctrl+R", "Reload" }, { "Ctrl+H", "Show hidden files" },
         { "Ctrl+1 / Ctrl+2", "Icons / list" }, { "Ctrl++ / Ctrl+- / Ctrl+0", "Zoom in / out / normal" },
-        { "F9", "Show the sidebar" }, { "Ctrl+Shift+N", "New folder" }, { "F2", "Rename" },
+        { "F9", "Show the sidebar" }, { "Ctrl+Shift+N", "New folder" }, { "F2", "Rename (F1-F3 not sound keys)" },
         { "Ctrl+X / C / V", "Cut / copy / paste" }, { "Ctrl+A", "Select all" }, { "Ctrl+Shift+I", "Invert the selection" },
         { "Delete", "Move to the trash" }, { "Shift+Delete", "Delete permanently" }, { "Ctrl+Z", "Undo" },
         { "Alt+Enter, Ctrl+I", "Properties" }, { "Ctrl+Enter", "Open in a new tab" }, { "Ctrl+D", "Bookmark the folder" },

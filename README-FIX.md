@@ -695,7 +695,7 @@ To get it: `git pull`, `make && sudo make install`, then log out and back in (or
 `make check`: with Yaru and Dark mode the Automatic accent is Yaru's orange (`#e95420`, logged by Settings) and the
 sidebar has no black pixels, then it follows back to Adwaita. Hyggshi Files: a folder with a hidden file (5 items
 shown), the thumbnail of a picture on the screen and in `~/.cache/thumbnails`, `Ctrl+H`, `Ctrl+2` / `Ctrl+1`, a new
-folder, type-ahead + `F2` (notes.txt -> readme.txt), `Ctrl+C` / `Ctrl+V` ("readme (copy).txt") and `Ctrl+Z`, `Delete`
+folder, type-ahead + *Rename…* from the Menu key (notes.txt -> readme.txt; `F2` is HDE's volume-down key there), `Ctrl+C` / `Ctrl+V` ("readme (copy).txt") and `Ctrl+Z`, `Delete`
 to the trash with its `.trashinfo`, the Trash view and Restore, `Alt+Left`, the right-click menus of a file and of the
 folder, Properties of a folder with its size, `Ctrl+F` finding files in subfolders, a double click into a folder and
 `Backspace`, tabs, `ShowItems` over D-Bus, `hde-files --select`, Dark mode, `--quit`, no GTK criticals, and a double

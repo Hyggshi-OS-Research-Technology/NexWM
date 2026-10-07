@@ -96,7 +96,7 @@ static void row_set(Pane *p, GtkTreeIter *it, GFile *file, GFileInfo *info, cons
     }
     const char *ct = g_file_info_get_content_type(info);
     if (!ct) ct = is_dir ? "inode/directory" : "application/octet-stream";
-    char *type_text = g_content_type_get_description(ct);
+    char *type_text = files_type_description(ct);
     char *size_text = is_dir ? g_strdup("—") : files_format_size(size, FALSE);
     char *time_text = files_format_time(mtime);
     char *key = g_utf8_collate_key_for_filename(dname, -1);
@@ -806,8 +806,9 @@ void pane_go(Pane *p, GFile *location, gboolean add_history)
         files_list_free(p->forward);
         p->forward = NULL;
     }
-    if (p->location) g_object_unref(p->location);
+    GFile *old = p->location;                     /* (LOCATION may be the same object) */
     p->location = g_object_ref(location);
+    if (old) g_object_unref(old);
     g_clear_pointer(&p->search, g_free);
     if (p->typeahead) g_string_truncate(p->typeahead, 0);
     char *where = files_display_path(location);
@@ -1666,6 +1667,10 @@ Pane *pane_new(FilesWindow *w)
     p->col_type = text_column(p, "Type", COL_TYPE_TEXT, SORT_TYPE, 0.0);
     p->col_mtime = text_column(p, "Modified", COL_MTIME_TEXT, SORT_MTIME, 0.0);
     p->col_extra = text_column(p, "Location", COL_EXTRA, SORT_NAME, 0.0);
+    gtk_tree_view_column_set_min_width(p->col_size, 90);
+    gtk_tree_view_column_set_min_width(p->col_type, 150);
+    gtk_tree_view_column_set_min_width(p->col_mtime, 140);
+    gtk_tree_view_column_set_min_width(p->col_extra, 150);
     gtk_tree_view_column_set_sort_column_id(p->col_extra, -1);
     gtk_tree_view_column_set_visible(p->col_extra, FALSE);
     g_signal_connect(tv, "row-activated", G_CALLBACK(on_row_activated), p);

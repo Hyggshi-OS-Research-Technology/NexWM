@@ -1475,6 +1475,7 @@ flast() { grep -F -- "$1" "$FL" 2>/dev/null | tail -n 1; }
 fitem() { sed -n "s/^hde-files: item $1 at \([0-9]*\),\([0-9]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p" "$FL" | tail -n 1; }
 fmenu() { flast "hde-files: menu: " | sed 's/^hde-files: menu: //'; }
 
+FAILS0=$FAILS
 v=$("$B/hde-files" --version 2>&1)
 case "$v" in "hde-files (Hyggshi Files) "*) pass "hde-files --version: $v" ;; *) fail "hde-files --version ($v)" ;; esac
 "$B/hde-files" "$FT" > "$FL" 2>&1 &
@@ -1515,16 +1516,18 @@ if fwait "hde-files: dialog: New Folder (New Folder)" 15; then
     else fail "Ctrl+Shift+N makes a new folder ($(ls "$FT" | tr '\n' ' '))"; fi
     check "... and selects it" fwait "hde-files: selected: file://$FT/Projects" 10
 else fail "Ctrl+Shift+N opens the New Folder dialog"; fi
-# type-ahead, rename (only the name is selected, the extension stays)
+# type-ahead, rename (only the name is selected, the extension stays). Rename from the menu (Menu key, R): F2 is the
+# volume-down key of HDE in this session (F1-F3 sound keys on); F2 renames when they are off
 xdotool type --delay 60 "no"; sleep 0.6
 check "typing selects the item whose name begins with it (type-ahead)" fwait "hde-files: type-ahead 'no': notes.txt" 10
-xdotool key F2
+xdotool key Menu; sleep 1
+case "$(fmenu)" in *"| Rename… |"*) xdotool key r ;; *) xdotool key Escape ;; esac
 if fwait "hde-files: dialog: Rename File (notes.txt)" 15; then
     sleep 0.6; shot 21c-files-rename
     xdotool type --delay 40 "readme"; xdotool key Return; sleep 1.2
-    if [ -f "$FT/readme.txt" ] && [ ! -e "$FT/notes.txt" ]; then pass "F2 renames, the extension kept: notes.txt -> readme.txt"
-    else fail "F2 renames (notes.txt -> readme.txt: $(ls "$FT" | tr '\n' ' '))"; fi
-else fail "F2 opens the Rename dialog"; fi
+    if [ -f "$FT/readme.txt" ] && [ ! -e "$FT/notes.txt" ]; then pass "Rename… renames, the extension kept: notes.txt -> readme.txt"
+    else fail "Rename… renames (notes.txt -> readme.txt: $(ls "$FT" | tr '\n' ' '))"; fi
+else fail "Rename… (Menu key, R) opens the Rename dialog ($(fmenu))"; fi
 # copy + paste in the same folder, undo
 sleep 0.5; xdotool key ctrl+c; sleep 0.5
 check "Ctrl+C copies the selected file" fwait "hde-files: clipboard: copy 1 item(s): readme.txt" 10
@@ -1639,6 +1642,10 @@ i=0; while [ "$i" -lt 30 ] && kill -0 "$FILES" 2>/dev/null; do sleep 0.2; i=$((i
 if kill -0 "$FILES" 2>/dev/null; then fail "hde-files --quit closes Hyggshi Files"; kill "$FILES" 2>/dev/null
 else pass "hde-files --quit closes Hyggshi Files"; fi
 check "Hyggshi Files logged no GTK criticals" sh -c "! grep -q 'CRITICAL' '$FL'"
+grep -E "CRITICAL|WARNING" "$FL" | sort | uniq -c | sort -rn | head -n 6 | sed 's/^ */INFO: files.log: /' >> "$OUT/results.txt"
+if [ "$FAILS" -gt "$FAILS0" ]; then           # what Hyggshi Files did, for the failures above
+    grep -v "^hde-files: item " "$FL" | tail -n 70 | sed 's/^/INFO: files.log: /' >> "$OUT/results.txt"
+fi
 # the desktop: a double click on a folder opens it in Hyggshi Files (the default file manager of HDE sessions)
 n=$(nlog "hde-files: window opened: ~/Desktop/aaa-folder")
 xdotool mousemove 62 154 click --repeat 2 --delay 100 1; sleep 3.5

@@ -139,6 +139,23 @@ char *files_format_size(goffset size, gboolean exact)
     return g_format_size_full(size, G_FORMAT_SIZE_LONG_FORMAT);
 }
 
+/* "folder" -> "Folder", "plain text document" -> "Plain text document" (shared-mime-info's English is lower case) */
+char *files_type_description(const char *content_type)
+{
+    char *d = content_type ? g_content_type_get_description(content_type) : NULL;
+    if (!d || !*d) {
+        g_free(d);
+        return g_strdup("Unknown");
+    }
+    gunichar c = g_utf8_get_char(d), t = g_unichar_totitle(c);
+    if (t == c) return d;
+    char first[8] = { 0 };
+    g_unichar_to_utf8(t, first);
+    char *r = g_strconcat(first, g_utf8_next_char(d), NULL);
+    g_free(d);
+    return r;
+}
+
 char *files_names_text(GList *files, int max)
 {
     guint n = g_list_length(files);

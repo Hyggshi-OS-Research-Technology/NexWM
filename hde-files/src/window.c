@@ -306,7 +306,11 @@ void files_window_start_location(FilesWindow *w, const char *text)
     if (text) cur = g_strdup(text);
     else if (w->pane && w->pane->location && g_file_is_native(w->pane->location)) cur = g_file_get_path(w->pane->location);
     else cur = w->pane && w->pane->location ? g_file_get_uri(w->pane->location) : g_strdup("");
+    /* (no inline completion for this text: it would add a selected "/" after it, and typing would keep the path) */
+    GtkEntryCompletion *comp = gtk_entry_get_completion(GTK_ENTRY(w->location_entry));
+    if (comp) g_signal_handlers_block_matched(w->location_entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, comp);
     gtk_entry_set_text(GTK_ENTRY(w->location_entry), cur);
+    if (comp) g_signal_handlers_unblock_matched(w->location_entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, comp);
     gtk_widget_grab_focus(w->location_entry);
     if (text) gtk_editable_set_position(GTK_EDITABLE(w->location_entry), -1);
     else gtk_editable_select_region(GTK_EDITABLE(w->location_entry), 0, -1);
@@ -1543,9 +1547,20 @@ static void on_destroy(GtkWidget *win, gpointer d)
     if (w->status_id) g_source_remove(w->status_id);
     if (w->free_cancel) g_cancellable_cancel(w->free_cancel);
     g_clear_object(&w->free_cancel);
+    /* GTK destroys the widgets after this: none of them may call back into W or its panes any more */
+    GtkWidget *mine[] = { w->window, w->notebook, w->sidebar, w->location_entry, w->search_entry, w->search_btn,
+                          w->zoom_scale, w->paned, w->trash_restore_btn, w->trash_empty_btn, w->menu_btn };
+    for (guint i = 0; i < G_N_ELEMENTS(mine); i++) g_signal_handlers_disconnect_by_data(mine[i], w);
+    GList *crumbs = gtk_container_get_children(GTK_CONTAINER(w->pathbar));
+    for (GList *l = crumbs; l; l = l->next) g_signal_handlers_disconnect_by_data(l->data, w);
+    g_list_free(crumbs);
     GList *panes = NULL;
     FOREACH_PANE(w, p, { panes = g_list_prepend(panes, p); });
-    for (GList *l = panes; l; l = l->next) pane_free(l->data);    /* (their signal handlers go first) */
+    for (GList *l = panes; l; l = l->next) {
+        Pane *p = l->data;
+        g_object_set_data(G_OBJECT(p->page), "pane", NULL);
+        pane_free(p);                                  /* (it lets go of its widgets first) */
+    }
     g_list_free(panes);
     files_log("window closed (%u left)", g_list_length(windows));
     g_free(w);
