@@ -104,6 +104,7 @@ new tab, `F5` reload, `F10` the menu, `Ctrl+?` all of them.
 | `nexwm` | HDE's own window manager (`nexwm/`, in this repository). `nexwm [--x11\|--wayland] [--replace] [--config FILE]`, `--version`, `--help`. The X11 side is a window manager of its own (XCB only, no libX11, no toolkit): frames, focus, workspaces, snap / maximize / full screen, `_NET_WM_STRUT` of the panel, `_NET_SUPPORTING_WM_CHECK`, `--replace` to take over from another window manager without logging out. Keys and settings in `~/.config/hde/nexwm.conf`; what the running one listens to is `xprop -root _NEXWM_KEYS`. The Wayland compositor of the same program is the next step: `nexwm --wayland` says what this build has. Both sides are optional at build time and `nexwm --version` names the ones this build got (a build without `libxcb` still compiles; `nexwm --x11` then says what to install) |
 | `hde-panel` | Panel, Start menu, Control Center, battery panel, app search, notifications, OSD. `hde-panel --menu/--search/--run/--power/--show-desktop/--osd-volume/--osd-brightness N/--control-center[=wifi\|bluetooth\|sound\|notifications]/--notifications/--battery` control the running panel (X11 ClientMessage or D-Bus `org.hyggshi.HDE.Panel`); `hde-panel --measure` has the panel measure the screen again and put itself right, then prints the screen, the panel window, the space reserved for it and the room windows get (exit status 0 = it fits) |
 | `hde-files` | Hyggshi Files, the file manager (`hde-files/`, which has its own Makefile too): `hde-files [FOLDER\|FILE\|URI…]` (a file: its folder with the file selected; `trash:///`, `recent:///`), `--select PATH…` (the folders with these items selected), `--new-window`, `--quit`. One process; while it runs it answers `org.freedesktop.FileManager1` (*Show in Folder*). In HDE sessions folders open in it (`hde-mimeapps.list`; a choice of your own in *Open With* wins). Its settings: `~/.config/hde/files.ini` |
+| `hde-choose` | *Which program for this?* When more than one program on this machine can do the same thing — a terminal, a file manager, pictures, music and video, a system monitor, a screenshot tool — HDE asks which one to use, once, and remembers the answer. HDE's own program is offered first and marked *HDE's own* (Hyggshi Files, Hyggshi Media, hde-screenshot, and `hde-cmd` when the terminal of HDE is installed). `hde-choose terminal [ARGS…]` starts it (Super+T, Super+E and the other places of HDE run this), `--ask` asks even when the answer is remembered, `--no-ask` never asks, `--list` shows what is installed and what is remembered, `--set FEATURE PROGRAM` / `--reset FEATURE` change or forget an answer, and `HDE_CHOOSE=PROGRAM` overrides everything for one run. Where there is nothing to ask — one program installed, or no display — the first installed one runs and the log says why |
 | `hde-desktop` | Wallpaper + desktop icons (icon menu, Cut/Copy/Paste compatible with GNOME/Xfce file managers) |
 | `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script; `--project` (the F8 window), `--display-mode pc\|duplicate\|extend\|second`, `--displays`, `--display-set NAME WxH[@HZ]\|auto [normal\|left\|right\|inverted]` (the resolution / rotation of a screen, kept for next time), `--brightness [+N\|-N\|N]`, `--power` (battery, battery saver), `--night-light [on\|off\|toggle]`, `--about` (this computer, the system, the RAM HDE uses), `--about-window`, `--wayland-config [DIR] [--reload]` (labwc's configuration for the Wayland session) |
 | `hde-hotkeys` | System shortcuts (Xlib + XInput2). `hde-hotkeys --action NAME` does one action (volume-up, brightness-down, screenshot-area, project, lock, …): what the key bindings of the Wayland session run |
@@ -140,6 +141,9 @@ Panel: `panel_position` (`bottom`/`top`), `panel_size`, `panel_opacity`, `panel_
 `menu_button_icon` (`os` — the default —, `menu`, `hde`, `none`, an icon name or the path of a picture). Control Center:
 `cc_status_click` (the status icons open it; `false`: the old actions), `cc_wifi` / `cc_bluetooth` / `cc_airplane` /
 `cc_dnd` / `cc_dark` / `cc_night_light` / `cc_power_mode` / `cc_brightness` / `cc_volume` / `cc_notifications`.
+`choice_terminal`, `choice_files`, `choice_monitor`, `choice_pictures`, `choice_player`, `choice_screenshot`: the
+program hde-choose uses for each of them (a program name, or `ask` to ask every time; written by the question itself
+and by `hde-choose --set`, forgotten by `--reset`).
 All documented in `src/hde-panel-config.h`.
 Desktop wallpaper and icon positions: `~/.config/hde/config.ini`. The Wayland session's labwc configuration is
 written to `~/.config/hde/labwc/` from these settings (rewritten when they change).
@@ -184,6 +188,15 @@ back when it quits, and takes over from a running Metacity with `--replace`; `te
 configuration file and the key bindings without any display (`make check-unit`). Both run with `make check-nexwm`,
 which says so and stops when this build has no X11 side (no `libxcb`).
 
+`tests/choose-test.c` (plain C, no display, `make check-unit`) checks the rules of *which program for this?*: the
+features, what is installed on a PATH the test makes up, two names for one program counted once
+(`x-terminal-emulator`), and the answers in settings.ini. `tests/choose-run-test.sh` runs the program itself — what it
+starts and what it says, one program installed vs several, nothing installed (exit status 127 and what to install), the
+caller's arguments passed on, the arguments of the table used only when there are none (`hde-choose files` → the home
+folder), what it remembers (`--set`, `--reset`, a remembered program that is gone, `HDE_CHOOSE`) — and, through the
+stand-in for GTK3 of `tests/choose-stub/` (the same trick as the stand-in for mpv of the player test), the question
+itself: the line that was clicked is the one that starts, and only *Remember my choice* writes it down.
+
 `tests/wayland-test.sh` runs the HDE (Wayland) session for real — labwc with its headless backend (no screen or GPU),
 started by `hde-start --wayland` — and checks the panel and desktop as layer-shell surfaces, the Start menu through
 D-Bus, the Super key and Ctrl+Esc as labwc key bindings, typing in the menu, the taskbar with a real window, Show
@@ -207,6 +220,9 @@ line of `~/.cache/hde/session.log` show the commit HDE was built from.
 - `src/`: the GTK3 desktop programs (panel, desktop, settings pages, hotkeys, xsettings).
 - `hde-files/`: Hyggshi Files, the file manager (`src/files.h` describes its parts).
 - `apps/hde-session.c`: session manager. `src/hde-wm.h`: window-manager table shared with Settings.
+- `src/hde-choose.h` / `src/hde-choose.c` (the table of *which program for this?*, what is installed, what was
+  remembered) and `apps/hde-choose.c` (the question, the running of the program); `tests/choose-stub/` is a stand-in
+  for GTK3, built only for `tests/choose-run-test.sh`.
 - `nexwm/`: NexWM, HDE's own window manager (`src/nexwm.h`, `src/config.c` — the configuration file, `src/x11.c` — the
   X11 window manager, `src/wayland.c` — the Wayland compositor, `src/nexwm.c` — the program itself).
 - `hde-core/`: backend-neutral APIs and core services; `backend/x11/`, `backend/wayland/`: session actions.

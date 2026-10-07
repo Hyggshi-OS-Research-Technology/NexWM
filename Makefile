@@ -80,14 +80,15 @@ VERSION_H = $(BUILD)/hde-version.h
 # --wayland (the compositor, wlroots). nexwm/src/config.c is the part that needs neither of them (nexwm.conf).
 NEXWM_SRC=$(wildcard nexwm/src/*.c)
 
-PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media nexwm
+PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media \
+         hde-choose nexwm
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
 # The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/nexwm
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/nexwm
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -112,6 +113,12 @@ $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-brightness.c src/hde-randr.c src
 # Built-in screenshot tool (PrtSc / Shift+PrtSc / Alt+PrtSc via hde-hotkeys): no scrot & co. needed
 $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GTK_CFLAGS) $(GLIBX_CFLAGS) $(XFIXES_CFLAGS) -o $@ $< $(GTK_LIBS) $(GLIBX_LIBS) $(XFIXES_LIBS) -lm
+# hde-choose: "which program for this?" — when more than one program on the machine can do the same thing (a
+# terminal, a file manager, a picture viewer, a music player, a screenshot tool, a system monitor), HDE asks, runs the
+# one the user picked and remembers the answer in settings.ini (choice_<feature>). The rules live in src/hde-choose.c
+# so that tests/choose-test.c can check them without a display. Run by the key bindings, the Start menu and Settings.
+$(BUILD)/hde-choose: apps/hde-choose.c src/hde-choose.c src/hde-choose.h src/hde-distro.h src/hde-build.h | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # Hyggshi Files (hde-files/): folders, tabs, search, trash, thumbnails, drag and drop; the default file manager of HDE
 $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-files/src -Isrc $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
@@ -148,6 +155,18 @@ $(BUILD)/media-test: tests/media-test.c hde-media/src/gallery.c hde-media/src/me
 # read from the files themselves, and the state of the playback — plain C, no display and no sound card needed
 $(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/engine.c hde-media/src/playlist.h hde-media/src/engine.h hde-media/src/media.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
+# The stand-in for GTK3 of tests/choose-run-test.sh (tests/choose-stub/): the question of hde-choose ("which program
+# for this?") cannot be answered in CI — there is no display, and a user clicking a radio button is not a test — so the
+# test brings a toolkit of its own that says what was clicked (HDE_CHOOSE_STUB=..., see tests/choose-stub/gtk.c). It is
+# only ever built for that test: the programs of HDE are built against the real GTK, and nothing here is installed.
+$(BUILD)/hde-choose-stub.o: apps/hde-choose.c | $(BUILD)
+	$(CC) $(GUI_CFLAGS) -Isrc -I$(BUILD) -Itests/choose-stub -c -Dmain=hde_choose_main -o $@ $<
+$(BUILD)/hde-choose-stub: src/hde-choose.c src/hde-choose.h tests/choose-stub/gtk.c tests/choose-stub/gtk/gtk.h $(BUILD)/hde-choose-stub.o | $(BUILD)
+	$(CC) $(GUI_CFLAGS) -Isrc -I$(BUILD) -Itests/choose-stub -o $@ $(filter %.c,$^) $(BUILD)/hde-choose-stub.o
+# "Which program for this?" (src/hde-choose.c): the table of features, what is installed on a PATH the test makes up,
+# the deduplication (x-terminal-emulator is a symlink to one of the others) and the answers in settings.ini — plain C
+$(BUILD)/choose-test: tests/choose-test.c src/hde-choose.c src/hde-choose.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^)
 # Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
 # `make check`
 $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
@@ -190,8 +209,11 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
 UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test \
-            $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/nexwm-test tests/sddm-test.sh
-check-unit: $(UNIT_TESTS)
+            $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test \
+            tests/choose-run-test.sh tests/sddm-test.sh
+# build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
+# test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
+check-unit: $(UNIT_TESTS) $(BUILD)/hde-choose-stub
 	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; $$t || rc=1; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
 
 # The HDE login screen (login/sddm/hde): files, metadata, theme.conf, QML and the installer; with a display (and
@@ -234,7 +256,7 @@ APPS_DIR ?= /usr/share/applications
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(XSESSIONS) $(DESTDIR)$(APPS_DIR)
 	install -m755 $(BUILD)/hde-session $(DESTDIR)$(PREFIX)/bin/hde-session
-	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media; do \
+	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose; do \
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start

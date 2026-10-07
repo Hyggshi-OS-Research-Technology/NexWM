@@ -225,8 +225,10 @@ static void on_applet_clicked(GtkButton *b, gpointer d)
     (void)b;
     Applet *a = d;
     const char *cmd = a->def.click && *a->def.click ? a->def.click : NULL;
-    if (!cmd && !strcmp(a->def.type, "cpu")) cmd = "gnome-system-monitor || mate-system-monitor || xfce4-taskmanager || lxtask || x-terminal-emulator -e top";
-    if (!cmd && !strcmp(a->def.type, "memory")) cmd = "gnome-system-monitor || mate-system-monitor || xfce4-taskmanager || lxtask || x-terminal-emulator -e top";
+    /* which program shows what the system is doing is hde-choose's question (it remembers the answer); a machine
+     * without it picks the first of the list, and `top` in a terminal is what is left when nothing else is there */
+    if (!cmd && !strcmp(a->def.type, "cpu")) cmd = "command -v hde-choose >/dev/null 2>&1 && hde-choose --quiet monitor || x-terminal-emulator -e top";
+    if (!cmd && !strcmp(a->def.type, "memory")) cmd = "command -v hde-choose >/dev/null 2>&1 && hde-choose --quiet monitor || x-terminal-emulator -e top";
     if (cmd) {
         GError *e = NULL;
         char *argv[] = { (char *)"/bin/sh", (char *)"-c", (char *)cmd, NULL };
