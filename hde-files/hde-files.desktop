@@ -1,0 +1,22 @@
+[Desktop Entry]
+Name=Hyggshi Files
+GenericName=File Manager
+Comment=Browse, organize and search your files and folders
+Exec=@PREFIX@/bin/hde-files %U
+Icon=system-file-manager
+Terminal=false
+Type=Application
+Categories=GTK;Utility;Core;System;FileTools;FileManager;
+Keywords=folder;files;file manager;explorer;browse;trash;
+MimeType=inode/directory;
+StartupNotify=true
+StartupWMClass=hde-files
+Actions=NewWindow;Trash;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=@PREFIX@/bin/hde-files --new-window
+
+[Desktop Action Trash]
+Name=Open the Trash
+Exec=@PREFIX@/bin/hde-files trash:///

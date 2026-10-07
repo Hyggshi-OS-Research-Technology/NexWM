@@ -1,0 +1,107 @@
+/* hde-osd: volume / brightness OSD (popup window that never takes focus, above the panel). */
+#include "hde-osd.h"
+#include "hde-wl.h"
+#include "hde-panel-config.h"
+
+#define OSD_GAP 30            /* distance from the panel (or the bottom edge of the screen) */
+#define OSD_TIMEOUT_MS 1500
+
+static GtkWidget *osd_win, *osd_icon, *osd_level, *osd_label;
+static guint osd_timer;
+
+static gboolean alpha_draw(GtkWidget *w, cairo_t *cr, gpointer d)
+{
+    (void)d;
+    cairo_save(cr);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+    cairo_restore(cr);
+    GtkStyleContext *ctx = gtk_widget_get_style_context(w);
+    int W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
+    gtk_render_background(ctx, cr, 0, 0, W, H);
+    gtk_render_frame(ctx, cr, 0, 0, W, H);
+    return FALSE;                      /* GTK keeps drawing the child widgets */
+}
+
+void hde_popup_setup_alpha(GtkWidget *window)
+{
+    GdkScreen *scr = gtk_widget_get_screen(window);
+    GdkVisual *rgba = gdk_screen_get_rgba_visual(scr);
+    if (!rgba || !gdk_screen_is_composited(scr)) return;
+    gtk_widget_set_visual(window, rgba);
+    gtk_widget_set_app_paintable(window, TRUE);
+    g_signal_connect(window, "draw", G_CALLBACK(alpha_draw), NULL);
+    gtk_style_context_add_class(gtk_widget_get_style_context(window), "rounded");
+}
+
+static gboolean osd_hide(gpointer d)
+{
+    (void)d;
+    osd_timer = 0;
+    if (osd_win) gtk_widget_hide(osd_win);
+    return G_SOURCE_REMOVE;
+}
+
+static void osd_build(void)
+{
+    osd_win = hde_popup_window_new("hde-osd", HDE_LAYER_OVERLAY, HDE_EDGE_BOTTOM, HDE_KB_NONE);
+    gtk_window_set_type_hint(GTK_WINDOW(osd_win), GDK_WINDOW_TYPE_HINT_NOTIFICATION);
+    gtk_window_set_accept_focus(GTK_WINDOW(osd_win), FALSE);
+    gtk_window_set_resizable(GTK_WINDOW(osd_win), FALSE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(osd_win), "hde-osd");
+    hde_popup_setup_alpha(osd_win);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 14);
+    osd_icon = gtk_image_new();
+    gtk_image_set_pixel_size(GTK_IMAGE(osd_icon), 28);
+    osd_level = gtk_level_bar_new_for_interval(0, 100);
+    gtk_widget_set_size_request(osd_level, 200, 8);
+    gtk_widget_set_valign(osd_level, GTK_ALIGN_CENTER);
+    gtk_level_bar_set_mode(GTK_LEVEL_BAR(osd_level), GTK_LEVEL_BAR_MODE_CONTINUOUS);
+    /* drop the default low/high offsets so the bar always has a single color */
+    gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(osd_level), GTK_LEVEL_BAR_OFFSET_LOW);
+    gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(osd_level), GTK_LEVEL_BAR_OFFSET_HIGH);
+    gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(osd_level), "full");
+    osd_label = gtk_label_new("");
+    gtk_label_set_width_chars(GTK_LABEL(osd_label), 5);
+    gtk_style_context_add_class(gtk_widget_get_style_context(osd_label), "osd-text");
+    gtk_box_pack_start(GTK_BOX(box), osd_icon, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), osd_level, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(box), osd_label, FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(osd_win), box);
+    gtk_widget_show_all(box);
+}
+
+void hde_osd_show(const char *icon_name, int percent, const char *text)
+{
+    if (!osd_win) osd_build();
+    gtk_image_set_from_icon_name(GTK_IMAGE(osd_icon), icon_name ? icon_name : "dialog-information-symbolic",
+                                 GTK_ICON_SIZE_DND);
+    gtk_image_set_pixel_size(GTK_IMAGE(osd_icon), 28);
+    gtk_widget_set_visible(osd_level, percent >= 0);
+    if (percent >= 0) gtk_level_bar_set_value(GTK_LEVEL_BAR(osd_level), CLAMP(percent, 0, 100));
+    char buf[32];
+    if (!text && percent >= 0) { g_snprintf(buf, sizeof buf, "%d%%", percent); text = buf; }
+    gtk_label_set_text(GTK_LABEL(osd_label), text ? text : "");
+
+    GdkMonitor *m = hde_main_monitor();
+    GdkRectangle geo = { 0, 0, 1024, 768 };
+    if (m) gdk_monitor_get_geometry(m, &geo);
+    int bottom = 0;
+    hde_panel_reserved(NULL, &bottom);
+    GtkRequisition nat;
+    gtk_widget_get_preferred_size(osd_win, NULL, &nat);
+    if (hde_wl_is_layer(GTK_WINDOW(osd_win))) {
+        hde_wl_layer_exclusive(GTK_WINDOW(osd_win), 0);          /* keeps clear of the panel by itself */
+        hde_wl_layer_margins(GTK_WINDOW(osd_win), 0, 0, 0, OSD_GAP);
+    } else {
+        gtk_window_move(GTK_WINDOW(osd_win), geo.x + (geo.width - nat.width) / 2,
+                        geo.y + geo.height - bottom - OSD_GAP - nat.height);
+    }
+    gtk_widget_show(osd_win);
+    if (gtk_widget_get_window(osd_win)) gdk_window_raise(gtk_widget_get_window(osd_win));
+    if (osd_timer) g_source_remove(osd_timer);
+    osd_timer = g_timeout_add(OSD_TIMEOUT_MS, osd_hide, NULL);
+}

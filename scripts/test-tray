@@ -1,12 +1,12 @@
 #!/bin/bash
-# test-tray — thử system tray của hde-panel bằng app SNI thật trong Xvfb + D-Bus riêng.
+# test-tray — tests the hde-panel system tray with a real SNI app in Xvfb + a private D-Bus.
 #
-#   ./scripts/test-tray            # chế độ server: hde-panel giữ StatusNotifierWatcher
-#   ./scripts/test-tray xfce       # đã có xfce4-panel làm watcher -> hde-panel làm client,
-#                                  # rồi xfce4-panel thoát để hde-panel tự lên thay
+#   ./scripts/test-tray            # server mode: hde-panel owns StatusNotifierWatcher
+#   ./scripts/test-tray xfce       # xfce4-panel is already the watcher -> hde-panel acts as a client,
+#                                  # then xfce4-panel quits and hde-panel takes over by itself
 #
-# Cần: xvfb, xdotool, imagemagick, dbus-x11, python3-gi, gir1.2-ayatanaappindicator3-0.1, openbox
-#      (chế độ xfce: thêm xfce4-panel xfconf). Ảnh chụp lưu ở /tmp/hde-tray-*.png
+# Needs: xvfb, xdotool, imagemagick, dbus-x11, python3-gi, gir1.2-ayatanaappindicator3-0.1, openbox
+#        (xfce mode: also xfce4-panel xfconf). Screenshots are saved to /tmp/hde-tray-*.png
 set -u
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 MODE="${1:-server}"
@@ -37,32 +37,32 @@ python3 "$ROOT/scripts/sni-test-app.py" >/dev/null 2>&1 & APP=$!; sleep 2
 "$ROOT/build/hde-panel" 2>/tmp/hde-tray-panel.log & PANEL=$!; PIDS="$PIDS $PANEL"; sleep 3
 shot 1-app-alive
 
-echo "[1] app đăng ký"
-items | grep -q hde_test_app && ok "item có trên watcher" || bad "item không có trên watcher"
+echo "[1] app registers"
+items | grep -q hde_test_app && ok "item is on the watcher" || bad "item is not on the watcher"
 if [ "$MODE" = xfce ]; then
-    grep -q "client" /tmp/hde-tray-panel.log && ok "hde-panel chuyển sang chế độ client" || bad "không vào chế độ client"
+    grep -q "client" /tmp/hde-tray-panel.log && ok "hde-panel switched to client mode" || bad "did not switch to client mode"
 fi
 
-echo "[2] app thoát"
+echo "[2] app quits"
 kill $APP; sleep 2; shot 2-app-exited
-items | grep -q hde_test_app && bad "item vẫn còn" || ok "item đã bị gỡ"
+items | grep -q hde_test_app && bad "item is still there" || ok "item was removed"
 
-echo "[3] app mới"
+echo "[3] new app"
 python3 "$ROOT/scripts/sni-test-app.py" >/dev/null 2>&1 & APP=$!; sleep 3; shot 3-new-app
-items | grep -q hde_test_app && ok "item có lại" || bad "item không có lại"
+items | grep -q hde_test_app && ok "item is back" || bad "item did not come back"
 
 if [ "$MODE" = xfce ]; then
-    echo "[4] xfce4-panel thoát -> hde-panel làm watcher"
+    echo "[4] xfce4-panel quits -> hde-panel becomes the watcher"
     pkill xfce4-panel; sleep 3; shot 4-takeover
     owner=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
             --method org.freedesktop.DBus.GetNameOwner org.kde.StatusNotifierWatcher | tr -d "(',)")
     pid=$(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
           --method org.freedesktop.DBus.GetConnectionUnixProcessID "$owner" | sed -n 's/.*uint32 \([0-9]*\).*/\1/p')
-    [ "$pid" = "$PANEL" ] && ok "hde-panel đã giữ watcher" || bad "chủ watcher là pid $pid, không phải hde-panel ($PANEL)"
-    items | grep -q hde_test_app && ok "item vẫn còn" || bad "mất item sau takeover"
+    [ "$pid" = "$PANEL" ] && ok "hde-panel took over the watcher" || bad "watcher owner is pid $pid, not hde-panel ($PANEL)"
+    items | grep -q hde_test_app && ok "item is still there" || bad "item lost after takeover"
 fi
 
 kill $APP 2>/dev/null; sleep 2
-kill -0 "$PANEL" 2>/dev/null && ok "hde-panel không crash" || bad "hde-panel đã chết"
-echo "Ảnh chụp: /tmp/hde-tray-*.png"
+kill -0 "$PANEL" 2>/dev/null && ok "hde-panel did not crash" || bad "hde-panel died"
+echo "Screenshots: /tmp/hde-tray-*.png"
 exit $FAILED

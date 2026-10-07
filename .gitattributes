@@ -1,0 +1,2 @@
+# data/version gets the commit filled in by `git archive` (GitHub "Download ZIP"): see scripts/hde-version.sh
+data/version export-subst

@@ -2,7 +2,7 @@
 #define HDE_TRAY_H
 #include <gtk/gtk.h>
 
-/* Trả về hộp chứa các icon tray (XEmbed + StatusNotifierItem) */
+/* Returns the box holding the tray icons (XEmbed + StatusNotifierItem) */
 GtkWidget *hde_tray_new(void);
 
 #endif

@@ -1,4 +1,4 @@
-/* hde-session: quản lý phiên — khởi chạy WM, desktop, panel, autostart; tự restart khi crash */
+/* hde-session: session management — launches the WM, desktop, panel, autostart; restarts them on crash */
 #include <gio/gio.h>
 #include <gio/gdesktopappinfo.h>
 #include <glib-unix.h>
@@ -9,7 +9,7 @@
 
 typedef struct {
     const char *name;
-    const char *const *candidates;   /* NULL-terminated, thử lần lượt */
+    const char *const *candidates;   /* NULL-terminated, tried in order */
     GSubprocess *proc;
     int fails;
     gint64 last_start;
@@ -151,7 +151,7 @@ int main(void)
     g_unix_signal_add(SIGINT,  on_signal, NULL);
     g_unix_signal_add(SIGHUP,  on_signal, NULL);
 
-    /* WM -> desktop ngay; panel trễ một chút để luôn map SAU desktop (tránh desktop phủ lên panel). */
+    /* WM -> desktop right away; the panel slightly later so it always maps AFTER the desktop (so the desktop never covers the panel). */
     start_comp(&comps[0]);
     start_comp(&comps[1]);
     g_timeout_add(600, restart_cb, &comps[2]);

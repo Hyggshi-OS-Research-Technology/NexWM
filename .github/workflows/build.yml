@@ -1,112 +1,320 @@
-name: Build Nex Desktop Environment
+name: Build & smoke-test HDE
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'arena/**' ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04, ubuntu-24.04 ]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          pkg-config \
-          libx11-dev \
-          libxcb1-dev \
-          libxcb-util-dev \
-          libxcb-randr0-dev \
-          libxcb-ewmh-dev \
-          libxcb-icccm4-dev \
-          libxcb-keysyms1-dev \
-          libpng-dev \
-          xterm
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev \
+          xvfb xdotool x11-utils x11-xserver-utils xinput dbus-x11 metacity openbox imagemagick \
+          pulseaudio pulseaudio-utils libnotify-bin libglib2.0-bin adwaita-icon-theme python3 python3-dbusmock librsvg2-common \
+          gsettings-desktop-schemas xserver-xephyr yaru-theme-gtk
 
-    - name: Build NexWM + nexwmctl
-      run: make wm ctl
-
-    - name: Build desktop components
-      run: make phase1
-
-    - name: Build all
-      run: make
-
-    - name: Check compiler warnings (Werror)
+    - name: Build (all targets)
       run: |
-        make clean
-        make CFLAGS="-Wall -Wextra -Wpedantic -Werror -std=c11 -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Iinclude"
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
+    - name: Compiler warnings
+      if: always()
+      run: |
+        n=$(grep -c "warning:" build.log || true)
+        echo "compiler warnings: $n"
+        grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::/' || true
+
+    - name: Smoke test in Xvfb (Start menu layouts, panel settings, About logos, Super key, F1-F3, F6-F8, notifications, screenshots, Wi-Fi, Dark mode, Hyggshi Files, WM switch)
+      run: make check
+
+    - name: Try it in a window (scripts/test-nexde --check, a nested HDE session in Xephyr)
+      if: always()
+      run: xvfb-run -a -s "-screen 0 1440x900x24" sh scripts/test-nexde --check --keep-logs 1280x720
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke results
+
+    # Screenshots as check runs (only when the commit message contains "[shots]" or on a manual run)
+    - name: Publish screenshots
+      if: always() && matrix.os == 'ubuntu-22.04' && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke checkruns
+
+    - name: Upload test output (logs + screenshots)
+      if: always()
+      uses: actions/upload-artifact@v6
       with:
-        name: nexde-binaries
+        name: hde-smoke-${{ matrix.os }}
         path: |
-          bin/nexwm
-          bin/nexwmctl
-          bin/nex-panel
-          bin/nex-launcher
-          bin/nex-wallpaper
-          bin/nex-desktop
-          bin/nex-notify
-          bin/nex-settings
-          bin/nex-session
+          /tmp/hde-smoke/*.log
+          /tmp/hde-smoke/*.txt
+          /tmp/hde-smoke/shot-*.png
+          build.log
 
-  test-xephyr:
-    runs-on: ubuntu-latest
-    needs: build
+  # Touchpad / mouse settings against the REAL X input drivers: Xorg (dummy video) + libinput + synaptics + evdev, with
+  # virtual uinput devices (needs root and /dev/uinput, which the GitHub VMs have; containers do not).
+  touchpad:
+    name: touchpad (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04, ubuntu-24.04 ]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          pkg-config \
-          libx11-dev \
-          libxcb1-dev \
-          libxcb-util-dev \
-          libxcb-randr0-dev \
-          libxcb-ewmh-dev \
-          libxcb-icccm4-dev \
-          libxcb-keysyms1-dev \
-          libpng-dev \
-          xterm \
-          xvfb
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev libxi-dev libxrandr-dev libx11-dev \
+          xserver-xorg-core xserver-xorg-video-dummy xserver-xorg-input-libinput xserver-xorg-input-synaptics \
+          xserver-xorg-input-evdev xinput x11-utils xdotool dbus-x11 python3 python3-evdev imagemagick \
+          adwaita-icon-theme librsvg2-common
 
-    - name: Build all
-      run: make
+    - name: Build hde-xsettings and hde-settings
+      run: make -j"$(nproc)" build/hde-xsettings build/hde-settings
 
-    - name: Test NexWM with Xvfb
+    - name: Touchpad test (scroll direction, tap to click, hotplug, live changes, other programs, real swipes, touchpads seen as a mouse)
+      run: sh tests/input-test.sh
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-input results "HDE touchpad test"
+
+    - name: Publish screenshots
+      if: always() && matrix.os == 'ubuntu-24.04' && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-input checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-touchpad-${{ matrix.os }}
+        path: |
+          /tmp/hde-input/*.log
+          /tmp/hde-input/*.txt
+          /tmp/hde-input/shot-*.png
+
+  # Several screens for real: Xorg with the dummy video driver, whose 16 RandR outputs (xf86-video-dummy >= 0.4.0, so
+  # Ubuntu 24.04) act as connectors: F8 / Super+P Project window, Extend / Duplicate / Second screen only / PC screen
+  # only, the panel and desktop following, F6/F7 software dimming, Night Light, a screen plugged in, a fake backlight.
+  display:
+    name: screens (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04 ]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
       run: |
-        export DISPLAY=:99
-        Xvfb :99 -screen 0 1280x720x24 &
-        sleep 2
-        ./bin/nexwm --version
-        timeout 5 ./bin/nexwm --debug &
-        NEXWM_PID=$!
-        sleep 2
-        DISPLAY=:99 xterm &
-        sleep 2
-        kill $NEXWM_PID || true
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev \
+          xserver-xorg-core xserver-xorg-video-dummy x11-xserver-utils x11-utils xdotool dbus-x11 metacity \
+          imagemagick adwaita-icon-theme librsvg2-common python3
 
-    - name: Test nexwmctl (IPC smoke test)
-      run: |
-        ./bin/nexwmctl --help 2>&1 || true
-        ./bin/nexwmctl reload 2>&1 | grep -q "cannot connect" || true
+    - name: Build
+      run: make -j"$(nproc)"
 
-    - name: Test nex-launcher --list
-      run: |
-        ./bin/nex-launcher --list 2>&1 | head -20 || true
+    - name: Screens test (F8 Project, Extend / Duplicate / Second screen only, F6/F7, Night Light, hotplug, backlight)
+      run: sh tests/display-test.sh
 
-    - name: Test nex-wallpaper --color (no display, expect graceful failure)
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-display results "HDE screens test"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-display checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-screens-${{ matrix.os }}
+        path: |
+          /tmp/hde-display/*.log
+          /tmp/hde-display/*.txt
+          /tmp/hde-display/shot-*.png
+
+  # The "HDE (Wayland)" session for real, on Debian 13 (Hyggshi OS's base): labwc with its headless backend and the pixman
+  # renderer (no screen or GPU needed), started by hde-start --wayland; grim takes the screenshots, wtype types keys.
+  wayland:
+    name: wayland (debian:trixie, labwc)
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
       run: |
-        env -u DISPLAY ./bin/nex-wallpaper --color 0x1a1a2e 2>&1 | grep -q "cannot open display" || true
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev \
+          libwayland-dev labwc xwayland grim wtype dbus zenity libnotify-bin libglib2.0-bin imagemagick \
+          adwaita-icon-theme librsvg2-common fonts-dejavu-core procps python3 ca-certificates
+        labwc --version; pkg-config --modversion gtk-layer-shell-0 wayland-client
+
+    - name: Build (with the Wayland taskbar)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log
+        grep -q "HAVE_WAYLAND_TASKBAR" build.log || { echo "::error::hde-panel was built without the Wayland taskbar"; exit 1; }
+
+    - name: Wayland session test (labwc, layer shell, Start menu, Super key, taskbar, PrtSc with grim, logout)
+      run: sh tests/wayland-test.sh
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-wayland results "HDE Wayland test"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-wayland checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-wayland
+        path: |
+          /tmp/hde-wayland/*.log
+          /tmp/hde-wayland/*.txt
+          /tmp/hde-wayland/*.out
+          /tmp/hde-wayland/shot-*.png
+          /tmp/hde-wayland/home/.config/hde/labwc/*
+
+  # packaging/hyggshi-os/build-nexwm.sh, the script that puts HDE into the Hyggshi OS ISO, run the way the ISO build runs
+  # it (as root in a fresh Debian 13, here a container instead of the chroot): build, install into /usr, remove the
+  # build tools; then the installed session starts in Xvfb.
+  hyggshi-os:
+    name: Hyggshi OS install script (debian:trixie)
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: build-nexwm.sh
+      run: |
+        set +e
+        NEXWM_LOCAL_SRC="$GITHUB_WORKSPACE" bash packaging/hyggshi-os/build-nexwm.sh 2>&1 | tee /tmp/build-nexwm.log
+        rc=${PIPESTATUS[0]}
+        grep -E "^(note|ERROR|E): " /tmp/build-nexwm.log | sort -u | head -n 20 | sed 's/^/::warning::build-nexwm.sh: /'
+        if [ "$rc" != 0 ]; then
+          tail -n 25 /tmp/build-nexwm.log | sed 's/^/::error::build-nexwm.sh: /'
+          exit "$rc"
+        fi
+
+    - name: The installed session
+      run: |
+        set -e
+        cat /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop
+        for p in hde-start hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files; do
+          test -x "/usr/bin/$p" || { echo "::error::/usr/bin/$p is missing"; exit 1; }
+        done
+        if command -v gcc; then echo "::error::the build tools were not removed"; exit 1; fi
+        /usr/bin/hde-settings --version
+        /usr/bin/hde-files --version
+        grep -q "^inode/directory=hde-files.desktop" /usr/share/applications/hde-mimeapps.list
+        /usr/bin/hde-settings --power
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb xauth x11-utils fonts-dejavu-core
+        export HOME=/tmp/hde-home XDG_RUNTIME_DIR=/tmp/hde-run
+        mkdir -p "$HOME" "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+        xvfb-run -a -s "-screen 0 1280x800x24" sh -c '
+          dbus-run-session -- /usr/bin/hde-session > /tmp/hde-session.log 2>&1 &
+          for i in $(seq 1 100); do xprop -root _HDE_PANEL_WINDOW 2>/dev/null | grep -q "window id" && break; sleep 0.2; done
+          xprop -root _HDE_PANEL_WINDOW; sleep 2
+          pgrep -a hde- || true' | tee /tmp/hde-run.txt
+        cat /tmp/hde-session.log | head -n 40
+        grep -q "window id" /tmp/hde-run.txt || { echo "::error::the installed HDE session did not start its panel"; exit 1; }
+
+  # HDE mostly runs on Debian-based systems (Hyggshi OS defaults to Debian 13): build with their compilers too.
+  # Debian 13 has GCC 14 (implicit declarations and pointer/int mix-ups are errors); testing has the newest GCC,
+  # which compiles C23 by default (bool/true/false are keywords, "f()" means "f(void)").
+  build-debian:
+    name: build (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    continue-on-error: ${{ matrix.image == 'debian:testing' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ 'debian:trixie', 'debian:testing' ]
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install build dependencies
+      run: |
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev
+        gcc --version | head -n1
+
+    - name: Build (all targets)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log
+        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files; do
+          test -x "build/$p" || { echo "::error::build/$p was not built"; exit 1; }
+        done
+
+    - name: Compiler warnings
+      if: always()
+      run: |
+        n=$(grep -c "warning:" build.log || true)
+        echo "compiler warnings ($(gcc -dumpfullversion)): $n"
+        grep "warning:" build.log | sort -u | head -n 10 | sed "s/^/::warning::${{ matrix.image }}: /" || true
