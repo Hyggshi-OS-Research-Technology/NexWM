@@ -72,11 +72,20 @@ pixel() { convert "$1" -format "%[fx:int(255*r)] %[fx:int(255*g)] %[fx:int(255*b
 # which it exported HDE_SESSION_PID. The environment of the test itself is no use: run inside another session (the
 # Fedora job runs this test inside the X11 session), it belongs to *that* session, and `logout` would end it.
 session_pid() {
-    p=$(pgrep -x hde-panel 2>/dev/null | head -n 1)
-    [ -n "$p" ] || return 1
-    sp=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^HDE_SESSION_PID=//p' | head -n 1)
-    [ -n "$sp" ] || return 1
-    echo "$sp"
+    # 1. the panel of *this* Wayland session: hde-session --wayland-inner sets HDE_BACKEND=wayland for its children, an
+    #    X11 session's panel does not have it. (The Fedora job runs this test inside the X11 session it is testing:
+    #    picking that panel would count the X11 session's helpers here and send `logout` to it.)
+    for p in $(pgrep -x hde-panel 2>/dev/null); do
+        e=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null)
+        case "$e" in *"HDE_BACKEND=wayland"*) ;; *) continue ;; esac
+        sp=$(printf '%s\n' "$e" | sed -n 's/^HDE_SESSION_PID=//p' | head -n 1)
+        [ -n "$sp" ] && { printf '%s\n' "$sp"; return 0; }
+    done
+    # 2. else the hde-session labwc started (labwc is $START: hde-start exec'd hde-session, which exec'd labwc)
+    for s in $(pgrep -x hde-session 2>/dev/null); do
+        [ "$(awk '{print $4}' "/proc/$s/stat" 2>/dev/null)" = "${START:-none}" ] && { printf '%s\n' "$s"; return 0; }
+    done
+    return 1
 }
 # session_count SESSIONPID NAME...: how many processes of that name belong to session SESSIONPID (same HDE_SESSION_PID):
 # this is how a check about "what this session started" stays true when another session is running around it.
@@ -117,9 +126,16 @@ for p in hde-panel hde-desktop; do check "$p is running inside labwc" running $p
 check "hde-session runs as the session inside labwc" grep -q "^hde-session: HDE build .*, Wayland session inside labwc" "$LOG"
 SPID=$(session_pid 2>/dev/null || true)
 if [ -z "${SPID:-}" ]; then
-    # no panel to ask (the session did not come up): fall back to the plain check
-    if ! running hde-hotkeys && ! running hde-xsettings && ! running metacity; then pass "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"
-    else fail "no hde-hotkeys daemon / hde-xsettings / window manager on Wayland"; fi
+    # Neither a panel nor an hde-session of this session could be found: the processes of *another* session (the Fedora
+    # job runs this inside the X11 session it is testing) cannot be told apart from this session's, so this check looks
+    # only at what carries the marker of a Wayland HDE session (HDE_BACKEND=wayland, set by hde-session --wayland-inner)
+    n=$(for nm in hde-hotkeys hde-xsettings metacity marco xfwm4 openbox; do
+            for p in $(pgrep -x "$nm" 2>/dev/null); do
+                tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qx "HDE_BACKEND=wayland" && printf 'x'
+            done
+        done | wc -c | tr -d ' ')
+    if [ "$n" = 0 ]; then pass "no hde-hotkeys daemon / hde-xsettings / window manager in this session (Wayland needs none)"
+    else fail "this session started $n of hde-hotkeys / hde-xsettings / a window manager (Wayland needs none)"; fi
 else
     n=$(session_count "$SPID" 'hde-hotkeys|hde-xsettings|metacity|marco|xfwm4|openbox')
     if [ "$n" = 0 ]; then pass "no hde-hotkeys daemon / hde-xsettings / window manager in this session (Wayland needs none)"

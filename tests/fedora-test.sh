@@ -68,7 +68,16 @@ pass() { echo "PASS: fedora: $*" | tee -a "$OUT/results.txt"; }
 fail() { echo "FAIL: fedora: $*" | tee -a "$OUT/results.txt"; FAILS=$((FAILS + 1)); }
 info() { echo "INFO: fedora: $*" | tee -a "$OUT/results.txt"; }
 skip() { echo "SKIP: fedora: $*" | tee -a "$OUT/results.txt"; }
-check() { desc=$1; shift; if "$@" >/dev/null 2>&1; then pass "$desc"; else fail "$desc"; fi; }
+# check DESC COMMAND...: quiet when it works; when it does not, the two last lines of what the command said go into
+# results.txt too — a "FAIL: ..." without a reason costs another CI round to understand
+check() {
+    desc=$1; shift
+    if co=$("$@" 2>&1); then pass "$desc"
+    else
+        fail "$desc"
+        [ -n "$co" ] && info "$(printf '%s' "$co" | tail -n 2 | tr '\n' '|' | cut -c1-200)"
+    fi
+}
 checknot() { desc=$1; shift; if "$@" >/dev/null 2>&1; then fail "$desc"; else pass "$desc"; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
 shot() { have import && import -display "$DISPLAY" -window root "$OUT/shot-$1.png" 2>/dev/null; }
@@ -308,7 +317,8 @@ if [ "$MODE" = full ]; then
               WLR_LIBINPUT_NO_DEVICES=1 sh "$HERE/wayland-test.sh" 2>&1)
         case "$out" in
         *"all checks passed"*) pass "the Wayland session starts on Fedora ($(printf '%s\n' "$out" | grep -c '^PASS') checks)" ;;
-        *FAIL*)                fail "the Wayland session on Fedora: $(printf '%s\n' "$out" | grep FAIL | head -n 1)" ;;
+        *FAIL*)                fail "the Wayland session on Fedora: $(printf '%s\n' "$out" | grep FAIL | head -n 1)"
+                               printf '%s\n' "$out" | grep -E '^FAIL' | head -n 6 | sed 's/^/INFO:   wayland test: /' >> "$OUT/results.txt" ;;
         *)                     info "the Wayland test said: $(printf '%s\n' "$out" | tail -n 2 | tr '\n' ' ')" ;;
         esac
     else
@@ -335,13 +345,13 @@ else
     check "no program of the session crashed on the way" sh -c \
         "! grep -qE 'hde-(panel|desktop|hotkeys): (segmentation|GLib-ERROR|ERROR:)' '$LOG'"
     check "the panel still measures itself" sh -c "[ \"\$($XT root-window _HDE_PANEL_WINDOW)\" != 0 ]"
-    check "hde-panel --measure works without a window manager" sh "$B/hde-panel --measure"
-    check "hde-settings --apply (login-time settings) works without setxkbmap/xset" sh "$B/hde-settings --apply"
-    check "hde-settings --about works on a base Fedora" sh "$B/hde-settings --about"
-    check "hde-settings --displays works without NetworkManager/BlueZ" sh "$B/hde-settings --displays"
-    check "hde-settings --power works without upower/power-profiles-daemon" sh "$B/hde-settings --power"
-    check "hde-files --version works" sh "$B/hde-files" --version
-    check "hde-hotkeys --help works" sh "$B/hde-hotkeys" --help
+    check "hde-panel --measure works without a window manager" "$B/hde-panel" --measure
+    check "hde-settings --apply (login-time settings) works without setxkbmap/xset" "$B/hde-settings" --apply
+    check "hde-settings --about works on a base Fedora" "$B/hde-settings" --about
+    check "hde-settings --displays works without NetworkManager/BlueZ" "$B/hde-settings" --displays
+    check "hde-settings --power works without upower/power-profiles-daemon" "$B/hde-settings" --power
+    check "hde-files --version works" "$B/hde-files" --version
+    check "hde-hotkeys --help works" "$B/hde-hotkeys" --help
     if grep -q "sudo dnf install" "$LOG"; then
         pass "the session log tells the user what to install with dnf: $(grep -m1 'sudo dnf install' "$LOG" | sed 's/^.*Install one: //')"
     else

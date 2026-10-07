@@ -129,6 +129,10 @@ $(BUILD)/distro-test: tests/distro-test.c src/hde-distro.h | $(BUILD)
 # Hyggshi Media's own logic (hde-media/src/gallery.c): the list, the order, the zoom ladder, the slideshow clock
 $(BUILD)/media-test: tests/media-test.c hde-media/src/gallery.c hde-media/src/media.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
+# Hyggshi Media's player (hde-media/src/playlist.c): what is played, the .m3u/.pls files other players write, the tags
+# read from the files themselves, and the state of the playback — plain C, no display and no sound card needed
+$(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/player.h hde-media/src/media.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
 # Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
 # `make check`
 $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
@@ -151,7 +155,7 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # The unit tests: no X server, no window manager, no session — the screen layouts, the distribution logos, the
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
-UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test $(BUILD)/media-test tests/sddm-test.sh
+UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test tests/sddm-test.sh
 check-unit: $(UNIT_TESTS)
 	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; $$t || rc=1; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
 

@@ -203,17 +203,19 @@ jobs:
           adwaita-icon-theme librsvg2-common python3 procps
         pkg-config --modversion gtk+-3.0 | sed 's/^/::notice::GTK3 /'
 
-    - name: Build (hde-media and its unit test, not the other targets of the session)
+    - name: Build (hde-media and its unit tests, not the other targets of the session)
       run: |
         set -o pipefail
-        make -j"$(nproc)" build/hde-media build/media-test 2>&1 | tee build.log || {
+        make -j"$(nproc)" build/hde-media build/media-test build/player-test 2>&1 | tee build.log || {
           echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
           grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
           exit 1
         }
 
-    - name: Unit test (the list, the order, the zoom ladder, the slideshow clock)
-      run: build/media-test
+    - name: Unit tests (the pictures, and the player — tags, playlists, playback)
+      run: |
+        build/media-test
+        build/player-test
 
     - name: Picture viewer test (arrows, zoom, rotation, slideshow, full screen, one window, one process)
       run: sh tests/media-test.sh
