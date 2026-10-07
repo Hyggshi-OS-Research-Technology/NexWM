@@ -23,6 +23,9 @@
 #   sh tests/nexwm-test.sh                       everything this machine can do
 #   HDE_TEST_OUT=/tmp/where sh tests/nexwm-test.sh
 #
+# The test puts everything it starts away, and a watchdog (HDE_TEST_WATCHDOG seconds, 300 by default) ends it with a
+# FAIL line naming the last check if it ever hangs: a stuck CI job cannot be read, a failed one can.
+#
 # Environment: HDE_NEXWM_DISPLAY (the X server to use; default :81, started with Xvfb here if nothing answers),
 # HDE_TEST_OUT (/tmp/hde-nexwm). Needs: Xvfb xdotool x11-utils (xprop, xwininfo) and the two programs the Makefile
 # builds (build/nexwm, build/nexwm-client); metacity is optional (step 6 is skipped without it) and so are python3 +
@@ -50,15 +53,29 @@ mkdir -p "$OUT/bin"
 # HDE_TEST_WATCHDOG seconds (900), the last line of results.txt is the evidence of where it got stuck, and the test
 # leaves with a failure the annotator can publish (tests/ci-annotate.py reads that file).
 MAIN_PID=$$
-# nothing of the watchdog goes to the stdout of the step: an orphan of a test that finished must not keep the pipe of a
-# CI step open (that alone would hang a job for as long as the sleep lasts)
-( sleep "${HDE_TEST_WATCHDOG:-900}"
+# Nothing of the watchdog goes to the stdout of the step: a leftover of a test that finished must never keep the pipe of
+# a CI step open (that alone would hang a job until the runner gives up on it).
+( sleep "${HDE_TEST_WATCHDOG:-300}"
   kill -0 "$MAIN_PID" 2>/dev/null || exit 0          # the test is over: nothing to say
-  printf 'FAIL: nexwm: still running after %ss (the last thing it said: %s)\n' "${HDE_TEST_WATCHDOG:-900}" \
+  printf 'FAIL: nexwm: still running after %ss (the last thing it said: %s)\n' "${HDE_TEST_WATCHDOG:-300}" \
          "$(tail -n 1 "$OUT/results.txt" 2>/dev/null | cut -c1-200)" >> "$OUT/results.txt"
   kill -TERM "$MAIN_PID" 2>/dev/null ) >/dev/null 2>&1 &
 WATCHDOG_PID=$!
-trap 'kill -TERM "$WATCHDOG_PID" 2>/dev/null; wait "$WATCHDOG_PID" 2>/dev/null' 0
+
+# What the test started is put away by the test, whatever way it ends: the X server, the window manager(s), the windows
+# and the tools that may be waiting for the X server. A test that leaves a process behind leaves a CI step that never
+# finishes (the step is over only when the last holder of its stdout is gone), which is a hang nobody can read.
+cleanup() {
+    kill -TERM "$WATCHDOG_PID" 2>/dev/null
+    for p in ${WM_PID:-} ${WM2_PID:-} ${METACITY_PID:-} ${ALPHA_PID:-} ${BETA_PID:-} ${DOCK_PID:-} ${XVFB_PID:-}; do
+        [ -n "$p" ] && kill -TERM "$p" 2>/dev/null
+    done
+}
+trap 'cleanup' 0                                   # however this test ends, what it started is put away
+trap 'exit 143' 1 2 15                             # ... and a signal ends it: a trap that only runs cleanup would
+                                                   #     catch the signal and carry on, which is how a CI step of 25
+                                                   #     minutes happens (the watchdog would have said its line and the
+                                                   #     test would have kept going)
 FAILS=0
 pass() { echo "PASS: nexwm: $*" | tee -a "$OUT/results.txt"; }
 fail() { echo "FAIL: nexwm: $*" | tee -a "$OUT/results.txt"; FAILS=$((FAILS + 1)); }
@@ -161,6 +178,9 @@ wait_gone() {   # pid, what it is (for the message), tries
     i=0; n=${3:-40}
     while [ "$i" -lt "$n" ]; do
         kill -0 "$1" 2>/dev/null || return 0
+        # a child that has ended but was not waited for is a zombie: `kill -0` still says it is there, and the state
+        # of the process is what tells them apart (Linux /proc; without it, only the exit of the process counts)
+        if [ -r "/proc/$1/status" ] && grep -q "^State:.*Z" "/proc/$1/status" 2>/dev/null; then return 0; fi
         i=$((i + 1)); sleep 0.25
     done
     info "$2 (pid $1) is still running after $((n / 4)) s"
@@ -168,7 +188,7 @@ wait_gone() {   # pid, what it is (for the message), tries
 }
 # one key of the configuration: press it, then require the line it must leave in the log
 pressed() {     # what it does, the key, the line the log must show
-    xdotool key "$2" 2>/dev/null
+    xdotool key "$2" >/dev/null 2>&1
     if wait_log "$3" 20; then
         pass "$1 ($(grep -m1 -- "$3" "$LOG"))"
     else
@@ -498,9 +518,9 @@ EOF
                 has "the log says it let the window go" "unmanaging 0x${ALPHA#0x}" "$(cat "$LOG")"
 
                 # ---- 5. the way out: quit gives everything back ---------------------------------------------
-                xdotool key super+2 2>/dev/null                    # to the workspace of the window that is left
+                xdotool key super+2 >/dev/null 2>&1                # to the workspace of the window that is left
                 wait_mapstate "$BETA" IsViewable 20
-                xdotool key super+shift+q 2>/dev/null
+                xdotool key super+shift+q >/dev/null 2>&1
                 if wait_log "window(s) given back" 40; then
                     if wait_gone "$WM_PID" "the window manager that quit" 40; then
                         wait "$WM_PID" 2>/dev/null; st=$?
@@ -574,7 +594,7 @@ EOF
                         pass "Metacity left the screen to it"
                     fi
                     METACITY_PID=""
-                    xdotool key super+shift+q 2>/dev/null
+                    xdotool key super+shift+q >/dev/null 2>&1
                     if wait_log_in "$OUT/nexwm2.log" "window(s) given back" 40; then
                         if wait_gone "$WM2_PID" "the window manager that replaced Metacity" 40; then
                             wait "$WM2_PID" 2>/dev/null; st=$?
