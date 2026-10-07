@@ -306,9 +306,27 @@ while [ $i -lt 75 ]; do
 done
 st=$(awk '{print $3}' "/proc/$START/stat" 2>/dev/null)
 if [ -z "$st" ] || [ "$st" = Z ]; then wait "$START" 2>/dev/null; fi
-if ! running labwc && ! running hde-panel && ! running hde-desktop; then pass "logging out stops the session and labwc"
+# What is left of *this* session: the processes hde-session --wayland-inner marked (HDE_BACKEND=wayland) and $START
+# itself. Not "no hde- process anywhere": the Fedora job runs this test inside the X11 session it is testing, and that
+# session's hde-panel / hde-hotkeys / hde-xsettings / hde-desktop / hde-screenshot are none of this check's business.
+# (They are what the /proc fallback of session_pid() used to end instead — which is exactly what made this check pass
+# there: the wrong session was stopped.)
+wl_leftovers() {
+    for nm in labwc hde-panel hde-hotkeys hde-xsettings hde-desktop hde-session; do
+        for p in $(pgrep -x "$nm" 2>/dev/null); do
+            st=$(awk '{print $3}' "/proc/$p/stat" 2>/dev/null)
+            [ -n "$st" ] && [ "$st" != Z ] || continue
+            if [ "$p" = "${START:-0}" ] ||
+               tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qx "HDE_BACKEND=wayland"; then
+                printf '%s(%s) ' "$nm" "$p"
+            fi
+        done
+    done
+}
+left=$(wl_leftovers)
+if [ -z "$left" ]; then pass "logging out stops the session and labwc"
 else
-    fail "logging out stops the session and labwc (still running: $(pgrep -a 'labwc|hde-' 2>/dev/null | grep -v defunct | tr '\n' ';'))"
+    fail "logging out stops the session and labwc (still running: $left)"
     tail -n 15 "$LOG" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
 fi
 check "... as the log says" grep -q "hde-session: stopping the Wayland compositor" "$LOG"
