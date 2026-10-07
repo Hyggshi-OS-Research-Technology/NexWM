@@ -956,6 +956,15 @@ static void load_css(void)
     HdeThemeInfo ti;
     hde_theme_info_load(&ti);
     const char *a = ti.accent;
+    /* a chosen accent also goes on the switches, sliders, selections the GTK theme draws (Automatic: they have it) */
+    char *accent_css = hde_theme_accent_css(&ti);
+    if (getenv("HDE_DEBUG")) {
+        char *gt = NULL;
+        g_object_get(gtk_settings_get_default(), "gtk-theme-name", &gt, NULL);
+        fprintf(stderr, "hde-settings: accent: %s %s (GTK theme %s)\n", ti.accent_auto ? "automatic" : "chosen", a,
+                gt ? gt : "?");
+        g_free(gt);
+    }
     char *data = g_strdup_printf(
         ".sidebar { background-color: shade(@theme_bg_color, 0.96); border-right: 1px solid alpha(@theme_fg_color, 0.10); }"
         ".sidebar viewport, .sidebar-items { background: none; border: none; }"
@@ -995,8 +1004,9 @@ static void load_css(void)
         ".preview-dark .pv-win { background-color: #2b303a; border: 1px solid #3a4150; border-radius: 5px; }"
         ".preview-light .pv-bar { background-color: #e2e5ea; } .preview-dark .pv-bar { background-color: #14171c; }"
         ".pv-accent { background-color: %s; border-radius: 3px; }"
-        "button { border-radius: 8px; }",
-        a, a, a, a, a, a, a, a, a, a, a, a, a);
+        "button { border-radius: 8px; }"
+        "%s",
+        a, a, a, a, a, a, a, a, a, a, a, a, a, accent_css);
     if (!app_css) {
         app_css = gtk_css_provider_new();
         gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(app_css),
@@ -1004,6 +1014,7 @@ static void load_css(void)
     }
     gtk_css_provider_load_from_data(app_css, data, -1, NULL);
     g_free(data);
+    g_free(accent_css);
     hde_theme_info_clear(&ti);
 }
 

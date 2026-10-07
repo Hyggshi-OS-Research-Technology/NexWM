@@ -454,8 +454,8 @@ char **hde_menu_default_favorites(void)
     guint before = a->len;
     add_default_for(a, "inode/directory");
     if (a->len == before) {
-        static const char *const fm[] = { "org.gnome.Nautilus.desktop", "nemo.desktop", "thunar.desktop", "caja.desktop",
-            "pcmanfm.desktop", "pcmanfm-qt.desktop", "org.kde.dolphin.desktop", NULL };
+        static const char *const fm[] = { "hde-files.desktop", "org.gnome.Nautilus.desktop", "nemo.desktop", "thunar.desktop",
+            "caja.desktop", "pcmanfm.desktop", "pcmanfm-qt.desktop", "org.kde.dolphin.desktop", NULL };
         add_first(a, fm);
     }
     before = a->len;

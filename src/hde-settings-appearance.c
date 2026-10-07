@@ -14,9 +14,12 @@
 #include "hde-theme.h"
 #include <string.h>
 
+/* Accent: item 0 = Automatic (the selection colour of the GTK theme: orange with Yaru, blue with Adwaita — HDE then
+ * matches the switches and sliders the theme draws), then the fixed colours (also given to the theme's widgets). */
 static const char *const accent_names[] = { "Blue", "Purple", "Green", "Orange", "Pink", "Red", "Teal", "Slate" };
 static const char *const accent_values[] = { "#3584e4", "#9141ac", "#2ec27e", "#ff7800", "#d56199", "#e01b24",
                                              "#2190a4", "#6f8396" };
+enum { ACC_SWATCH, ACC_LABEL, ACC_VALUE, ACC_N };
 
 static GtkWidget *light_card, *dark_card, *theme_combo, *icon_combo, *accent_combo, *style_note;
 static gboolean loading;
@@ -110,17 +113,75 @@ static void write_system_now(void)
     hde_theme_apply_process();
 }
 
+/* a round swatch of the colour for the combo box */
+static GdkPixbuf *accent_swatch(const char *color)
+{
+    const int sc = 1, sz = 16;
+    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, sz, sz);
+    cairo_t *cr = cairo_create(surf);
+    GdkRGBA c;
+    if (!gdk_rgba_parse(&c, color)) gdk_rgba_parse(&c, "#3584e4");
+    cairo_arc(cr, sz / 2.0, sz / 2.0, sz / 2.0 - sc, 0, 2 * G_PI);
+    gdk_cairo_set_source_rgba(cr, &c);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.25);
+    cairo_set_line_width(cr, sc);
+    cairo_stroke(cr);
+    cairo_destroy(cr);
+    GdkPixbuf *pb = gdk_pixbuf_get_from_surface(surf, 0, 0, sz, sz);
+    cairo_surface_destroy(surf);
+    return pb;
+}
+
+/* the item of the colour in settings.ini: 0 = Automatic (missing / "auto"), a fixed colour, else the last (custom) */
+static int accent_item_now(void)
+{
+    char *v = cfg_get_string("accent", "");
+    int item = 0;
+    if (v[0] == '#') {
+        item = -1;
+        for (guint i = 0; i < G_N_ELEMENTS(accent_values); i++)
+            if (!g_ascii_strcasecmp(v, accent_values[i])) item = (int)i + 1;
+        if (item < 0) item = (int)G_N_ELEMENTS(accent_values) + 1;          /* "Custom", written by hand */
+    }
+    g_free(v);
+    return item;
+}
+
+/* the swatch of Automatic shows the colour of the GTK theme in use */
+static void accent_refresh_auto(void)
+{
+    if (!accent_combo) return;
+    GtkTreeModel *m = gtk_combo_box_get_model(GTK_COMBO_BOX(accent_combo));
+    GtkTreeIter it;
+    if (!gtk_tree_model_get_iter_first(m, &it)) return;
+    char *auto_color = hde_theme_accent_from_gtk();
+    GdkPixbuf *pb = accent_swatch(auto_color ? auto_color : "#3584e4");
+    gtk_list_store_set(GTK_LIST_STORE(m), &it, ACC_SWATCH, pb, -1);
+    g_object_unref(pb);
+    g_free(auto_color);
+}
+
 static void on_accent(GtkComboBox *c, gpointer d)
 {
     (void)d;
     if (loading) return;
-    int i = gtk_combo_box_get_active(c);
-    if (i < 0 || i >= (int)G_N_ELEMENTS(accent_values)) return;
+    GtkTreeIter it;
+    if (!gtk_combo_box_get_active_iter(c, &it)) return;
+    char *label = NULL, *value = NULL;
+    gtk_tree_model_get(gtk_combo_box_get_model(c), &it, ACC_LABEL, &label, ACC_VALUE, &value, -1);
     GKeyFile *kf = cfg_begin();
-    g_key_file_set_integer(kf, CONFIG_GROUP, "accent_index", i);
-    g_key_file_set_string(kf, CONFIG_GROUP, "accent", accent_values[i]);
+    g_key_file_remove_key(kf, CONFIG_GROUP, "accent_index", NULL);     /* older versions: the index of the colour */
+    g_key_file_set_string(kf, CONFIG_GROUP, "accent", value && *value ? value : "auto");
     cfg_commit(kf);
-    settings_status("Accent color: %s", accent_names[i]);
+    if (value && *value) settings_status("Accent color: %s", label);
+    else {
+        char *auto_color = hde_theme_accent_from_gtk();
+        settings_status("Accent color: automatic, %s like the GTK theme", auto_color ? auto_color : "#3584e4");
+        g_free(auto_color);
+    }
+    g_free(label);
+    g_free(value);
 }
 
 static void on_icons(GtkComboBox *c, gpointer d)
@@ -236,9 +297,12 @@ static void on_external_change(gpointer d)
     int idx = cfg_get_int("theme_index", 0);
     if (idx == 1 || idx == 2)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(idx == 2 ? dark_card : light_card), TRUE);
-    if (accent_combo)
-        gtk_combo_box_set_active(GTK_COMBO_BOX(accent_combo),
-                                 CLAMP(cfg_get_int("accent_index", 0), 0, (int)G_N_ELEMENTS(accent_names) - 1));
+    if (accent_combo) {
+        accent_refresh_auto();
+        int item = accent_item_now();
+        GtkTreeModel *m = gtk_combo_box_get_model(GTK_COMBO_BOX(accent_combo));
+        if (item < gtk_tree_model_iter_n_children(m, NULL)) gtk_combo_box_set_active(GTK_COMBO_BOX(accent_combo), item);
+    }
     loading = FALSE;
 }
 
@@ -278,12 +342,43 @@ GtkWidget *page_appearance_new(void)
     g_signal_connect(theme_combo, "changed", G_CALLBACK(on_theme_changed), NULL);
     gtk_box_pack_start(GTK_BOX(box), row_box("GTK theme", "Light/dark variants of this theme are picked automatically.", theme_combo), FALSE, FALSE, 0);
 
-    GtkWidget *accent = accent_combo = gtk_combo_box_text_new();
-    for (guint i = 0; i < G_N_ELEMENTS(accent_names); i++)
-        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(accent), accent_names[i]);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(accent), CLAMP(cfg_get_int("accent_index", 0), 0, (int)G_N_ELEMENTS(accent_names) - 1));
+    GtkListStore *acc = gtk_list_store_new(ACC_N, GDK_TYPE_PIXBUF, G_TYPE_STRING, G_TYPE_STRING);
+    char *auto_color = hde_theme_accent_from_gtk();
+    GdkPixbuf *sw = accent_swatch(auto_color ? auto_color : "#3584e4");
+    gtk_list_store_insert_with_values(acc, NULL, -1, ACC_SWATCH, sw, ACC_LABEL, "Automatic (from the theme)", ACC_VALUE, "", -1);
+    g_object_unref(sw);
+    g_free(auto_color);
+    for (guint i = 0; i < G_N_ELEMENTS(accent_names); i++) {
+        sw = accent_swatch(accent_values[i]);
+        gtk_list_store_insert_with_values(acc, NULL, -1, ACC_SWATCH, sw, ACC_LABEL, accent_names[i], ACC_VALUE, accent_values[i], -1);
+        g_object_unref(sw);
+    }
+    int acc_item = accent_item_now();
+    if (acc_item > (int)G_N_ELEMENTS(accent_values)) {                     /* a colour written into settings.ini by hand */
+        char *v = cfg_get_string("accent", "#3584e4");
+        char *l = g_strdup_printf("Custom (%s)", v);
+        sw = accent_swatch(v);
+        gtk_list_store_insert_with_values(acc, NULL, -1, ACC_SWATCH, sw, ACC_LABEL, l, ACC_VALUE, v, -1);
+        g_object_unref(sw);
+        g_free(l);
+        g_free(v);
+    }
+    GtkWidget *accent = accent_combo = gtk_combo_box_new_with_model(GTK_TREE_MODEL(acc));
+    g_object_unref(acc);
+    GtkCellRenderer *cr_sw = gtk_cell_renderer_pixbuf_new();
+    gtk_cell_layout_pack_start(GTK_CELL_LAYOUT(accent), cr_sw, FALSE);
+    gtk_cell_layout_add_attribute(GTK_CELL_LAYOUT(accent), cr_sw, "pixbuf", ACC_SWATCH);
+    GtkCellRenderer *cr_l = gtk_cell_renderer_text_new();
+    g_object_set(cr_l, "xpad", 6, NULL);
+    gtk_cell_layout_pack_start(GTK_CELL_LAYOUT(accent), cr_l, TRUE);
+    gtk_cell_layout_add_attribute(GTK_CELL_LAYOUT(accent), cr_l, "text", ACC_LABEL);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(accent), acc_item);
     g_signal_connect(accent, "changed", G_CALLBACK(on_accent), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Accent color", "Used by the panel, Start button, OSD and this window.", accent), FALSE, FALSE, 0);
+    debug_geometry_watch(accent, "appearance-accent");
+    gtk_box_pack_start(GTK_BOX(box), row_box("Accent color",
+        "Automatic takes the colour of the GTK theme (orange with Yaru), so that the panel, the Start button and this "
+        "window match the switches and sliders of every application. A colour chosen here is also given to them.",
+        accent), FALSE, FALSE, 0);
 
     icon_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), "", "Default");

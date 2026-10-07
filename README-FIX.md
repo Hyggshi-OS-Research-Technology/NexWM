@@ -659,3 +659,44 @@ back; the measurement at login, `hde-panel --measure`, *Settings → Panel → S
 Settings without black pixels in Light and Dark mode (`tests/xtool.py pixel`). `measure-test` checks the measuring
 without an X server: where the panel belongs, the reserved space on one or two screens and with scale 2, and what is
 wrong with a panel too high, too low, off to the side, or with too little or no space reserved.
+
+## The frame and the colours of Settings, and a file manager: Hyggshi Files (fix 17)
+
+The Settings window of the report still had the black frame around its sidebar: it came from a build older than fix 16
+(Settings → Panel had no *Screen* row yet), so `git pull`, `make && sudo make install` and logging out and back in
+fixes it. The colours that did not match were HDE's blue accent next to the orange switches and selections of the GTK
+theme (Yaru): HDE drew its own highlights in its accent colour, the theme drew its widgets in its own.
+
+### Changed
+
+- **The accent colour is "Automatic" by default**: the selection colour of the GTK theme in use
+  (`theme_selected_bg_color`: Yaru orange, Adwaita blue, Adwaita-dark darker blue), so the sidebar of Settings, the
+  Start menu, the desktop's selection frame and the panel's highlights match what the theme draws — and it follows
+  when the theme changes. *Settings → Appearance → Accent color* is a list with swatches: *Automatic (from the theme)*,
+  then the colours; a chosen colour now also goes on the switches, sliders, progress bars, selected rows, suggested
+  buttons and text selection of the GTK theme, so both always agree. `accent=auto` (or no `accent`) in `settings.ini`.
+
+### Added
+
+- **Hyggshi Files** (`hde-files`), the file manager, in its own folder `hde-files/` (sources in `hde-files/src/`, its own
+  `Makefile`; the top-level `make` / `make install` build and install it too). Icons with thumbnails or a sortable list,
+  tabs, the places sidebar, a path bar or a typed location, search in subfolders, hidden files, zoom; copy / move with
+  progress, Cancel and Replace / Skip / Keep Both / Merge; drag and drop; the Trash with Restore (the freedesktop.org
+  trash, no GVfs needed); Undo; rename, new folder / document, Properties with permissions, Open With, compress /
+  extract, a terminal there; right-click menus with icons like the rest of HDE; Light / Dark and the accent of HDE.
+  It is HDE's file manager: `hde-mimeapps.list` makes folders open in it in HDE sessions (the desktop, the Start menu's
+  places), `Super+E` starts it first, the Screenshot tool's *Show in Folder* uses `hde-files --select`, and while it runs
+  it answers `org.freedesktop.FileManager1` for browsers and other programs.
+
+To get it: `git pull`, `make && sudo make install`, then log out and back in (or `make reload`).
+
+### Tests
+
+`make check`: with Yaru and Dark mode the Automatic accent is Yaru's orange (`#e95420`, logged by Settings) and the
+sidebar has no black pixels, then it follows back to Adwaita. Hyggshi Files: a folder with a hidden file (5 items
+shown), the thumbnail of a picture on the screen and in `~/.cache/thumbnails`, `Ctrl+H`, `Ctrl+2` / `Ctrl+1`, a new
+folder, type-ahead + `F2` (notes.txt -> readme.txt), `Ctrl+C` / `Ctrl+V` ("readme (copy).txt") and `Ctrl+Z`, `Delete`
+to the trash with its `.trashinfo`, the Trash view and Restore, `Alt+Left`, the right-click menus of a file and of the
+folder, Properties of a folder with its size, `Ctrl+F` finding files in subfolders, a double click into a folder and
+`Backspace`, tabs, `ShowItems` over D-Bus, `hde-files --select`, Dark mode, `--quit`, no GTK criticals, and a double
+click on a folder of the desktop opening Hyggshi Files.

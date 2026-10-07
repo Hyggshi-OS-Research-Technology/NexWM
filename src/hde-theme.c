@@ -20,7 +20,34 @@ static char *kf_str(GKeyFile *kf, const char *group, const char *key)
     return s;
 }
 
-void hde_theme_info_load(HdeThemeInfo *info)
+static gboolean gtk_ready;      /* hde_theme_apply_process() ran: GTK has a display and the theme of the user */
+
+char *hde_theme_accent_from_gtk(void)
+{
+    GdkScreen *screen = gdk_screen_get_default();
+    if (!screen) return NULL;
+    GtkStyleContext *ctx = gtk_style_context_new();
+    gtk_style_context_set_screen(ctx, screen);
+    GtkWidgetPath *wp = gtk_widget_path_new();
+    gtk_widget_path_append_type(wp, GTK_TYPE_WINDOW);
+    gtk_style_context_set_path(ctx, wp);
+    gtk_widget_path_unref(wp);
+    GdkRGBA c;
+    gboolean ok = gtk_style_context_lookup_color(ctx, "theme_selected_bg_color", &c) ||
+                  gtk_style_context_lookup_color(ctx, "selected_bg_color", &c);
+    g_object_unref(ctx);
+    if (!ok || c.alpha < 0.5) return NULL;
+    /* HDE puts white text on the accent (the Start button, selected rows): darken a very light selection colour */
+    double lum = 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue;
+    if (lum > 0.62) {
+        double k = 0.62 / lum;
+        c.red *= k; c.green *= k; c.blue *= k;
+    }
+    return g_strdup_printf("#%02x%02x%02x", (int)(CLAMP(c.red, 0, 1) * 255 + 0.5), (int)(CLAMP(c.green, 0, 1) * 255 + 0.5),
+                           (int)(CLAMP(c.blue, 0, 1) * 255 + 0.5));
+}
+
+static void info_load(HdeThemeInfo *info, gboolean resolve_accent)
 {
     memset(info, 0, sizeof *info);
     GKeyFile *kf = g_key_file_new();
@@ -39,12 +66,40 @@ void hde_theme_info_load(HdeThemeInfo *info)
     info->accent = kf_str(kf, GROUP, "accent");
 
     GdkRGBA c;
-    if (!info->accent || info->accent[0] != '#' || !gdk_rgba_parse(&c, info->accent)) {
+    if (!info->accent || info->accent[0] != '#' || !gdk_rgba_parse(&c, info->accent)) {    /* "auto", missing */
         g_free(info->accent);
-        info->accent = g_strdup(DEFAULT_ACCENT);
+        info->accent = resolve_accent && gtk_ready ? hde_theme_accent_from_gtk() : NULL;
+        if (!info->accent) info->accent = g_strdup(DEFAULT_ACCENT);
+        info->accent_auto = TRUE;
     }
     g_free(path);
     g_key_file_free(kf);
+}
+
+void hde_theme_info_load(HdeThemeInfo *info)
+{
+    info_load(info, TRUE);
+}
+
+char *hde_theme_accent_css(const HdeThemeInfo *info)
+{
+    if (!info || info->accent_auto || !info->accent) return g_strdup("");
+    const char *a = info->accent;
+    return g_strdup_printf(
+        "switch:checked { background-color: %s; background-image: none; border-color: shade(%s, 0.8); }"
+        "scale highlight, scale trough highlight, progressbar progress, progressbar trough progress {"
+        " background-color: %s; background-image: none; border-color: shade(%s, 0.8); }"
+        "levelbar block.filled.high, levelbar block.filled.full { background-color: %s; border-color: shade(%s, 0.8); }"
+        "treeview.view:selected, iconview:selected, .view:selected, list row:selected, row:selected,"
+        " flowbox flowboxchild:selected, calendar:selected { background-color: %s; background-image: none; color: #ffffff; }"
+        "selection, entry selection, label selection, textview text selection, spinbutton selection {"
+        " background-color: %s; color: #ffffff; }"
+        "button.suggested-action, button.suggested-action:hover { background-color: %s; background-image: none;"
+        " border-color: shade(%s, 0.8); color: #ffffff; }"
+        "button.suggested-action:hover { background-color: shade(%s, 1.08); }"
+        "button.suggested-action label, button.suggested-action image { color: #ffffff; }"
+        "entry:focus, spinbutton:focus { border-color: %s; }",
+        a, a, a, a, a, a, a, a, a, a, a, a);
 }
 
 void hde_theme_info_clear(HdeThemeInfo *info)
@@ -60,7 +115,7 @@ void hde_theme_info_clear(HdeThemeInfo *info)
 gboolean hde_theme_shell_dark(void)
 {
     HdeThemeInfo i;
-    hde_theme_info_load(&i);
+    info_load(&i, FALSE);
     gboolean dark = i.style != HDE_STYLE_LIGHT;
     hde_theme_info_clear(&i);
     return dark;
@@ -83,8 +138,9 @@ void hde_theme_apply_process(void)
     GtkSettings *s = gtk_settings_get_default();
     if (!s) return;
 
+    gtk_ready = TRUE;
     HdeThemeInfo i;
-    hde_theme_info_load(&i);
+    info_load(&i, FALSE);
     set_or_reset_string(s, "gtk-theme-name", i.style == HDE_STYLE_DEFAULT ? NULL : i.gtk_theme, &c_theme);
     int dark = i.style == HDE_STYLE_DARK;
     if (dark != c_dark) {
@@ -115,6 +171,13 @@ static gboolean fire_watchers(gpointer d)
     return G_SOURCE_REMOVE;
 }
 
+/* the GTK theme changed some other way (XSETTINGS from another tool): the Automatic accent may have changed too */
+static void on_gtk_theme_notify(GObject *o, GParamSpec *p, gpointer d)
+{
+    (void)o; (void)p; (void)d;
+    if (!ini_pending) ini_pending = g_timeout_add(250, fire_watchers, NULL);
+}
+
 static void on_ini_changed(GFileMonitor *m, GFile *f, GFile *o, GFileMonitorEvent ev, gpointer d)
 {
     (void)m; (void)f; (void)o; (void)d;
@@ -138,6 +201,8 @@ void hde_theme_watch(HdeThemeChangedFunc func, gpointer user_data)
     GFile *f = g_file_new_for_path(path);
     ini_monitor = g_file_monitor_file(f, G_FILE_MONITOR_NONE, NULL, NULL);
     if (ini_monitor) g_signal_connect(ini_monitor, "changed", G_CALLBACK(on_ini_changed), NULL);
+    GtkSettings *gs = gtk_settings_get_default();
+    if (gs) g_signal_connect(gs, "notify::gtk-theme-name", G_CALLBACK(on_gtk_theme_notify), NULL);
     g_object_unref(f);
     g_free(dir);
     g_free(path);

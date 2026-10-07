@@ -1,0 +1,4 @@
+# Default applications of HDE sessions (XDG_CURRENT_DESKTOP=HDE): folders open in Hyggshi Files.
+# A choice made by the user (~/.config/mimeapps.list, "Open With" > "Always use it") comes first.
+[Default Applications]
+inode/directory=hde-files.desktop

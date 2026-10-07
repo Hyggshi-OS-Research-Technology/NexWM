@@ -928,6 +928,27 @@ sleep 3
 $XT xsettings > "$OUT/xsettings-light.txt" 2>&1
 if grep -q '^Net/ThemeName=Adwaita$' "$OUT/xsettings-light.txt"; then pass "switching back to Light mode works live"
 else fail "switching back to Light mode ($(grep ThemeName "$OUT/xsettings-light.txt"))"; fi
+# the accent colour follows the GTK theme ("Automatic", the default): Yaru draws its switches and selections orange,
+# so HDE's own highlights (the sidebar of Settings, the Start menu...) are orange too, not HDE's blue next to them
+if [ -d /usr/share/themes/Yaru-dark ]; then
+    sed -i 's/^gtk_theme=.*/gtk_theme=Yaru/' "$SETTINGS_INI"
+    "$B/hde-settings" --style dark > "$OUT/style-yaru.log" 2>&1
+    sleep 3
+    check "Yaru + Dark mode: the GTK theme is Yaru-dark" grep -q "Yaru-dark" "$OUT/style-yaru.log"
+    "$B/hde-settings" appearance; sleep 2.5
+    if grep -q "^hde-settings: accent: automatic #e95420 (GTK theme Yaru-dark)" "$OUT/settings.log"; then
+        pass "the Automatic accent is the colour of the GTK theme (Yaru-dark: orange #e95420, like its own widgets)"
+    else fail "the Automatic accent is the colour of the GTK theme ($(grep '^hde-settings: accent: ' "$OUT/settings.log" | tail -n 1))"; fi
+    shot 11b-settings-yaru-dark
+    sidebar "Yaru dark"
+    sed -i 's/^gtk_theme=.*/gtk_theme=Adwaita/' "$SETTINGS_INI"
+    "$B/hde-settings" --style light > "$OUT/style-light2.log" 2>&1
+    sleep 3
+    if grep -q "^hde-settings: accent: automatic #[0-9a-f]* (GTK theme Adwaita)" "$OUT/settings.log"; then pass "... and back with Adwaita: the accent follows ($(grep '^hde-settings: accent: ' "$OUT/settings.log" | tail -n 1 | sed 's/^hde-settings: accent: //'))"
+    else fail "... and back with Adwaita: the accent follows ($(grep '^hde-settings: accent: ' "$OUT/settings.log" | tail -n 1))"; fi
+else
+    skip "the Automatic accent with Yaru (yaru-theme-gtk is not installed)"
+fi
 kill $SETTINGS 2>/dev/null
 
 # ---------- 6b. the Start menu: search, keyboard, the app's menu (favorites, pin to panel), Kickoff and classic ----------
@@ -1423,6 +1444,209 @@ if [ -n "${2:-}" ]; then
     xdotool key Escape; sleep 0.5
 fi
 xdotool mousemove 640 400
+
+# ---------- 6f. Hyggshi Files, the file manager of HDE (hde-files/) ----------
+FT="$HOME/FilesTest"
+FL="$OUT/files.log"
+mkdir -p "$FT/docs" "$FT/pics"
+printf 'hello\n' > "$FT/notes.txt"
+printf 'not shown\n' > "$FT/.hidden-file"
+head -c 300000 /dev/zero > "$FT/big.bin"
+python3 - "$FT/red.png" "$FT/pics/photo-red.png" <<'EOF'
+import struct, sys, zlib
+w, h = 64, 48
+raw = b''.join(b'\x00' + b'\xe0\x10\x10' * w for _ in range(h))
+def chunk(t, d):
+    return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+png = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+       + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+for p in sys.argv[1:]:
+    open(p, 'wb').write(png)
+EOF
+# what `make install` sets up: its menu entry, and folders opening in it in HDE sessions (hde-mimeapps.list)
+sed "s|@PREFIX@/bin/hde-files|$B/hde-files|g" "$HERE/../hde-files/hde-files.desktop" > "$XDG_DATA_HOME/applications/hde-files.desktop"
+cp "$HERE/../hde-files/hde-mimeapps.list" "$XDG_DATA_HOME/applications/hde-mimeapps.list"
+fnum() { fnum_n=$(grep -cF -- "$1" "$FL" 2>/dev/null); echo "${fnum_n:-0}"; }
+fwait() { fw_i=0; while [ "$fw_i" -lt "${2:-30}" ]; do grep -qF -- "$1" "$FL" 2>/dev/null && return 0; sleep 0.2; fw_i=$((fw_i + 1)); done; return 1; }
+# shellcheck disable=SC2329  # (called through check)
+fmore() { fm_i=0; while [ "$fm_i" -lt "${3:-30}" ]; do [ "$(fnum "$1")" -gt "$2" ] && return 0; sleep 0.2; fm_i=$((fm_i + 1)); done; return 1; }
+flast() { grep -F -- "$1" "$FL" 2>/dev/null | tail -n 1; }
+# fitem NAME: "X Y W H" of the item on the screen (hde-files logs where its items are with HDE_DEBUG)
+fitem() { sed -n "s/^hde-files: item $1 at \([0-9]*\),\([0-9]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p" "$FL" | tail -n 1; }
+fmenu() { flast "hde-files: menu: " | sed 's/^hde-files: menu: //'; }
+
+v=$("$B/hde-files" --version 2>&1)
+case "$v" in "hde-files (Hyggshi Files) "*) pass "hde-files --version: $v" ;; *) fail "hde-files --version ($v)" ;; esac
+"$B/hde-files" "$FT" > "$FL" 2>&1 &
+FILES=$!
+if fwait "hde-files: folder ~/FilesTest: 6 items (1 hidden), 5 shown" 50; then
+    pass "Hyggshi Files opens a folder: 5 items shown, the hidden one not ($(flast 'folder ~/FilesTest:' | sed 's/.*FilesTest: //'))"
+else fail "Hyggshi Files opens a folder ($(flast 'folder ~/FilesTest'))"; fi
+sleep 1
+FW=$(xdotool search --onlyvisible --name "^FilesTest - Hyggshi Files$" 2>/dev/null | head -n 1)
+if [ -n "$FW" ]; then
+    pass "its window is named after the folder (FilesTest - Hyggshi Files)"
+    xdotool windowactivate "$FW" 2>/dev/null || xdotool windowfocus "$FW" 2>/dev/null
+else fail "a window \"FilesTest - Hyggshi Files\" ($(xdotool search --onlyvisible --name "Hyggshi Files" getwindowname 2>/dev/null | tr '\n' ' '))"; fi
+sleep 1.5
+# shellcheck disable=SC2046  # "X Y W H" -> four arguments
+set -- $(fitem red.png)
+if [ -n "${4:-}" ]; then
+    c=$(px $(($1 + $3 / 2)) $(($2 + 46)))
+    if [ "$(echo "$c" | awk '{ print ($1 > 150 && $2 < 90 && $3 < 90) }')" = 1 ]; then pass "a picture shows as its thumbnail (pixel $c)"
+    else fail "a picture shows as its thumbnail (pixel $c at $(($1 + $3 / 2)),$(($2 + 46)); item $*)"; fi
+else fail "a picture shows as its thumbnail (red.png: no place logged)"; fi
+check "... kept in ~/.cache/thumbnails for the other programs too" sh -c "ls '$XDG_CACHE_HOME/thumbnails/normal/'*.png"
+shot 21a-files
+xdotool key ctrl+h; sleep 0.8
+check "Ctrl+H shows the hidden files" fwait "hde-files: hidden files: shown (6 shown)" 10
+xdotool key ctrl+h; sleep 0.6
+check "... Ctrl+H again hides them" fwait "hde-files: hidden files: hidden (5 shown)" 10
+xdotool key ctrl+2; sleep 1.2
+check "Ctrl+2: the list (Name, Size, Type, Modified)" fwait "hde-files: view: list" 10
+shot 21b-files-list
+xdotool key ctrl+1; sleep 1
+check "Ctrl+1: the icons again" fwait "hde-files: view: icons" 10
+# new folder
+xdotool key ctrl+shift+n
+if fwait "hde-files: dialog: New Folder (New Folder)" 15; then
+    sleep 0.5; xdotool key ctrl+a; xdotool type --delay 40 "Projects"; xdotool key Return; sleep 1.2
+    if [ -d "$FT/Projects" ]; then pass "Ctrl+Shift+N makes a new folder (named Projects in its dialog)"
+    else fail "Ctrl+Shift+N makes a new folder ($(ls "$FT" | tr '\n' ' '))"; fi
+    check "... and selects it" fwait "hde-files: selected: file://$FT/Projects" 10
+else fail "Ctrl+Shift+N opens the New Folder dialog"; fi
+# type-ahead, rename (only the name is selected, the extension stays)
+xdotool type --delay 60 "no"; sleep 0.6
+check "typing selects the item whose name begins with it (type-ahead)" fwait "hde-files: type-ahead 'no': notes.txt" 10
+xdotool key F2
+if fwait "hde-files: dialog: Rename File (notes.txt)" 15; then
+    sleep 0.6; shot 21c-files-rename
+    xdotool type --delay 40 "readme"; xdotool key Return; sleep 1.2
+    if [ -f "$FT/readme.txt" ] && [ ! -e "$FT/notes.txt" ]; then pass "F2 renames, the extension kept: notes.txt -> readme.txt"
+    else fail "F2 renames (notes.txt -> readme.txt: $(ls "$FT" | tr '\n' ' '))"; fi
+else fail "F2 opens the Rename dialog"; fi
+# copy + paste in the same folder, undo
+sleep 0.5; xdotool key ctrl+c; sleep 0.5
+check "Ctrl+C copies the selected file" fwait "hde-files: clipboard: copy 1 item(s): readme.txt" 10
+xdotool key ctrl+v; sleep 2
+if [ -f "$FT/readme (copy).txt" ]; then pass "Ctrl+V in the same folder makes \"readme (copy).txt\""
+else fail "Ctrl+V in the same folder makes \"readme (copy).txt\" ($(ls "$FT" | tr '\n' ' '))"; fi
+xdotool key ctrl+z; sleep 2
+if [ ! -e "$FT/readme (copy).txt" ] && [ -f "$XDG_DATA_HOME/Trash/files/readme (copy).txt" ]; then
+    pass "Ctrl+Z undoes the copy (the copy goes to the trash)"
+else fail "Ctrl+Z undoes the copy ($(flast 'undo:'))"; fi
+# Delete -> trash; the Trash; Restore
+xdotool type --delay 60 "bi"; sleep 0.6; xdotool key Delete; sleep 1.5
+if [ -f "$XDG_DATA_HOME/Trash/files/big.bin" ] && [ -f "$XDG_DATA_HOME/Trash/info/big.bin.trashinfo" ] && [ ! -e "$FT/big.bin" ]; then
+    pass "Delete moves the selected file to the trash (with its .trashinfo)"
+else fail "Delete moves the selected file to the trash ($(flast 'job:'))"; fi
+xdotool key ctrl+l; sleep 0.6; xdotool type --delay 30 "trash:///"; xdotool key Return; sleep 2
+if fwait "hde-files: folder Trash: " 15 && [ -n "$(fitem big.bin)" ]; then
+    pass "the Trash (trash:///, no GVfs needed) lists what was deleted ($(flast 'folder Trash:' | sed 's/.*Trash: //'))"
+else fail "the Trash lists what was deleted ($(flast 'folder Trash'))"; fi
+shot 21d-files-trash
+xdotool type --delay 60 "bi"; sleep 0.6; xdotool key Menu; sleep 1
+case "$(fmenu)" in
+    "Restore | Delete Permanently | Properties") pass "the menu of an item in the trash: Restore, Delete Permanently, Properties" ;;
+    *) fail "the menu of an item in the trash ($(fmenu))" ;;
+esac
+xdotool key r; sleep 1.5
+if [ -f "$FT/big.bin" ] && [ ! -e "$XDG_DATA_HOME/Trash/files/big.bin" ]; then
+    pass "Restore puts it back where it was ($(flast 'restored:' | sed 's/.*restored: //'))"
+else fail "Restore puts it back where it was ($(flast 'restored'))"; fi
+n=$(fnum "hde-files: go: ~/FilesTest")
+xdotool key alt+Left; sleep 1.2
+check "Alt+Left goes back to the folder" fmore "hde-files: go: ~/FilesTest" "$n" 15
+sleep 0.8
+# right-click menus: an item, the empty folder
+# shellcheck disable=SC2046
+set -- $(fitem readme.txt)
+if [ -n "${4:-}" ]; then
+    xdotool mousemove $(($1 + $3 / 2)) $(($2 + 30)) click 3; sleep 1
+    case "$(fmenu)" in
+        *"| Cut | Copy | Copy Path | Rename… | Make Link | Move to Trash | Delete Permanently | Compress | Properties")
+            pass "right-click on a file: Open, Open With…, Cut, Copy, Rename, Trash, Compress, Properties ($(fmenu | cut -d'|' -f1))" ;;
+        *) fail "right-click on a file ($(fmenu))" ;;
+    esac
+    shot 21e-files-menu
+    xdotool key Escape; sleep 0.5
+else fail "right-click on a file (readme.txt: no place logged)"; fi
+# shellcheck disable=SC2046
+set -- $($XT geometry "$FW" 2>/dev/null)
+if [ -n "${4:-}" ]; then
+    xdotool mousemove $(($1 + $3 - 80)) $(($2 + $4 - 90)) click 3; sleep 1
+    case "$(fmenu)" in
+        "New Folder… | New Document | Paste | Select All | Open in Terminal | Show Hidden Files | View | Sort By | Bookmark This Folder | Properties")
+            pass "right-click on the empty folder: New Folder, New Document, Paste, Select All, Terminal, Hidden files, View, Sort" ;;
+        *) fail "right-click on the empty folder ($(fmenu))" ;;
+    esac
+    xdotool key Escape; sleep 0.5
+fi
+# properties of a folder
+xdotool type --delay 60 "pi"; sleep 0.6; xdotool key alt+Return; sleep 1.5
+if xdotool search --onlyvisible --name "^pics Properties$" >/dev/null 2>&1 && fwait "hde-files: properties: pics: Folder" 10; then
+    pass "Alt+Enter shows the Properties of the folder"
+else fail "Alt+Enter shows the Properties of the folder ($(flast 'properties:'))"; fi
+check "... with the size of what it holds" fwait "hde-files: properties: size " 15
+shot 21f-files-properties
+xdotool key Escape; sleep 0.6
+# search in the subfolders
+xdotool key ctrl+f; sleep 0.6; xdotool type --delay 80 "red"; sleep 2
+if fwait "hde-files: search 'red' in ~/FilesTest: 2 result(s)" 15; then
+    pass "Ctrl+F searches the folder and its subfolders (red.png, pics/photo-red.png)"
+else fail "Ctrl+F searches the folder and its subfolders ($(flast "search 'red'"))"; fi
+xdotool key ctrl+2; sleep 1; shot 21g-files-search; xdotool key ctrl+1; sleep 0.5
+xdotool key Escape; sleep 1.2
+# opening a folder with a double click, Backspace
+# shellcheck disable=SC2046
+set -- $(fitem docs)
+if [ -n "${4:-}" ]; then
+    xdotool mousemove $(($1 + $3 / 2)) $(($2 + 30)) click --repeat 2 --delay 90 1; sleep 1.5
+    check "double-click on a folder opens it" fwait "hde-files: go: ~/FilesTest/docs" 10
+    n=$(fnum "hde-files: go: ~/FilesTest")
+    xdotool key BackSpace; sleep 1.2
+    check "Backspace goes back" fmore "hde-files: go: ~/FilesTest" "$n" 10
+else fail "double-click on a folder (docs: no place logged)"; fi
+xdotool key ctrl+t; sleep 1
+check "Ctrl+T opens a tab" fwait "hde-files: tab opened (2 tabs)" 10
+shot 21h-files-tabs
+xdotool key ctrl+w; sleep 0.8
+check "Ctrl+W closes it" fwait "hde-files: tab closed (1 tabs)" 10
+# "Show in Folder" of other programs (org.freedesktop.FileManager1), hde-files --select
+gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org/freedesktop/FileManager1 \
+    --method org.freedesktop.FileManager1.ShowItems "['file://$FT/pics/photo-red.png']" "" > "$OUT/fm1.txt" 2>&1
+sleep 1.5
+check "org.freedesktop.FileManager1.ShowItems (Show in Folder): the folder, the file selected" \
+    fwait "hde-files: show items: ~/FilesTest/pics (photo-red.png)" 10
+"$B/hde-files" --select "$FT/red.png" > "$OUT/files-select.log" 2>&1
+sleep 1.5
+check "hde-files --select FILE, in the Hyggshi Files already running" fwait "hde-files: show items: ~/FilesTest (red.png)" 10
+# Dark mode, live
+"$B/hde-settings" --style dark > /dev/null 2>&1; sleep 3
+PW=$(xdotool search --onlyvisible --name "^pics - Hyggshi Files$" 2>/dev/null | head -n 1)
+[ -n "$PW" ] && xdotool windowactivate "$PW" 2>/dev/null; sleep 1
+shot 21i-files-dark
+# shellcheck disable=SC2046
+set -- $($XT geometry "${PW:-$FW}" 2>/dev/null)
+if [ -n "${4:-}" ]; then
+    c=$(px $(($1 + $3 - 60)) $(($2 + $4 - 90)))
+    if [ "$(echo "$c" | awk '{ print $1 + $2 + $3 }')" -lt 300 ]; then pass "Hyggshi Files follows Dark mode at once (view $c)"
+    else fail "Hyggshi Files follows Dark mode at once (view $c)"; fi
+fi
+"$B/hde-settings" --style light > /dev/null 2>&1; sleep 2
+"$B/hde-files" --quit > /dev/null 2>&1
+i=0; while [ "$i" -lt 30 ] && kill -0 "$FILES" 2>/dev/null; do sleep 0.2; i=$((i + 1)); done
+if kill -0 "$FILES" 2>/dev/null; then fail "hde-files --quit closes Hyggshi Files"; kill "$FILES" 2>/dev/null
+else pass "hde-files --quit closes Hyggshi Files"; fi
+check "Hyggshi Files logged no GTK criticals" sh -c "! grep -q 'CRITICAL' '$FL'"
+# the desktop: a double click on a folder opens it in Hyggshi Files (the default file manager of HDE sessions)
+n=$(nlog "hde-files: window opened: ~/Desktop/aaa-folder")
+xdotool mousemove 62 154 click --repeat 2 --delay 100 1; sleep 3.5
+if [ "$(nlog "hde-files: window opened: ~/Desktop/aaa-folder")" -gt "$n" ]; then
+    pass "double-clicking a folder on the desktop opens it in Hyggshi Files"
+else fail "double-clicking a folder on the desktop opens it in Hyggshi Files ($(grep -E 'hde-desktop: no default handler|hde-files' "$OUT/session.log" | tail -n 2 | tr '\n' ' '))"; fi
+shot 21j-files-from-desktop
+"$B/hde-files" --quit > /dev/null 2>&1; sleep 1
 
 # ---------- 7. WM switch without logging out ----------
 if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; then

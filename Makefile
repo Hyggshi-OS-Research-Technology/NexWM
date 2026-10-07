@@ -57,19 +57,21 @@ SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-blue
              src/hde-settings-panel.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c src/hde-wl.c \
              src/hde-settings-wayland.c src/hde-settings-power.c src/hde-power.c src/hde-profiles.c src/hde-run.c \
              src/hde-settings-peripherals.c src/hde-measure.c
+# Hyggshi Files, the file manager (its own folder: hde-files/, which also has a Makefile to build it alone)
+FILES_SRC=$(wildcard hde-files/src/*.c) src/hde-theme.c
 # Build stamp (commit + date) shown in Settings > About, by --version and at the top of the session log, to tell at a
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
 VERSION_H = $(BUILD)/hde-version.h
 
-PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot
+PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
 # The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -94,6 +96,9 @@ $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-brightness.c src/hde-randr.c src
 # Built-in screenshot tool (PrtSc / Shift+PrtSc / Alt+PrtSc via hde-hotkeys): no scrot & co. needed
 $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GTK_CFLAGS) $(GLIBX_CFLAGS) $(XFIXES_CFLAGS) -o $@ $< $(GTK_LIBS) $(GLIBX_LIBS) $(XFIXES_LIBS) -lm
+# Hyggshi Files (hde-files/): folders, tabs, search, trash, thumbnails, drag and drop; the default file manager of HDE
+$(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD)
+	$(CC) $(GUI_CFLAGS) -Ihde-files/src -Isrc $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \
                         src/hde-randr.h src/hde-brightness.h src/hde-build.h $(VERSION_H) | $(BUILD)
@@ -143,7 +148,7 @@ APPS_DIR ?= /usr/share/applications
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(XSESSIONS) $(DESTDIR)$(APPS_DIR)
 	install -m755 $(BUILD)/hde-session $(DESTDIR)$(PREFIX)/bin/hde-session
-	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot; do \
+	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files; do \
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
@@ -156,7 +161,11 @@ install: all
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hyggshi-settings.desktop > $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-screenshot.desktop > $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
-	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' hde-files/hde-files.desktop > $(DESTDIR)$(APPS_DIR)/hde-files.desktop
+	install -m644 hde-files/hde-mimeapps.list $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
+	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop
+	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
 # To see a new build WITHOUT LOGGING OUT:
 #   make dev                     restart desktop+panel+hotkeys+xsettings from ./build (no install needed)
 #   sudo make install && make reload   install into $(PREFIX), then ask hde-session to restart desktop+panel
@@ -176,6 +185,7 @@ reload:
 uninstall:
 	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
 	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
+	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
 .PHONY: all clean install uninstall components dev reload check FORCE

@@ -246,7 +246,7 @@ static void activate_target(const char *path)
         /* No default handler (minimal ISO): try xdg-open / a file manager. */
         g_printerr("hde-desktop: no default handler for %s: %s\n", uri, err->message);
         g_clear_error(&err);
-        const char *openers[] = { "xdg-open", "thunar", "pcmanfm", "nautilus", "dolphin", NULL };
+        const char *openers[] = { "hde-files", "xdg-open", "thunar", "pcmanfm", "nautilus", "dolphin", NULL };
         for (int i = 0; openers[i]; i++) {
             char *prog = g_find_program_in_path(openers[i]);
             if (!prog) continue;

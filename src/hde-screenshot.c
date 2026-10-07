@@ -440,7 +440,13 @@ static void open_saved(gboolean folder)
     if (!saved_path) return;
     char *uri = g_filename_to_uri(saved_path, NULL, NULL);
     gboolean done = FALSE;
-    if (folder && bus && uri) {
+    char *files = folder ? g_find_program_in_path("hde-files") : NULL;
+    if (files) {                                      /* HDE's file manager: the folder, with the picture selected */
+        char *argv[] = { files, "--select", saved_path, NULL };
+        done = g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL);
+        g_free(files);
+    }
+    if (!done && folder && bus && uri) {
         /* file managers that implement org.freedesktop.FileManager1 also select the file */
         const char *uris[] = { uri, NULL };
         GVariant *r = g_dbus_connection_call_sync(bus, "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",

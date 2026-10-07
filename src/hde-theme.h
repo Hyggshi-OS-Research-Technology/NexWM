@@ -6,7 +6,8 @@
  *   gtk_theme_effective  theme actually used once the dark variant is picked (e.g. Adwaita-dark)
  *   icon_theme_name      icon theme (optional)
  *   font                 UI font (optional, e.g. "Sans 10")
- *   accent               accent color (#rrggbb)
+ *   accent               accent color (#rrggbb), or "auto" / missing = Automatic: the selection colour of the GTK
+ *                        theme (Yaru: orange, Adwaita: blue), so that HDE's highlights match what the theme draws
  *
  * hde-settings writes these keys + ~/.config/gtk-3.0/settings.ini + GSettings; hde-xsettings publishes
  * them over XSETTINGS so that EVERY running GTK application switches theme immediately; HDE components
@@ -29,12 +30,22 @@ typedef struct {
     char *base_theme;       /* base theme (gtk_theme), may be NULL */
     char *icon_theme;       /* NULL = unchanged */
     char *font;             /* NULL = unchanged */
-    char *accent;           /* never NULL */
+    char *accent;           /* never NULL: #rrggbb */
+    gboolean accent_auto;   /* accent = the colour of the GTK theme ("Automatic", the default) */
 } HdeThemeInfo;
 
 char    *hde_settings_ini_path(void);
 void     hde_theme_info_load(HdeThemeInfo *info);
 void     hde_theme_info_clear(HdeThemeInfo *info);
+
+/* The selection colour of the GTK theme in use (theme_selected_bg_color) as #rrggbb, made dark enough for white text
+ * on it; NULL when GTK has no display. hde_theme_info_load() uses it for the Automatic accent once the process has
+ * called hde_theme_apply_process() (before that, and in programs without a display: #3584e4). */
+char    *hde_theme_accent_from_gtk(void);
+/* CSS giving the standard GTK widgets (switches, sliders, progress bars, selected rows, suggested buttons) the accent
+ * colour chosen in Settings instead of the theme's own; "" for the Automatic accent (the theme's colour already).
+ * Free with g_free. */
+char    *hde_theme_accent_css(const HdeThemeInfo *info);
 
 /* Panel / OSD / notification popups use the dark look unless the user picked Light. */
 gboolean hde_theme_shell_dark(void);

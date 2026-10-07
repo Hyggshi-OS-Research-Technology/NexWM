@@ -1,4 +1,5 @@
 /* hde-startmenu.c — see hde-startmenu.h */
+#include "hde-theme.h"
 #include "hde-startmenu.h"
 #include "hde-osd.h"
 #include "hde-wl.h"
@@ -772,15 +773,11 @@ static GtkWidget *avatar_new(int size)
         cairo_restore(cr);
         g_object_unref(pb);
     } else {                                     /* the first letter of the name on the accent colour */
-        char *acc = NULL;
-        GKeyFile *kf = g_key_file_new();
-        char *ini = g_build_filename(g_get_user_config_dir(), "hde", "settings.ini", NULL);
-        if (g_key_file_load_from_file(kf, ini, G_KEY_FILE_NONE, NULL)) acc = g_key_file_get_string(kf, "settings", "accent", NULL);
-        g_free(ini);
-        g_key_file_free(kf);
+        HdeThemeInfo ti;
+        hde_theme_info_load(&ti);                /* the colour chosen in Settings, or the one of the GTK theme */
         GdkRGBA c;
-        if (!acc || !gdk_rgba_parse(&c, acc)) gdk_rgba_parse(&c, "#3584e4");
-        g_free(acc);
+        if (!gdk_rgba_parse(&c, ti.accent)) gdk_rgba_parse(&c, "#3584e4");
+        hde_theme_info_clear(&ti);
         cairo_pattern_t *g = cairo_pattern_create_linear(0, 0, size, size);
         cairo_pattern_add_color_stop_rgb(g, 0, MIN(1, c.red * 1.2 + 0.1), MIN(1, c.green * 1.2 + 0.1), MIN(1, c.blue * 1.2 + 0.1));
         cairo_pattern_add_color_stop_rgb(g, 1, c.red * 0.7, c.green * 0.7, c.blue * 0.75);

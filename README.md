@@ -1,8 +1,8 @@
 # HDE — Hyggshi Desktop Environment
 
 A lightweight GTK3 desktop environment for X11 **and Wayland**: panel (Start menu, taskbar, system tray, status
-area, notifications, clock, extensions), desktop icons and wallpaper, **Hyggshi Settings**, a session
-manager and a system-hotkeys daemon.
+area, notifications, clock, extensions), desktop icons and wallpaper, **Hyggshi Settings**, **Hyggshi Files** (the file
+manager), a session manager and a system-hotkeys daemon.
 
 ## Features
 
@@ -20,9 +20,10 @@ manager and a system-hotkeys daemon.
 | **About** | *Settings → About* and the **About HDE** window (desktop menu): the **logo of your system** from `/etc/os-release` (`ID=` hyggshios, ubuntu, debian, linuxmint, … — the logo the system installs, else HDE's own copy of 27 distribution logos, else a badge), its name and version, **"Based on Debian 13 (trixie)" / "Ubuntu 24.04 LTS"** with that logo too, its links; HDE version and build, the computer (model, processor, RAM, graphics, storage, screens), and **how much RAM HDE uses right now** (per program, measured live); *Copy system info* for bug reports. `hde-settings --about` prints the same |
 | **Wayland** | The **HDE (Wayland)** session on the login screen (needs `labwc`): the labwc compositor with HDE's panel, desktop, Start menu, notifications and OSD as layer-shell surfaces, a Wayland taskbar, the same keys (Super, F1–F3, F6–F8, PrtSc with `grim`, …) as labwc key bindings, title bars in HDE's colours; Settings for keyboard, touchpad and appearance apply there too |
 | **Desktop** | Wallpaper + icons from `~/Desktop` with a clear selection frame (accent color) and hover highlight; **right-click an icon for its own menu** — Open, Open With, Open in Terminal, Cut, Copy, Rename, Move to Trash, Properties; rubber-band and Ctrl+click selection; Paste, Delete, F2 and the usual keyboard shortcuts |
+| **Files** | **Hyggshi Files** (`hde-files`, in its own folder `hde-files/`), the file manager — and the one HDE uses: folders on the desktop, `Super+E`, *Show in Folder* of browsers and of the Screenshot tool open in it. Icons with **thumbnails** (pictures, and videos / PDF when a thumbnailer is installed) or a **list** (Name, Size, Type, Modified — click a column to sort), **tabs**, the places sidebar (bookmarks, drives, Trash, Recent), a path bar (`Ctrl+L` to type a path or an `sftp://` address, with completion), **search in the subfolders** (`Ctrl+F`), hidden files (`Ctrl+H`), zoom (`Ctrl` + wheel keys or the slider). **Copy, move, paste with progress and Cancel** — Replace / Skip / Keep Both / Merge when a name is taken, "name (copy)" in the same folder —, **drag and drop** (Ctrl copies, Shift moves), **the Trash** (restore where it was, delete, empty; no GVfs needed), **Undo** (`Ctrl+Z`), rename (`F2`, the extension kept), new folder / document (from `~/Templates`), Properties (size of folders, permissions, the app that opens the type), Open With, Run executables, compress / extract, open a terminal there; type the start of a name to jump to it; its Cut / Copy / Paste works with the desktop and the other file managers; it watches folders, so changes made elsewhere show at once; Light / Dark and the accent of HDE |
 | **Network** | Real Wi-Fi list (NetworkManager): scan, signal, security, connect with password, disconnect, forget, hidden networks; wired/VPN devices |
 | **Bluetooth** | Device list straight from BlueZ: paired + nearby devices, scan, pair (PIN/passkey/confirmation agent), connect, disconnect, remove |
-| **Dark mode** | Applies immediately to the panel, menus, Settings and **every running GTK app** (`hde-xsettings`), GTK4/libadwaita via the `color-scheme` setting; picks the dark variant of your theme automatically |
+| **Dark mode** | Applies immediately to the panel, menus, Settings and **every running GTK app** (`hde-xsettings`), GTK4/libadwaita via the `color-scheme` setting; picks the dark variant of your theme automatically. The **accent colour** (*Settings → Appearance*) is *Automatic* by default: the colour of your GTK theme (Yaru's orange, Adwaita's blue), so HDE's highlights match the switches and selections the theme draws; a colour chosen there also goes on those switches, sliders and selections |
 | **Window managers** | GTK window managers **Metacity, Marco, Mutter, Muffin** (preferred — title bars follow the GTK theme and Dark mode), plus Xfwm4, Openbox, IceWM, Fluxbox, NexWM. Switch live from Settings, no logout |
 | **Session** | Restarts crashed components, XDG autostart (`~/.config/autostart`), polkit authentication agent, D-Bus activation environment |
 | **Touchpad & mouse** | Scroll direction picked on the touchpad itself: *Like a phone* (the content follows your fingers, the default) or *Like a mouse wheel* (swipe up to go back toward the top), shown as pictures in *Settings → Input* and in a *Touchpad scrolling* window with a test page that opens once at the first login with a touchpad. Tap to click, separate mouse wheel direction, pointer speed/acceleration. A touchpad that X sees as a mouse (inside a virtual machine, or in PS/2 / HID mouse mode) is recognised on the test page ("It is my touchpad") and then follows the touchpad direction. Applied at login, immediately when changed, to devices plugged in later or back after suspend, and again whenever another program (a window manager with its own touchpad settings, a script) changes them (libinput, synaptics and evdev drivers, no `xinput` needed). GNOME's own touchpad / mouse settings (`org.gnome.desktop.peripherals`, and Cinnamon's) are kept the same, so Mutter and Muffin agree with HDE. Scrolling over the panel's volume icon follows the fingers (up = louder) whatever the direction. `hde-xsettings --status` shows every device and whether it matches Settings |
@@ -66,7 +67,7 @@ Reload a running session after rebuilding: `make dev` (from `./build`) or `sudo 
 | `Super+A` | Control Center (quick toggles, Wi-Fi, Bluetooth, brightness, volume, notifications) |
 | `Super+N` | The Control Center at its notifications |
 | `Super+R`, `Alt+F2` | Run a command |
-| `Super+E` | File manager |
+| `Super+E` | File manager (Hyggshi Files) |
 | `Super+D` | Show desktop |
 | `Super+L` | Lock screen |
 | `Ctrl+Alt+T` | Terminal |
@@ -88,12 +89,19 @@ manager is switched in Settings), and logging out and back in fixes it for good.
 On the desktop: `Enter` open, `Alt+Enter` properties, `F2` rename, `Delete` move to Trash (`Shift+Delete` delete),
 `Ctrl+A` / `Ctrl+C` / `Ctrl+X` / `Ctrl+V` select all / copy / cut / paste, `Menu` or `Shift+F10` context menu.
 
+In Hyggshi Files the same, plus: `Ctrl+N` / `Ctrl+T` / `Ctrl+W` new window / new tab / close the tab, `Alt+Left` /
+`Alt+Right` / `Alt+Up` (or `Backspace`) back / forward / up, `Alt+Home` home, `Ctrl+L` type a location, `Ctrl+F`
+search, `Ctrl+H` hidden files, `Ctrl+1` / `Ctrl+2` icons / list, `Ctrl++` / `Ctrl+-` / `Ctrl+0` zoom, `F9` sidebar,
+`Ctrl+Shift+N` new folder, `Ctrl+Z` undo, `Ctrl+Shift+I` invert the selection, `Ctrl+D` bookmark, `Ctrl+Enter` open in a
+new tab, `F5` reload, `F10` the menu, `Ctrl+?` all of them.
+
 ## Programs
 
 | Program | Role |
 |---------|------|
 | `hde-session` | Session manager. `hde-session wm` switches the window manager live, `hde-session restart` restarts panel + desktop, `hde-session {logout,reboot,shutdown,suspend,lock}` |
 | `hde-panel` | Panel, Start menu, Control Center, battery panel, app search, notifications, OSD. `hde-panel --menu/--search/--run/--power/--show-desktop/--osd-volume/--osd-brightness N/--control-center[=wifi\|bluetooth\|sound\|notifications]/--notifications/--battery` control the running panel (X11 ClientMessage or D-Bus `org.hyggshi.HDE.Panel`); `hde-panel --measure` has the panel measure the screen again and put itself right, then prints the screen, the panel window, the space reserved for it and the room windows get (exit status 0 = it fits) |
+| `hde-files` | Hyggshi Files, the file manager (`hde-files/`, which has its own Makefile too): `hde-files [FOLDER\|FILE\|URI…]` (a file: its folder with the file selected; `trash:///`, `recent:///`), `--select PATH…` (the folders with these items selected), `--new-window`, `--quit`. One process; while it runs it answers `org.freedesktop.FileManager1` (*Show in Folder*). In HDE sessions folders open in it (`hde-mimeapps.list`; a choice of your own in *Open With* wins). Its settings: `~/.config/hde/files.ini` |
 | `hde-desktop` | Wallpaper + desktop icons (icon menu, Cut/Copy/Paste compatible with GNOME/Xfce file managers) |
 | `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script; `--project` (the F8 window), `--display-mode pc\|duplicate\|extend\|second`, `--displays`, `--display-set NAME WxH[@HZ]\|auto [normal\|left\|right\|inverted]` (the resolution / rotation of a screen, kept for next time), `--brightness [+N\|-N\|N]`, `--power` (battery, battery saver), `--night-light [on\|off\|toggle]`, `--about` (this computer, the system, the RAM HDE uses), `--about-window`, `--wayland-config [DIR] [--reload]` (labwc's configuration for the Wayland session) |
 | `hde-hotkeys` | System shortcuts (Xlib + XInput2). `hde-hotkeys --action NAME` does one action (volume-up, brightness-down, screenshot-area, project, lock, …): what the key bindings of the Wayland session run |
@@ -103,7 +111,8 @@ On the desktop: `Enter` open, `Alt+Enter` properties, `F2` rename, `Delete` move
 ## Configuration
 
 Everything lives in `~/.config/hde/settings.ini` (group `[settings]`), written by Hyggshi Settings:
-`theme_index` (1 light, 2 dark), `gtk_theme`, `gtk_theme_effective`, `accent`, `icon_theme_name`, `font`,
+`theme_index` (1 light, 2 dark), `gtk_theme`, `gtk_theme_effective`, `accent` (`auto` — the default: the colour of the
+GTK theme — or `#rrggbb`), `icon_theme_name`, `font`,
 `wm` (`auto`, `metacity`, `marco`, `mutter`, `muffin`, `xfwm4`, `openbox`, `icewm`, `fluxbox`, `nexwm`),
 `super_menu`, `fkeys_sound`, `fkeys_display` (F6/F7/F8), `media_keys`, `system_shortcuts`, `screenshot_tool` (`builtin` or an installed
 `gnome-screenshot`, `xfce4-screenshooter`, `mate-screenshot`, `flameshot`, `spectacle`, `maim`, `scrot`), `screenshot_pointer`
@@ -146,7 +155,10 @@ low-battery warnings on a draining fake battery, *Settings → Power*, the mouse
 brightness kept for the next login, GNOME's touchpad settings following HDE's, the right-click menus of the
 panel, the Start button and the volume icon, maximized windows below a top panel and above a bottom one (Metacity and
 Openbox), the panel measuring itself and putting itself back when moved or resized, *Settings → Panel → Screen*, the
-sidebar of Settings without a black frame, live window manager switching and crash recovery; `power-test` checks the
+sidebar of Settings without a black frame, the accent colour following the GTK theme (Yaru), Hyggshi Files (opening a
+folder, thumbnails, hidden files, icons / list, new folder, type-ahead and rename, copy / paste / undo, the Trash and
+Restore, the right-click menus, Properties, search in subfolders, tabs, *Show in Folder* over D-Bus, `--select`, Dark
+mode, a folder on the desktop opening in it), live window manager switching and crash recovery; `power-test` checks the
 battery numbers (µWh / µAh, time left, health, two batteries, a mouse) and the battery saver's decisions without X;
 `measure-test` where the panel belongs and what is wrong when it is not there (one or two screens, scale 2).
 `tests/display-test.sh` (real Xorg with several dummy screens) also checks resolutions (Settings and
@@ -183,6 +195,7 @@ line of `~/.cache/hde/session.log` show the commit HDE was built from.
 ## Architecture
 
 - `src/`: the GTK3 desktop programs (panel, desktop, settings pages, hotkeys, xsettings).
+- `hde-files/`: Hyggshi Files, the file manager (`src/files.h` describes its parts).
 - `apps/hde-session.c`: session manager. `src/hde-wm.h`: window-manager table shared with Settings.
 - `hde-core/`: backend-neutral APIs and core services; `backend/x11/`, `backend/wayland/`: session actions.
 - Panel IPC (`src/hde-ipc.h`): root property `_HDE_PANEL_WINDOW` + ClientMessage `_HDE_PANEL_COMMAND`; D-Bus

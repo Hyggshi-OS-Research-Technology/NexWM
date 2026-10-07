@@ -94,7 +94,7 @@ fi
 
 say "make"
 make -C "$SRC" -j"$(nproc)" all
-PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot"
+PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files"
 for p in $PROGRAMS; do
     [ -x "$SRC/build/$p" ] || die "build/$p was not built (see the make output above)"
 done

@@ -86,7 +86,7 @@
     "if command -v \"$t\" >/dev/null 2>&1; then exec \"$t\"; fi; done; exit 127"
 
 #define HDE_SH_FILES \
-    "for f in thunar pcmanfm nautilus nemo caja dolphin pcmanfm-qt; do " \
+    "for f in hde-files thunar pcmanfm nautilus nemo caja dolphin pcmanfm-qt; do " \
     "if command -v \"$f\" >/dev/null 2>&1; then exec \"$f\" \"$HOME\"; fi; done; exec xdg-open \"$HOME\""
 
 #endif
