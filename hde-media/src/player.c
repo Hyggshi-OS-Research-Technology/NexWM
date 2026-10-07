@@ -14,6 +14,10 @@
  *   z                    shuffle on / off    r   repeat: off → all → one
  *   q or Escape          close the window (the sound stops with it)
  *
+ * A video with mpv on X11 plays *inside* this window: mpv is given the X id of the drawing area above the seek bar
+ * (--wid), which is the only engine that can be told where to draw. Everywhere else — ffplay, gst-launch-1.0, or a
+ * Wayland session, where there are no X window ids — a video opens a window of its own.
+ *
  * mpv is the only engine that can be talked to while it plays: it is started with --input-ipc-server, and this file
  * speaks its JSON protocol over that socket (pause, seek, volume, mute, and where we are in the track, twice a second).
  * The others (ffplay, gst-launch-1.0, paplay, aplay) are a process: this window can start them and end them, nothing
@@ -28,6 +32,10 @@
 #include "media.h"      /* MEDIA_TITLE */
 
 #include <gtk/gtk.h>
+#include <gdk/gdk.h>
+#ifdef GDK_WINDOWING_X11
+#include <gdk/gdkx.h>     /* gdk_x11_window_get_xid: where mpv is told to draw the video */
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +51,7 @@ struct _HdeMediaPlayer {
     GtkApplication *app;
     GtkWidget *window;
     /* what is shown */
-    GtkWidget *heading, *heading_sub, *hint, *elapsed, *total, *seek;
+    GtkWidget *heading, *heading_sub, *hint, *video, *elapsed, *total, *seek;
     GtkWidget *prev, *play, *stop, *next, *shuffle, *repeat, *volume, *mute_button, *list, *status;
     /* what plays */
     HdePlayer player;             /* the list lives in here too (player.list): one state, not two */
@@ -65,6 +73,7 @@ struct _HdeMediaPlayer {
     /* guards: a value set by this program must not come back as a user action */
     int setting_seek, setting_volume;
     int alive, quitting;
+    int x11;                      /* the session is X11: only there can mpv be told where to draw a video */
     /* one wait on a process may still be in flight when the window closes and this state is freed: the shared flag
      * (refcounted) is what tells it so, because the state itself cannot be looked at any more by then */
     struct PlayerGuard *guard;
@@ -189,10 +198,40 @@ static void player_select_current(HdeMediaPlayer *p)
     if (row) gtk_list_box_select_row(GTK_LIST_BOX(p->list), row);
 }
 
+/* The X id mpv should draw the video in, or 0 for "a window of your own": only an X11 session has window ids, and only
+ * mpv can be told where to draw. The area has to be on screen to have an id, so it is shown (and realized) here — by the
+ * time anything is drawn into it, it is. */
+static unsigned long player_video_wid(HdeMediaPlayer *p, HdeMediaKind kind)
+{
+    if (p->engine != HDE_MEDIA_ENGINE_MPV || kind != HDE_MEDIA_KIND_VIDEO || !p->x11 || !p->video) return 0;
+#ifdef GDK_WINDOWING_X11
+    if (!GDK_IS_X11_DISPLAY(gdk_display_get_default())) return 0;
+    gtk_widget_set_visible(p->video, TRUE);
+    gtk_widget_realize(p->video);
+    GdkWindow *gw = gtk_widget_get_window(p->video);
+    return gw ? (unsigned long)gdk_x11_window_get_xid(gw) : 0;
+#else
+    return 0;   /* GDK without X11: there are no window ids to hand over */
+#endif
+}
+
+/* a video is worth a picture in this window when mpv is the engine and the video can be drawn here */
+static void player_video_update(HdeMediaPlayer *p)
+{
+    if (!p->video) return;
+    long i = p->player.index;
+    int video = i >= 0 && (size_t)i < p->player.list.n && p->player.list.items[i].kind == HDE_MEDIA_KIND_VIDEO;
+    int here = video && p->engine == HDE_MEDIA_ENGINE_MPV && p->x11;
+    gtk_widget_set_visible(p->video, here);
+    if (here)
+        gtk_widget_set_size_request(p->video, -1, 240);   /* the area mpv draws in; it grows with the window */
+}
+
 static void player_ui_update(HdeMediaPlayer *p)
 {
     if (!p->window) return;
     player_heading_update(p);
+    player_video_update(p);
     player_status_update(p);
     player_seek_update(p);
     player_buttons_update(p);
@@ -449,7 +488,8 @@ static void player_play_index(HdeMediaPlayer *p, long index)
     player_kill(p);                                    /* the old track's exit must not be taken for this one's end */
 
     const HdeTrack *t = &list->items[index];
-    HdeMediaEngine *cmd = hde_media_engine_new(p->engine, t->path, t->kind, 0,
+    unsigned long wid = player_video_wid(p, t->kind);   /* where mpv should draw, when it can: 0 = a window of its own */
+    HdeMediaEngine *cmd = hde_media_engine_new(p->engine, t->path, t->kind, wid,
                                                p->engine == HDE_MEDIA_ENGINE_MPV ? p->ipc_path : NULL);
     if (!cmd) {
         player_log("cannot build the command line for %s", t->path);
@@ -482,6 +522,8 @@ static void player_play_index(HdeMediaPlayer *p, long index)
     p->tick_id = g_timeout_add(PLAYER_TICK_MS, player_on_tick, p);
 
     player_log("playing %ld/%d: %s", index + 1, (int)list->n, t->title);
+    if (t->kind == HDE_MEDIA_KIND_VIDEO && wid)
+        player_log("the video is drawn in this window (mpv --wid=%lu)", wid);
     player_log("run: %s", line ? line : hde_media_engine_kind_name(p->engine));
     g_free(line);
 
@@ -742,6 +784,13 @@ static void player_build_window(HdeMediaPlayer *p)
     gtk_widget_set_visible(p->hint, p->engine == HDE_MEDIA_ENGINE_NONE);
     gtk_box_pack_start(GTK_BOX(box), p->hint, FALSE, FALSE, 0);
 
+    /* the video, when mpv draws it here (hidden for a sound, and everywhere else) */
+    p->video = gtk_drawing_area_new();
+    gtk_style_context_add_class(gtk_widget_get_style_context(p->video), "hde-media-video");
+    gtk_widget_set_size_request(p->video, -1, 240);
+    gtk_box_pack_start(GTK_BOX(box), p->video, TRUE, TRUE, 0);
+    gtk_widget_set_visible(p->video, FALSE);
+
     /* where we are in the track */
     GtkWidget *seekrow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_margin_start(seekrow, 10);
@@ -861,6 +910,11 @@ HdeMediaPlayer *hde_media_player_new(GtkApplication *app, char *const *paths, in
     HdeMediaPlayer *p = g_new0(HdeMediaPlayer, 1);
     p->app = app;
     p->ipc_in = g_string_new(NULL);
+#ifdef GDK_WINDOWING_X11
+    p->x11 = GDK_IS_X11_DISPLAY(gdk_display_get_default()) ? 1 : 0;
+#else
+    p->x11 = 0;
+#endif
     p->guard = g_new0(PlayerGuard, 1);
     p->guard->refs = 1;                              /* this state owns one reference; every wait takes one more */
     p->guard->alive = 1;

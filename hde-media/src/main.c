@@ -79,7 +79,8 @@ static void load_css(void)
         ".hde-media-heading { font-weight: bold; font-size: 1.12em; }"
         ".hde-media-sub { font-size: 0.92em; opacity: 0.85; }"
         ".hde-media-hint { background-color: alpha(@theme_fg_color, 0.07); border-radius: 6px; }"
-        ".hde-media-time { font-size: 0.9em; opacity: 0.8; }",
+        ".hde-media-time { font-size: 0.9em; opacity: 0.8; }"
+        ".hde-media-video { background-color: #000000; }",
         accent, NULL);
     gtk_css_provider_load_from_data(css, data, -1, NULL);
     g_free(data);
@@ -148,7 +149,8 @@ static void usage(FILE *out)
             "A song or a video opens the player, a folder the picture viewer, and .m3u/.m3u8/.pls lists the player.\n"
             "The player does not decode anything itself: it runs mpv, ffplay, gst-launch-1.0, paplay or aplay —\n"
             "whichever of them is installed (mpv is the one that can also pause and seek) — and says what to install\n"
-            "when it is none of them. Keys: Space play/pause, Left/Right previous and next, Ctrl+Left/Right five\n"
+            "when it is none of them (a video with mpv plays inside the window on X11, in a window of its own\n"
+            "elsewhere). Keys: Space play/pause, Left/Right previous and next, Ctrl+Left/Right five\n"
             "seconds back or forward, s stop, Up/Down or + and - the volume, m mute, z shuffle, r repeat, q closes.\n");
 }
 

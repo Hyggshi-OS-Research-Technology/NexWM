@@ -27,13 +27,14 @@ TITLE="Hyggshi Media"
 HOME_DIR="$OUT/home"
 MUSIC="$HOME_DIR/Music"
 MUSIC2="$HOME_DIR/More"
+FILMS="$HOME_DIR/Films"
 FAKEBIN="$OUT/fakebin"
 PLAYER_LOG="$OUT/player.log"
 ENGINE_LOG="$OUT/engine.log"
 
 if [ -z "${HDE_PLAYER_INNER:-}" ]; then
     rm -rf "$OUT"
-    mkdir -p "$MUSIC/sub" "$MUSIC2" "$HOME_DIR/.config/hde" "$OUT/run" "$OUT/empty" "$FAKEBIN"
+    mkdir -p "$MUSIC/sub" "$MUSIC2" "$FILMS" "$HOME_DIR/.config/hde" "$OUT/run" "$OUT/empty" "$FAKEBIN"
     chmod 700 "$OUT/run"
     : > "$OUT/results.txt"
     for t in Xvfb xdotool metacity dbus-run-session python3; do
@@ -49,6 +50,7 @@ if [ -z "${HDE_PLAYER_INNER:-}" ]; then
     printf 'and this one\n' > "$MUSIC/sub/song4.mp3"
     printf 'first of two\n' > "$MUSIC2/one.mp3"
     printf 'second of two\n' > "$MUSIC2/two.mp3"
+    printf 'not really a video\n' > "$FILMS/clip.mp4"
     # the engine the window finds in $PATH: an empty executable file is not enough (hde_media_find_program only looks at
     # $PATH, but the window *runs* it), so it is the python stand-in, under the name mpv
     ln -sf "$HERE/fake-mpv.py" "$FAKEBIN/mpv"
@@ -176,6 +178,8 @@ if grep -q -e "--input-ipc-server=$OUT/run" "$ENGINE_LOG"; then pass "mpv is giv
 else fail "mpv is given --input-ipc-server (engine.log: $(head -n 1 "$ENGINE_LOG" | cut -c1-200))"; fi
 if grep -e "ARGS" "$ENGINE_LOG" | tail -n 1 | grep -q -e "song1.mp3$"; then pass "the file is the last word of the command line"
 else fail "the file is the last argument of the command line"; fi
+if grep -q -e "--wid=" "$ENGINE_LOG"; then fail "a sound gets no --wid (there is no video to draw)"
+else pass "a sound gets no --wid (there is no video to draw)"; fi
 if wait_new "$m0" "mpv is listening" 5; then pass "the window connects to mpv's socket"
 else fail "the window connects to mpv's socket"; fi
 if grep -q '"get_property","duration"' "$ENGINE_LOG"; then pass "it asks mpv how long the track is (the tags have nothing here)"
@@ -300,6 +304,22 @@ else pass "and it plays nothing (there is nothing to play with)"; fi
 shot 3-no-engine
 if player_quit; then pass "the window closes with 0 even without an engine"
 else fail "the window closes with 0 even without an engine"; fi
+
+# ---------- 9. a video is drawn inside the window (mpv --wid, X11) ----------
+: > "$ENGINE_LOG"
+m23=$(mark)
+if player_start 60 --play "$FILMS"; then pass "a video opens the player too"
+else fail "a video opens the player too"; fi
+if wait_new "$m23" "playing 1/1: clip.mp4" 10; then pass "the video plays"
+else fail "the video plays"; fi
+if wait_new "$m23" "the video is drawn in this window" 5; then
+    pass "mpv is told to draw it inside the window (an X11 session)"
+else fail "mpv is told to draw the video inside the window"; fi
+if grep -q -e "--wid=[0-9]" "$ENGINE_LOG"; then pass "the command line carries the X id of the area"
+else fail "the command line carries the X id of the area (engine.log: $(head -n 1 "$ENGINE_LOG" | cut -c1-200))"; fi
+shot 4-video
+if player_quit; then pass "q closes the video window with 0"
+else fail "q closes the video window with 0"; fi
 
 if [ "$FAILS" -gt 100 ]; then FAILS=100; fi
 exit "$FAILS"

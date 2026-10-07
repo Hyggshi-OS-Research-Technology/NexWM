@@ -32,6 +32,9 @@ Player keys: `Space` play/pause (mpv only: the others cannot be paused), `Left`/
 `Ctrl+Left`/`Ctrl+Right` five seconds back or forward, `s` stop, `Up`/`Down` or `+`/`-` the volume, `m` mute, `z`
 shuffle, `r` repeat (off, all, one), `q` closes the window — which stops the sound with it.
 
+A video is drawn *inside* this window when mpv is the engine and the session is X11 (mpv is given the X id of the black
+area above the seek bar); with ffplay, gst-launch-1.0, or on Wayland, it opens a window of its own.
+
 Running `hde-media` again while it is open shows the new picture in the window that is already there, and hands what it
 was given to the player if that is what is open (one process, one window per kind — what the file manager's "Open With"
 expects). In HDE sessions `hde-mimeapps.list` makes it the program that opens pictures, music and video.
@@ -54,7 +57,7 @@ The theme follows HDE: Light / Dark and the accent colour chosen in Settings, li
 | `src/gallery.c` | The implementation of that: folder scans (hidden files left out, sub-folders 8 deep with `-r`), the natural order (digit runs compare as numbers), the zoom ladder (5 % .. 1600 %), the slideshow clock, the human sizes. |
 | `src/viewer.c` | The window: a drawing area painted with cairo, the toolbar, the status line, the keys, the wheel, the dragging, the dropped pictures. |
 | `src/main.c` | The program: the options, the one running window a second `hde-media` hands its picture to, the theme and its CSS. |
-| `src/player.h`, `src/player.c` | The player window: what plays now, the seek bar, the transport, the list, the status line. It starts the engine and follows the list; it decodes nothing itself. |
+| `src/player.h`, `src/player.c` | The player window: what plays now, the seek bar, the transport, the list, the status line — and, for a video with mpv on X11, the black area mpv is told to draw in (`--wid`). It starts the engine and follows the list; it decodes nothing itself. |
 | `src/playlist.h` | What the player promises: the list of what is played, the tags of a file, the state of the playback (which track, what follows, shuffle, repeat, the volume). Plain C too (the window is `player.c`). |
 | `src/playlist.c` | The implementation of that: folder scans, the `.m3u`/`.m3u8`/`.pls` files other players write (relative paths included), and the tags read by hand — ID3v2.2/2.3/2.4 (all four text encodings, unsynchronisation) and ID3v1, the Vorbis comment of Ogg Vorbis/Opus/FLAC, FLAC's STREAMINFO, WAV's fmt/data chunks, and an estimate from the first frame of an MP3 with no TLEN. |
 | `src/engine.h`, `src/engine.c` | The hybrid engine's decision half: which of mpv / ffplay / gst-launch-1.0 / paplay / aplay this machine has, the command line that follows from it for a given file, the `file://` URI gst-launch-1.0 wants, and what to tell the user when none of them is installed. It starts nothing — the window does that. |
@@ -108,7 +111,5 @@ With none of them installed the window says so and gives the two commands (`sudo
 
 ## What comes next in this folder
 
-mpv can be told to draw the video inside a window (its `--wid`), so a video can play inside this window instead of a
-window of its own — on X11, which is where the window ids come from; `engine.c` already takes the id. Subtitles: mpv
-reads them, the others do not. Then the panel showing what is playing (HDE's own MPRIS interface), the multimedia keys
-of `hde-hotkeys`, the volume on the screen, and a screen recorder.
+Subtitles: mpv reads them, the other engines do not. Then the panel showing what is playing (HDE's own MPRIS
+interface), the multimedia keys of `hde-hotkeys`, the volume on the screen, and a screen recorder.
