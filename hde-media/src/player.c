@@ -696,9 +696,11 @@ static gboolean player_on_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
         player_skip(p, -1); return TRUE;
     case GDK_KEY_s:          player_stop_here(p); return TRUE;
     case GDK_KEY_m:          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->mute_button), !p->player.muted); return TRUE;
+    case GDK_KEY_Up:
     case GDK_KEY_plus:
     case GDK_KEY_equal:
     case GDK_KEY_KP_Add:     player_volume_step(p, 1); return TRUE;
+    case GDK_KEY_Down:
     case GDK_KEY_minus:
     case GDK_KEY_KP_Subtract: player_volume_step(p, -1); return TRUE;
     case GDK_KEY_z:          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->shuffle), !p->player.shuffle); return TRUE;
