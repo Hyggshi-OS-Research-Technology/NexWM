@@ -214,7 +214,9 @@ UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
 check-unit: $(UNIT_TESTS) $(BUILD)/hde-choose-stub
-	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; $$t || rc=1; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
+	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; \
+	  if [ -x "$$t" ]; then "$$t"; else sh "$$t"; fi; st=$$?; \
+	  if [ $$st != 0 ]; then echo "FAIL: unit test $$t (exit $$st)"; rc=1; fi; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
 
 # The HDE login screen (login/sddm/hde): files, metadata, theme.conf, QML and the installer; with a display (and
 # SDDM's greeter installed) it renders the theme for real. See tests/sddm-test.sh
