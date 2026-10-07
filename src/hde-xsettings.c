@@ -35,6 +35,7 @@
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#include "hde-distro.h"
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <glib.h>
@@ -563,8 +564,12 @@ static int print_input_status(void)
     printf("XSETTINGS (theme) manager: %s\n", xs == None ? "none" : window_is_hde_xsettings(xs) ? "hde-xsettings"
                                                                                                 : "another program");
     if (!hde_input_supported()) {
-        printf("This hde-xsettings was built without libxi-dev: touchpad and mouse settings cannot be applied.\n"
-               "Install it (sudo apt install libxi-dev), then: make && sudo make install\n");
+    {
+        char *hint = hde_install_hint("libxi-dev");
+        printf("This hde-xsettings was built without libXInput2: touchpad and mouse settings cannot be applied.\n"
+               "Install it (%s), then: make && sudo make install\n", hint);
+        free(hint);
+    }
         return 1;
     }
     if (!hde_input_init(dpy)) {

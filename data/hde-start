@@ -13,6 +13,16 @@ fi
 
 echo "hde-start: $(date)  DISPLAY=${DISPLAY:-unset} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset} XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unset} ${1:-}"
 
+# How to install a package here: Debian's apt, Fedora's dnf, openSUSE's zypper, Arch's pacman (the package names used
+# in this script are the same everywhere).
+install_hint() {
+    if command -v dnf >/dev/null 2>&1; then echo "sudo dnf install $1"
+    elif command -v apt >/dev/null 2>&1; then echo "sudo apt install $1"
+    elif command -v zypper >/dev/null 2>&1; then echo "sudo zypper install $1"
+    elif command -v pacman >/dev/null 2>&1; then echo "sudo pacman -S $1"
+    else echo "install $1"; fi
+}
+
 # The display manager's PATH sometimes lacks /usr/local/bin
 case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
 export PATH
@@ -24,7 +34,7 @@ if [ "${1:-}" = "--wayland" ]; then
     else SESSION="$(command -v hde-session)"; fi
     if [ -z "$SESSION" ]; then echo "hde-start: hde-session not found (HERE=$HERE PATH=$PATH)"; exit 1; fi
     if ! command -v labwc >/dev/null 2>&1; then
-        echo "hde-start: the HDE (Wayland) session needs the labwc compositor: sudo apt install labwc"
+        echo "hde-start: the HDE (Wayland) session needs the labwc compositor: $(install_hint labwc)"
         exit 1
     fi
     export XDG_CURRENT_DESKTOP=HDE XDG_SESSION_DESKTOP=HDE DESKTOP_SESSION=hde-wayland XDG_SESSION_TYPE=wayland

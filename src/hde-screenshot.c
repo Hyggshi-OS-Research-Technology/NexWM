@@ -24,6 +24,7 @@
  * In the "HDE (Wayland)" session programs cannot read the screen through GTK: grim takes the picture (wlr-screencopy,
  * labwc has it) and slurp lets you drag the area (for --window too: Wayland does not tell where the active window is).
  */
+#include "hde-distro.h"
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
 #include <X11/Xlib.h>
@@ -196,8 +197,9 @@ static GdkPixbuf *grim_capture(const char *geometry, GError **err)
 {
     char *grim = g_find_program_in_path("grim");
     if (!grim) {
-        g_set_error_literal(err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                            "Screenshots on Wayland need grim: sudo apt install grim");
+        char *hint = hde_install_hint("grim");
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Screenshots on Wayland need grim: %s", hint);
+        free(hint);
         return NULL;
     }
     /* -c: with the pointer */
@@ -253,8 +255,9 @@ static char *slurp_geometry(GError **err)
 {
     char *slurp = g_find_program_in_path("slurp");
     if (!slurp) {
-        g_set_error_literal(err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                            "Choosing an area on Wayland needs slurp: sudo apt install slurp");
+        char *hint = hde_install_hint("slurp");
+        g_set_error(err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "Choosing an area on Wayland needs slurp: %s", hint);
+        free(hint);
         return NULL;
     }
     char *out = NULL;

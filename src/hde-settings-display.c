@@ -17,6 +17,7 @@
  * A new resolution, refresh rate or orientation (the Resolution section of the Display page) asks the same question;
  * kept, it goes into display_modes (see hde-randr.h), which hde-xsettings applies at every login.
  */
+#include "hde-distro.h"
 #include "hde-settings.h"
 #include "hde-randr.h"
 #include "hde-brightness.h"
@@ -1274,11 +1275,15 @@ static void dp_bright_describe(const HdeBrightness *b)
     else if (b->method == HDE_BRIGHTNESS_DDC)
         t = g_strdup_printf("The monitor's own brightness, over the video cable (DDC/CI, %s). Keys: F6 darker · F7 "
                             "brighter.", b->device);
-    else if (b->method == HDE_BRIGHTNESS_SOFTWARE)
+    else if (b->method == HDE_BRIGHTNESS_SOFTWARE) {
+        char *hint = hde_install_hint("ddcutil");
+        char *more = g_strdup_printf(" Most desktop monitors can change their own brightness when ddcutil is installed "
+                                     "(%s).", hint);
         t = g_strdup_printf("Software dimming: this screen has no backlight a program can change (desktop monitor or "
-                            "virtual machine). Keys: F6 darker · F7 brighter.%s", have_program("ddcutil") ? "" :
-                            " Most desktop monitors can change their own brightness when ddcutil is installed "
-                            "(sudo apt install ddcutil).");
+                            "virtual machine). Keys: F6 darker · F7 brighter.%s", have_program("ddcutil") ? "" : more);
+        g_free(more);
+        free(hint);
+    }
     else
         t = g_strdup_printf("Cannot be changed: %s.", b->note);
     gtk_label_set_text(GTK_LABEL(d), t);

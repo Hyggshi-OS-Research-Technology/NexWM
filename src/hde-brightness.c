@@ -1,6 +1,7 @@
 /* hde-brightness.c — backlight / software brightness, see hde-brightness.h */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#include "hde-distro.h"
 #include "hde-brightness.h"
 #include "hde-randr.h"
 #include <X11/Xatom.h>
@@ -489,9 +490,12 @@ HdeBrightnessMethod hde_brightness_get(Display *dpy, HdeBrightness *b)
         return b->method;
     }
     b->method = HDE_BRIGHTNESS_NONE;
-    if (!hde_randr_supported())
-        snprintf(b->note, sizeof b->note, "no backlight control, and HDE was built without libxrandr-dev "
-                 "(needed for software dimming): sudo apt install libxrandr-dev, then rebuild HDE");
+    if (!hde_randr_supported()) {
+        char *hint = hde_install_hint("libxrandr-dev");
+        snprintf(b->note, sizeof b->note, "no backlight control, and HDE was built without libXrandr "
+                 "(needed for software dimming): %s, then rebuild HDE", hint);
+        free(hint);
+    }
     else if (!dpy || !hde_randr_available(dpy))
         snprintf(b->note, sizeof b->note, "no backlight control, and the X server has no RandR 1.2 for software dimming");
     else

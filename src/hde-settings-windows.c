@@ -1,4 +1,5 @@
 /* Hyggshi Settings — Window Management page: choose the WM (GTK WMs preferred) and switch instantly without logging out. */
+#include "hde-distro.h"
 #include "hde-settings.h"
 #include "hde-wm.h"
 #include <gdk/gdkx.h>
@@ -199,9 +200,14 @@ GtkWidget *page_windows_new(void)
     gtk_box_pack_start(GTK_BOX(bar), info_label("Switches the window manager of this session immediately — open windows stay open."),
                        TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(box), bar, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), info_label(
-        "GTK window managers (Metacity, Marco, Mutter, Muffin) draw title bars with your GTK theme, so Dark mode also "
-        "applies to window borders. Install one with e.g.: sudo apt install metacity"), FALSE, FALSE, 8);
+    {
+        char *hint = hde_install_hint("metacity");
+        char *msg = g_strdup_printf("GTK window managers (Metacity, Marco, Mutter, Muffin) draw title bars with your GTK "
+                                    "theme, so Dark mode also applies to window borders. Install one with e.g.: %s", hint);
+        gtk_box_pack_start(GTK_BOX(box), info_label(msg), FALSE, FALSE, 8);
+        g_free(msg);
+        free(hint);
+    }
 
     g_signal_connect(box, "map", G_CALLBACK(on_map), NULL);
     g_signal_connect(box, "unmap", G_CALLBACK(on_unmap), NULL);

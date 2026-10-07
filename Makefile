@@ -114,6 +114,10 @@ $(BUILD)/svgpath-test: tests/svgpath-test.c src/hde-svgpath.c src/hde-svgpath.h 
 # The batteries of src/hde-power.c with fake /sys/class/power_supply trees (tests/power-test.c): run by `make check`
 $(BUILD)/power-test: tests/power-test.c src/hde-power.c src/hde-power.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(GLIBX_CFLAGS) -o $@ $(filter %.c,$^) $(GLIBX_LIBS) -lm
+# The package manager and the package names of the system in front of the user (tests/distro-test.c, fake os-release
+# files): `make check-unit` runs it everywhere, tests/fedora-test.sh checks Fedora with it
+$(BUILD)/distro-test: tests/distro-test.c src/hde-distro.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ $<
 # Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
 # `make check`
 $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
@@ -133,8 +137,15 @@ $(BUILD)/hde-session: apps/hde-session.c src/hde-wm.h src/hde-build.h $(VERSION_
 backend/x11/x11_backend.o: src/hde-commands.h
 backend/wayland/wayland_backend.o: src/hde-commands.h
 
+# The unit tests: no X server, no window manager, no session — the screen layouts, the distribution logos, the
+# batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
+# (also inside a minimal Fedora, see tests/fedora-test.sh --base)
+UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/distro-test
+check-unit: $(UNIT_TESTS)
+	@rc=0; for t in $(UNIT_TESTS); do echo "== $$t"; $$t || rc=1; done; 	 if [ $$rc = 0 ]; then echo "== all unit tests passed"; else echo "== SOME UNIT TESTS FAILED"; fi; exit $$rc
+
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
-check: all $(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test
+check: all check-unit
 	BUILD=$(BUILD) sh tests/smoke.sh
 
 clean:
@@ -188,4 +199,4 @@ uninstall:
 	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-.PHONY: all clean install uninstall components dev reload check FORCE
+.PHONY: all clean install uninstall components dev reload check check-unit FORCE

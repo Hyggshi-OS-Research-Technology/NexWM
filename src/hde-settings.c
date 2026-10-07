@@ -19,6 +19,7 @@
  * The big pages live in separate files: hde-settings-{network,bluetooth,appearance,windows,keyboard,sound,touchpad,
  * display,about,panel,power}.c
  */
+#include "hde-distro.h"
 #include "hde-settings.h"
 #include "hde-theme.h"
 #include "hde-input.h"
@@ -625,12 +626,14 @@ static void input_devices_refresh(void)
         gtk_container_add(GTK_CONTAINER(input_devices_card), row_box(d->name, desc->str, control));
         g_string_free(desc, TRUE);
     }
-    if (n == 0)
+    if (n == 0) {
+        char *xi_note = hde_input_supported() ? NULL : hde_xi_missing_note();
         gtk_container_add(GTK_CONTAINER(input_devices_card), card_placeholder(
-            !hde_input_supported() ? "HDE was built without libxi-dev, so these settings cannot be applied. "
-                                     "Install it (sudo apt install libxi-dev) and rebuild HDE."
-                                   : "No touchpad or mouse found that uses the libinput, synaptics or evdev X driver "
-                                     "(package xserver-xorg-input-libinput)."));
+            xi_note ? xi_note
+                    : "No touchpad or mouse found that uses the libinput, synaptics or evdev X driver "
+                      "(package xserver-xorg-input-libinput)."));
+        free(xi_note);
+    }
     gtk_widget_show_all(input_devices_card);
     if (input_service_note) gtk_widget_set_visible(input_service_note, have_x && !service && n > 0);
     if (input_no_touchpad_note) gtk_widget_set_visible(input_no_touchpad_note, n > 0 && touchpads == 0);
@@ -1113,6 +1116,37 @@ static int on_command_line(GApplication *app, GApplicationCommandLine *cl, gpoin
     return 0;
 }
 
+/* hde-settings --deps [build|runtime|test]: the packages this system needs, with the command of this system.
+ * Debian, Ubuntu and Hyggshi OS get apt and the names of the README, Fedora gets dnf and Fedora's names (gtk3-devel,
+ * libwnck3-devel, ...), openSUSE zypper, Arch pacman — see src/hde-distro.h. */
+static int deps_cli(const char *what)
+{
+    char *name = hde_distro_name();
+    printf("%s\n", name);
+    g_free(name);
+    const char *groups[3];
+    int n = 0;
+    if (!what || !*what) { groups[n++] = "build"; groups[n++] = "runtime"; groups[n++] = "test"; }
+    else if (!strcmp(what, "build") || !strcmp(what, "runtime") || !strcmp(what, "test")) groups[n++] = what;
+    else {
+        fprintf(stderr, "hde-settings: --deps expects build, runtime or test (got '%s')\n", what);
+        return 2;
+    }
+    for (int i = 0; i < n; i++) {
+        char *hint = hde_deps_hint(groups[i]);
+        if (!hint) continue;
+        if (!strcmp(groups[i], "build"))
+            printf("\nPackages to build HDE:\n  %s\n", hint);
+        else if (!strcmp(groups[i], "runtime"))
+            printf("\nRecommended programs (HDE works without them, the features that use them are off):\n  %s\n", hint);
+        else
+            printf("\nThe test suite (tests/smoke.sh and friends):\n  %s\n", hint);
+        free(hint);
+    }
+    printf("\nThen:\n  make && sudo make install\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "--version")) {
@@ -1120,6 +1154,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc > 1 && !strcmp(argv[1], "--about")) return about_cli();
+    if (argc > 1 && !strcmp(argv[1], "--deps")) return deps_cli(argc > 2 ? argv[2] : NULL);
     if (argc > 1 && !strcmp(argv[1], "--wayland-config")) return wayland_config_cli(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "--about-window")) {
         signal(SIGPIPE, SIG_IGN);
@@ -1206,6 +1241,8 @@ int main(int argc, char **argv)
                "       hde-settings --power            the battery, the battery saver and the low-battery warnings\n"
                "       hde-settings --about            this computer, the system and the memory HDE uses\n"
                "       hde-settings --about-window     the About HDE window\n"
+               "       hde-settings --deps [build|runtime|test]   the packages HDE needs on this system\n"
+               "                                       (apt on Debian, dnf on Fedora, zypper, pacman)\n"
                "       hde-settings --wayland-config [DIR] [--reload]   write labwc's configuration (Wayland session)\n"
                "       hde-settings --version\n"
                "       hde-settings --style dark|light|toggle   switch Dark mode without opening the window\n");

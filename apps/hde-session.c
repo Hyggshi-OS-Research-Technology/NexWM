@@ -24,6 +24,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
+#include "hde-distro.h"
 #include "hde/session.h"
 #include "hde/core.h"
 #include "hde/settings.h"
@@ -187,7 +188,9 @@ static int wayland_launch(void)
 {
     char *labwc = resolve_component("labwc", NULL);
     if (!labwc) {
-        fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: sudo apt install labwc\n");
+        char *hint = hde_install_hint("labwc");
+        fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: %s\n", hint);
+        free(hint);
         return 1;
     }
     setenv("XDG_SESSION_TYPE", "wayland", 1);
@@ -394,8 +397,12 @@ static int wm_start_next(void)
         }
     }
     wm_cur = NULL;
-    fprintf(stderr, "hde-session: no window manager could be started; windows will have no title bars.\n"
-                    "             Install one, e.g.: sudo apt install metacity\n");
+    {
+        char *hint = hde_install_hint("metacity");
+        fprintf(stderr, "hde-session: no window manager could be started; windows will have no title bars.\n"
+                        "             Install one, e.g.: %s\n", hint);
+        free(hint);
+    }
     return -1;
 }
 
@@ -502,8 +509,12 @@ static void start_polkit_agent(void)
         comp_start(&comps[C_POLKIT]);
         return;
     }
-    fprintf(stderr, "hde-session: no polkit authentication agent found; apps that need administrator rights "
-                    "cannot ask for your password. Install one: sudo apt install policykit-1-gnome\n");
+    {
+        char *hint = hde_install_hint("policykit-1-gnome");
+        fprintf(stderr, "hde-session: no polkit authentication agent found; apps that need administrator rights "
+                        "cannot ask for your password. Install one: %s\n", hint);
+        free(hint);
+    }
 }
 
 /* Which way the touchpad scrolls is a habit (phone vs mouse wheel): let the user pick it once, on the touchpad itself.

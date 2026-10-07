@@ -278,6 +278,123 @@ jobs:
         cat /tmp/hde-session.log | head -n 40
         grep -q "window id" /tmp/hde-run.txt || { echo "::error::the installed HDE session did not start its panel"; exit 1; }
 
+  # Fedora — the other half of HDE's world (and of its package names): dnf's toolchain, Fedora's headers and library
+  # versions, Fedora's package names in every message HDE prints, Fedora's os-release in About, Qt's SDDM greeter,
+  # labwc on Fedora. tests/fedora-test.sh --full is a real session in Xvfb plus what is Fedora about it.
+  #
+  # The dependencies come from packaging/fedora/deps.sh, the same file packaging/fedora/README.md documents:
+  # Fedora renames packages between releases (wlroots, the split up xorg-x11-* tools), so the script picks what this
+  # Fedora has.
+  fedora:
+    name: Fedora (dnf, full desktop)
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install the dependencies (packaging/fedora/deps.sh)
+      run: |
+        cat /etc/fedora-release
+        sh packaging/fedora/deps.sh install build runtime-minimal runtime-full test wayland-session
+        rpm -q gtk3-devel libwnck3-devel gtk-layer-shell-devel | sed 's/^/::notice::Fedora package: /'
+
+    - name: Build (all targets)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log
+        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files; do
+          test -x "build/$p" || { echo "::error::build/$p was not built"; exit 1; }
+        done
+        grep -q "HAVE_WAYLAND_TASKBAR" build.log || echo "::warning::hde-panel was built without the Wayland taskbar"
+
+    - name: Compiler warnings
+      if: always()
+      run: |
+        n=$(grep -c "warning:" build.log || true)
+        echo "compiler warnings (Fedora $(gcc -dumpfullversion)): $n"
+        grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::fedora: /' || true
+
+    - name: Fedora test (the Fedora package names, a session in Xvfb, SDDM, labwc)
+      run: sh tests/fedora-test.sh --full
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-fedora results "HDE on Fedora"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-fedora checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-fedora
+        path: |
+          /tmp/hde-fedora/*.txt
+          /tmp/hde-fedora/*.log
+          /tmp/hde-fedora/shot-*.png
+          /tmp/hde-fedora/sddm/**
+          build.log
+
+  # Base Fedora: a Fedora with *nothing* but what compiles HDE (packaging/fedora/deps.sh list build) and Xvfb — no
+  # window manager, no icon theme, no NetworkManager, no labwc. HDE must build, the unit tests must pass and the
+  # session must come up and degrade gracefully (say what is missing, with dnf hints, and keep running). This is what
+  # a user gets who installs HDE on a minimal Fedora server install, so it is a test of its own.
+  fedora-base:
+    name: Fedora base (minimal, no desktop packages)
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install ONLY the build dependencies (plus Xvfb for the test itself)
+      run: |
+        cat /etc/fedora-release
+        sh packaging/fedora/deps.sh install build
+        # Xvfb, python3, procps-ng, a font: the test harness, not HDE. No window manager, no icons, no NetworkManager.
+        dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb python3 procps-ng dejavu-sans-fonts ||
+          dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb python3 procps-ng
+        for p in metacity openbox xfwm4 NetworkManager labwc; do
+          if rpm -q "$p" >/dev/null 2>&1; then echo "::warning::$p is installed: this is not a base Fedora any more"; fi
+        done
+
+    - name: Build (all targets)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log
+
+    - name: Unit tests (no X server needed)
+      run: make check-unit
+
+    - name: Fedora base test (a session without any desktop package)
+      run: sh tests/fedora-test.sh --base
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-fedora results "HDE on a base Fedora"
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-fedora-base
+        path: |
+          /tmp/hde-fedora/*.txt
+          /tmp/hde-fedora/*.log
+          /tmp/hde-fedora/shot-*.png
+          build.log
+
   # HDE mostly runs on Debian-based systems (Hyggshi OS defaults to Debian 13): build with their compilers too.
   # Debian 13 has GCC 14 (implicit declarations and pointer/int mix-ups are errors); testing has the newest GCC,
   # which compiles C23 by default (bool/true/false are keywords, "f()" means "f(void)").
