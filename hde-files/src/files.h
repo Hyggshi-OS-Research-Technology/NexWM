@@ -129,7 +129,9 @@ struct _Pane {
     int n_items, n_hidden;
     GPtrArray *pending_select;   /* uris to select once they are in the view */
     gboolean pending_scroll;
-    guint geom_id, reload_id, sel_id, done_id;
+    guint geom_id, reload_id, sel_id, done_id, cursor_id;
+    GFile *cursor_file;          /* the icon view gets its cursor here once it has placed the item */
+    int cursor_tries;
     GString *typeahead;
     gint64 typeahead_time;
     char *error;                 /* the folder could not be read */

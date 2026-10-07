@@ -1119,18 +1119,62 @@ static void select_path(Pane *p, GtkTreePath *path, gboolean on)
     else gtk_icon_view_unselect_path(GTK_ICON_VIEW(p->icon_view), path);
 }
 
+/* GtkIconView keeps a "scroll to" row reference for an item it has not placed yet and does not follow the rows that
+ * move or go meanwhile; freed later it releases a row of the GtkTreeModelSort it never held (Gtk-CRITICAL
+ * gtk_tree_model_sort_real_unref_node). So the cursor goes to an item only once the view has placed it. */
+static gboolean icon_item_placed(Pane *p, GtkTreePath *path)
+{
+    GdkRectangle r = { 0, 0, 0, 0 };
+    int pad = gtk_icon_view_get_item_padding(GTK_ICON_VIEW(p->icon_view));   /* (the rectangle includes it) */
+    return gtk_widget_get_realized(p->icon_view) && gtk_icon_view_get_cell_rect(GTK_ICON_VIEW(p->icon_view), path, NULL, &r)
+           && r.width > 2 * pad && r.height > 2 * pad;
+}
+
+static gboolean cursor_cb(gpointer d)
+{
+    Pane *p = d;
+    GtkTreeIter it;
+    GtkTreePath *path = NULL;
+    if (p->cursor_file && !prefs.list_view && store_iter_for(p, p->cursor_file, &it)) path = view_path_for(p, &it);
+    if (path && !icon_item_placed(p, path) && ++p->cursor_tries < 50) {
+        gtk_tree_path_free(path);
+        return G_SOURCE_CONTINUE;                    /* (not placed yet: again in a moment) */
+    }
+    if (path && icon_item_placed(p, path)) {
+        gtk_icon_view_set_cursor(GTK_ICON_VIEW(p->icon_view), path, NULL, FALSE);
+        gtk_icon_view_scroll_to_path(GTK_ICON_VIEW(p->icon_view), path, FALSE, 0, 0);
+    }
+    if (path) gtk_tree_path_free(path);
+    g_clear_object(&p->cursor_file);
+    p->cursor_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
 static void cursor_to(Pane *p, GtkTreePath *path)
 {
-    if (prefs.list_view) {
+    if (!prefs.list_view) {
+        if (icon_item_placed(p, path)) {
+            gtk_icon_view_set_cursor(GTK_ICON_VIEW(p->icon_view), path, NULL, FALSE);
+            gtk_icon_view_scroll_to_path(GTK_ICON_VIEW(p->icon_view), path, FALSE, 0, 0);
+            return;
+        }
+        GtkTreeIter it;
+        GFile *f = NULL;
+        if (gtk_tree_model_get_iter(p->sort, &it, path)) gtk_tree_model_get(p->sort, &it, COL_FILE, &f, -1);
+        if (!f) return;
+        if (p->cursor_file) g_object_unref(p->cursor_file);
+        p->cursor_file = f;
+        p->cursor_tries = 0;
+        if (!p->cursor_id) p->cursor_id = g_timeout_add(60, cursor_cb, p);
+        return;
+    }
+    {
         gtk_tree_view_scroll_to_cell(GTK_TREE_VIEW(p->list_view), path, NULL, FALSE, 0, 0);
         GtkTreeSelection *s = gtk_tree_view_get_selection(GTK_TREE_VIEW(p->list_view));
         GList *keep = gtk_tree_selection_get_selected_rows(s, NULL);
         gtk_tree_view_set_cursor(GTK_TREE_VIEW(p->list_view), path, NULL, FALSE);   /* (selects only it) */
         for (GList *l = keep; l; l = l->next) gtk_tree_selection_select_path(s, l->data);
         g_list_free_full(keep, (GDestroyNotify)gtk_tree_path_free);
-    } else {
-        gtk_icon_view_scroll_to_path(GTK_ICON_VIEW(p->icon_view), path, FALSE, 0, 0);
-        gtk_icon_view_set_cursor(GTK_ICON_VIEW(p->icon_view), path, NULL, FALSE);
     }
 }
 
@@ -1807,6 +1851,8 @@ void pane_free(Pane *p)
     if (p->reload_id) g_source_remove(p->reload_id);
     if (p->sel_id) g_source_remove(p->sel_id);
     if (p->done_id) g_source_remove(p->done_id);
+    if (p->cursor_id) g_source_remove(p->cursor_id);
+    if (p->cursor_file) g_object_unref(p->cursor_file);
     g_signal_handlers_disconnect_by_data(gtk_recent_manager_get_default(), p);
     g_signal_handlers_disconnect_by_data(p->sort, p);
     g_signal_handlers_disconnect_by_data(p->icon_view, p);

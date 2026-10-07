@@ -1644,7 +1644,9 @@ fi
 i=0; while [ "$i" -lt 30 ] && kill -0 "$FILES" 2>/dev/null; do sleep 0.2; i=$((i + 1)); done
 if kill -0 "$FILES" 2>/dev/null; then fail "hde-files --quit closes Hyggshi Files"; kill "$FILES" 2>/dev/null
 else pass "hde-files --quit closes Hyggshi Files"; fi
-check "Hyggshi Files logged no GTK criticals" sh -c "! grep -q 'CRITICAL' '$FL'"
+if grep -q 'CRITICAL' "$FL"; then
+    fail "Hyggshi Files logged no GTK criticals ($(grep 'CRITICAL' "$FL" | sed 's/.*CRITICAL \*\*: [0-9:.]*: //' | sort | uniq -c | tr '\n' ';' | cut -c1-400) after: $(grep -B5 -m1 'CRITICAL' "$FL" | grep -v -e '^hde-files: item ' -e 'CRITICAL' | tr '\n' '|' | cut -c1-700))"
+else pass "Hyggshi Files logged no GTK criticals"; fi
 grep -E "CRITICAL|WARNING" "$FL" | sort | uniq -c | sort -rn | head -n 6 | sed 's/^ */INFO: files.log: /' >> "$OUT/results.txt"
 if [ "$FAILS" -gt "$FAILS0" ]; then           # what Hyggshi Files did, for the failures above
     grep -v "^hde-files: item " "$FL" | tail -n 70 | sed 's/^/INFO: files.log: /' >> "$OUT/results.txt"
