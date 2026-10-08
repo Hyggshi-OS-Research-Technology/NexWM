@@ -2,6 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -Wpedantic -std=c11
 CPPFLAGS += -Ihde-core/include -Isrc
 BUILD ?= build
+.DEFAULT_GOAL := all
 CORE_SRC=hde-core/integration/core.c hde-core/settings/settings.c hde-core/session/session.c hde-core/desktop/desktop.c hde-core/panel/panel.c hde-core/notifications/notifications.c
 BACKEND_SRC=backend/backend.c backend/x11/x11_backend.c backend/wayland/wayland_backend.c
 CORE_OBJ=$(CORE_SRC:.c=.o) $(BACKEND_SRC:.c=.o)
