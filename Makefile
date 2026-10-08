@@ -190,7 +190,7 @@ $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h 
 $(BUILD)/nexwm: $(NEXWM_SRC) nexwm/src/nexwm.h $(VERSION_H) | $(BUILD)
 	@[ -n "$(XCB_CFLAGS)" ] || echo "NOTE: libxcb1-dev (pkg-config xcb) not found: this nexwm has no X11 window manager"
 	@[ -n "$(WLR_PC)" ] || echo "NOTE: libwlroots-dev (pkg-config wlroots) not found: this nexwm has no Wayland compositor"
-	$(CC) $(GUI_CFLAGS) -std=c11 -Inexwm/src -Isrc -I$(BUILD) $(XCB_CFLAGS) $(WLR_CFLAGS) -o $@ $(filter %.c,$^) \
+	$(CC) $(GUI_CFLAGS) -std=c11 $(XCB_CFLAGS) $(WLR_CFLAGS) -Inexwm/src -Isrc -I$(BUILD) -o $@ $(filter %.c,$^) \
 	    $(XCB_LIBS) $(WLR_LIBS) -lm
 # NexWM's configuration file and key bindings (nexwm/src/config.c): no display, no X server, no window manager
 $(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/nexwm.h | $(BUILD)
