@@ -527,6 +527,24 @@ static int x11_lock_run(struct lockui *ui)
     xcb_create_gc(x.conn, x.gc, x.win, 0, NULL);
     xcb_flush(x.conn);
 
+    /* The window has to be there and on the screen: if the X server refused it, the screen would stay unlocked while
+     * hde-lock looked as if it were locking it (there is no window manager to notice, this window is nobody's). */
+    xcb_generic_error_t *win_err = NULL;
+    xcb_get_window_attributes_reply_t *attr =
+        xcb_get_window_attributes_reply(x.conn, xcb_get_window_attributes(x.conn, x.win), &win_err);
+    bool on_screen = attr && attr->map_state == XCB_MAP_STATE_VIEWABLE;
+    free(attr);
+    if (!on_screen) {
+        logline("FAIL", "the lock window is not on the screen (%s): not locking the screen",
+                win_err ? x11_error_name(win_err->error_code) : "the X server kept it off the screen");
+        free(win_err);
+        xcb_destroy_window(x.conn, x.win);
+        xcb_flush(x.conn);
+        xcb_disconnect(x.conn);
+        return 3;
+    }
+    free(win_err);
+
     /* The keyboard and the mouse, kept by this window until the password is right. The keyboard is the one that
      * matters: without it the keys would go to whatever window has the focus. As long as this lock window is up
      * nothing on the screen can be clicked, so a program that holds the pointer for a moment (a menu, a flyout,
