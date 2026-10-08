@@ -62,11 +62,16 @@
 /* Brightness: no shell command any more, see src/hde-brightness.c (backlight through sysfs / systemd-logind, or
  * software dimming; no brightnessctl needed). */
 
-/* Screen lock: try real lockers first. `loginctl lock-session` only works when
- * some program listens to logind, so it comes last. On Wayland (the HDE (Wayland) session): swaylock or gtklock
- * (ext-session-lock, which labwc supports). */
+/* Screen lock: HDE's own lock screen first (hde-lock, src/hde-lock.c) — it knows both of HDE's sessions, the "HDE"
+ * session with a window of its own the window manager cannot touch, and the "HDE (Wayland)" session through the
+ * compositor's session lock protocol; the password is checked through PAM either way. Where it cannot lock (a
+ * compositor without ext-session-lock-v1, a build without PAM, no display at all) hde-lock says so in the log and
+ * exits 3, and this shell goes on to the lockers of other desktops. The lockers below are the fallback for a machine
+ * where HDE's own lock screen is not built or cannot lock that session; `loginctl lock-session` comes last, because it
+ * only works when some program listens to logind. */
 #define HDE_SH_LOCK \
-    "if [ -n \"$WAYLAND_DISPLAY\" ] && command -v swaylock >/dev/null 2>&1; then swaylock -f -c 1e222a; " \
+    "if command -v hde-lock >/dev/null 2>&1 && hde-lock; then :; " \
+    "elif [ -n \"$WAYLAND_DISPLAY\" ] && command -v swaylock >/dev/null 2>&1; then swaylock -f -c 1e222a; " \
     "elif [ -n \"$WAYLAND_DISPLAY\" ] && command -v gtklock >/dev/null 2>&1; then gtklock -d; " \
     "elif command -v light-locker-command >/dev/null 2>&1 && light-locker-command -l >/dev/null 2>&1; then :; " \
     "elif command -v xscreensaver-command >/dev/null 2>&1 && xscreensaver-command -lock >/dev/null 2>&1; then :; " \

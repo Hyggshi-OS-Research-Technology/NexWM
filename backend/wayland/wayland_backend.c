@@ -1,5 +1,6 @@
 /* The Wayland backend of hde-core: the "HDE (Wayland)" session (labwc compositor, see apps/hde-session.c).
- * Session actions are the same shell commands as on X11 (systemd / logind, HDE_SH_LOCK picks a Wayland locker). */
+ * Session actions are the same shell commands as on X11 (systemd / logind; HDE_SH_LOCK runs HDE's own lock screen,
+ * hde-lock, first and only falls back to another locker). */
 #include "hde/backend.h"
 #include "hde-commands.h"
 #include <stdlib.h>

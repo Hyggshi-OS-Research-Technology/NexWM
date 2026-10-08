@@ -168,6 +168,31 @@ done
 if [ -z "$miss" ]; then pass "ldd: every built program finds all of its libraries"
 else fail "ldd: missing libraries for:$miss"; ldd "$B/hde-panel" 2>/dev/null | grep "not found" | sed 's/^/INFO:   /' >> "$OUT/results.txt"; fi
 
+# HDE's own lock screen: Fedora's pam-devel, cairo-devel and libxcb-devel build it (packaging/fedora/deps.sh), so both
+# of HDE's sessions can be locked here with HDE's own locker and the password checked the way Fedora checks it.
+if [ -x "$B/hde-lock" ]; then
+    pass "hde-lock is built (HDE's own lock screen)"
+    v=$("$B/hde-lock" --version 2>&1)
+    case "$v" in
+    *"X11 session (XCB): yes"*) pass "hde-lock has the X11 session lock (libxcb)" ;;
+    *) fail "hde-lock has the X11 session lock (libxcb): $(printf '%s' "$v" | tr '\n' ' ')" ;;
+    esac
+    case "$v" in
+    *"Wayland session (ext-session-lock-v1): yes"*) pass "hde-lock has the Wayland session lock (wayland-client + xkbcommon)" ;;
+    *) fail "hde-lock has the Wayland session lock (wayland-client + xkbcommon): $(printf '%s' "$v" | tr '\n' ' ')" ;;
+    esac
+    case "$v" in
+    *"Password check (PAM): yes"*) pass "hde-lock checks the password through Fedora's PAM" ;;
+    *) fail "hde-lock checks the password through Fedora's PAM (pam-devel missing?): $(printf '%s' "$v" | tr '\n' ' ')" ;;
+    esac
+    if ldd "$B/hde-lock" 2>/dev/null | grep -q "not found"; then
+        fail "ldd: hde-lock finds all of its libraries"
+        ldd "$B/hde-lock" 2>/dev/null | grep "not found" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+    else pass "ldd: hde-lock finds all of its libraries"; fi
+else
+    info "no hde-lock in $B (packaging/fedora/deps.sh installs what builds it: pam-devel, cairo-devel, libxcb-devel)"
+fi
+
 # NexWM: HDE's own window manager is built here, so a base Fedora without metacity or openbox would have a window
 # manager after all. The base part of this test is about the other path — a session that finds no window manager at all
 # and has to say so — so the one HDE brings is put aside for it; the phase after the base checks puts it back and looks
@@ -212,6 +237,7 @@ if [ "$MODE" = full ]; then
 
     check "the panel publishes its window (_HDE_PANEL_WINDOW)" \
         sh -c "[ \"\$($XT root-window _HDE_PANEL_WINDOW)\" != 0 ]"
+    check "hde-lock --check says this X session can be locked (the lock screen of HDE itself)" "$B/hde-lock" --check
     l=$(grep "^hde-panel: measured: " "$LOG" | tail -n 1)
     case "$l" in
     *"fits") pass "the panel measured itself on this screen: ${l#hde-panel: measured: }" ;;
