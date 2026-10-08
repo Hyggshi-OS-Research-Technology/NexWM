@@ -234,22 +234,26 @@ has "and which of its two sides went into this build (X11 here, or this test wou
     "X11 window manager (XCB): yes" "$out"
 has "and the same for the Wayland side (yes or no, with what to install)" "Wayland compositor (wlroots):" "$out"
 
-# the Wayland side of this build: either the compositor (still being written: it says where it is going, status 4) or
-# nothing at all (status 4 and what to install) — never a crash and never a silent success
-out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --wayland 2>&1); st=$?
-if [ "$st" = 4 ]; then
-    has "the Wayland side answers for itself (status 4: the compositor is the next step)" "compositor" "$out"
+# Do not start a real compositor in this X11 test. Without wlroots the stub reports status 4; with wlroots, an
+# intentionally missing XDG_RUNTIME_DIR reports status 3. The dedicated headless test exercises the compositor itself.
+case "$out" in
+    *"Wayland compositor (wlroots): yes"*) WAYLAND_STATUS=3; WAYLAND_REASON=XDG_RUNTIME_DIR ;;
+    *) WAYLAND_STATUS=4; WAYLAND_REASON="no Wayland compositor" ;;
+esac
+out=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_RUNTIME_DIR "$NEXWM" --wayland 2>&1); st=$?
+if [ "$st" = "$WAYLAND_STATUS" ]; then
+    has "the Wayland side reports the expected build/runtime condition (status $WAYLAND_STATUS)" "$WAYLAND_REASON" "$out"
 else
-    fail "--wayland: expected status 4, got $st ('$out')"
+    fail "--wayland: expected status $WAYLAND_STATUS, got $st ('$out')"
 fi
 
-# the compositor gets the session command from the session (hde-session --wayland --wm nexwm): it must be taken, not
-# refused as an unknown option — the compositor itself says what it does with it
-out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --wayland --session "/usr/bin/hde-session --wayland-inner" 2>&1); st=$?
-if [ "$st" = 4 ]; then
-    pass "the Wayland side takes the session command of a session (status 4: the compositor is the next step)"
+# The compositor must accept the session command from hde-session --wayland --wm nexwm, not reject it as an unknown
+# option. The same deliberate missing-runtime condition keeps this check from trying to own a real Wayland socket.
+out=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_RUNTIME_DIR "$NEXWM" --wayland --session "/usr/bin/hde-session --wayland-inner" 2>&1); st=$?
+if [ "$st" = "$WAYLAND_STATUS" ]; then
+    pass "the Wayland side accepts the session command (status $WAYLAND_STATUS)"
 else
-    fail "--wayland --session: expected status 4, got $st ('$out')"
+    fail "--wayland --session: expected status $WAYLAND_STATUS, got $st ('$out')"
 fi
 hasnt "and it is not refused as an unknown option" "unknown option" "$out"
 out=$(env -u DISPLAY -u WAYLAND_DISPLAY "$NEXWM" --wayland --session 2>&1); st=$?
