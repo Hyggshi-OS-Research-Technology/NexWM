@@ -1,7 +1,7 @@
 # The HDE login screen — who made it
 
 * **Theme (the QML of `Main.qml` and `components/`, `theme.conf`, `metadata.desktop`, `install.sh`,
-  `tools/make-background.py`, `tests/sddm-test.sh`)** — Hyggshi OS Research Technology, written for the Hyggshi
+  `tools/make-background.py`, `tests/sddm-test.sh`, `tests/sddm-qml-test.py`)** — Hyggshi OS Research Technology, written for the Hyggshi
   Desktop Environment (HDE); MIT, like the rest of NexWM (see the LICENSE at the root of the repository).
 * **The greeting contract the theme follows** — SDDM (the Simple Desktop Display Manager) and its components: the
   `metadata.desktop` keys, the context objects (`sddm`, `userModel`, `sessionModel`, `screenModel`, `keyboard`), the

@@ -8,6 +8,7 @@ Column {
     property color accent: "#3584e4"
     property string fontFamily: ""
     property alias currentIndex: combo.index
+    readonly property bool open: combo.open          // the list of sessions is open: the keyboard is its
     property var names: []
     signal picked(int index)
     function closeCombo() { combo.open = false; }

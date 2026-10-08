@@ -751,3 +751,45 @@ while the screen is really locked (an unlocked desktop used to pass some of them
 same on the compositor's session lock (`ext-session-lock-v1`) and checks that the compositor shows nothing but the
 lock screen, that `pam_deny` keeps it locked and that the password unlocks it. Fedora checks that `pam-devel`,
 `libxcb-devel`, `wayland-devel` and `libxkbcommon-devel` really built all three backends of `hde-lock` there.
+
+## The login screen: the field to type the user name in (fix 19)
+
+The HDE login screen (`login/sddm/hde`, an SDDM theme) could come up with no user tiles *and* no field to type a user
+name in: the card showed the password field, the *Sign in* button answered *Please choose a user.* and there was
+nothing to type into at all. The screen was unusable, and its Enter key complained instead of giving the keyboard to a
+field.
+
+### Fixed
+
+- **A user list that is empty is not a user list.** SDDM builds the greeter's `userModel` from `getpwent()`, leaving
+  accounts out by uid range (`[Users] MinimumUid` / `MaximumUid` in `/etc/sddm.conf.d`) and by `HideUsers` /
+  `HideShells`; on a machine where that comes out empty, `HdeUsers` was 0 pixels high while `theme.conf` said
+  `userMode=user`, so no tiles and no name field were drawn and `userName` stayed empty: the login screen could not
+  name anybody. `Main.qml` now decides from what the greeter actually gave (`haveUserTiles` = tiles are shown *and*
+  `users.count > 0`) and falls back to a **user name field** (`showNameField`) whenever there is no tile list to show,
+  or when `userMode=username` is asked for. The card says why the list is missing ("This login screen has no user
+  list: type your user name."), `tryLogin()` reads the typed name, and `sddm.login()` is called with it — typing a name
+  and pressing Enter now logs in.
+- **The keyboard goes into the card.** With the greeter having taken the keyboard for its own window, `focus = true`
+  was not enough — the fields stayed unfocused, so typing went nowhere and the card's own Enter handler ran with the
+  keyboard outside it (which is where *Please choose a user.* came from). `HdeField`/`HdePassword.focusField()` use
+  `forceActiveFocus()` now, `Main.qml` puts the keyboard in the first field when the theme is loaded, when the card is
+  clicked and from a 600 ms watchdog `Timer`, and Enter with the keyboard nowhere focuses a field instead of
+  complaining. The names of the fields are in the greeter's log (`hde-login: the greeter listed 1 user(s)`,
+  `hde-login: the greeter listed no users: the login screen offers a user name field`, `hde-login: the keyboard is in
+  the password field`) so this is diagnosable from `journalctl -u sddm`.
+- **A `ReferenceError` in every greeter without a keyboard object.** `HdeLayouts.qml` connected to `keyboard` without a
+  guard; SDDM only has that object from 0.19 on, and on an older one the connection was a QML error. And
+  `closeChoosers()` called `layouts.closeCombo()` while `HdeLayouts` had no `id` — no session or layout popup could be
+  closed. Both fixed; `theme.conf` documents `showUserList` separately from the user mode.
+
+### Tests
+
+`tests/sddm-test.sh` now checks what the card decided from what the greeter gave it (the log lines above), where the
+keyboard is, that typing reaches the card (xdotool, when the WM-less CI X server delivers it) and renders the screen a
+second time with `[Users] MinimumUid=60000` written into `/etc/sddm.conf.d` so the greeter really does hand over no
+users: the name field has to be there, and the card still drawn. `tests/sddm-qml-test.py` (new, PySide6/Qt 6,
+offscreen, no display, no SDDM, no root) loads `Main.qml` with a greeter made in the test and checks three
+situations end to end — one user (tiles, keyboard in the password field), an empty user list and no user model at all
+(the name field appears, the keyboard goes into it, typing a name reaches `sddm.login()`): 27 checks, run by
+`sh tests/sddm-test.sh` and installed in the SDDM job of the CI. `pyside6-qmllint` on every QML file: no errors.

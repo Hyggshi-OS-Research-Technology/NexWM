@@ -5,6 +5,7 @@ import QtQuick 2.0
 Column {
     id: root
     property alias text: input.text
+    readonly property bool editing: input.activeFocus   // the keyboard is in this field
     property string label: ""
     property color accent: "#3584e4"
     property string fontFamily: ""
@@ -12,7 +13,10 @@ Column {
     signal accepted()
     spacing: 5
 
-    function focusField() { input.focus = true; input.cursorPosition = input.text.length; }
+    // forceActiveFocus, not focus = true: the greeter shows its window after the theme has loaded and takes the
+    // keyboard for itself on the way, which leaves a field that only asked politely without it. This puts the
+    // keyboard in the field now, and in it again when the window becomes active.
+    function focusField() { input.forceActiveFocus(); input.cursorPosition = input.text.length; }
 
     Text {
         visible: root.label !== ""

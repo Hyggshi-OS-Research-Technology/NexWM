@@ -77,6 +77,16 @@ Rectangle {
     property string message: ""
     property bool messageIsError: false
     property bool busy: false
+    property bool toldAboutTheKeyboard: false   // the greeter took the keyboard: said once in the greeter's log
+    property bool reportedTheKeyboard: false    // where the keyboard really is: said once, too
+
+    // The users the greeter handed over, and whether it is worth showing them: a greeter can give none at all (SDDM
+    // leaves accounts out of its list by uid range — [Users] MinimumUid / MaximumUid — and by HideUsers / HideShells),
+    // and a theme can be told not to show the list. When there is no list to choose from the card shows a field to
+    // type a user name in instead: without it there would be no way to say *who* is logging in, the Sign in button
+    // would stay grey for ever and nobody could log in at all.
+    readonly property bool haveUserTiles: showUserList && userMode === "user" && users.count > 0
+    readonly property bool showNameField: userMode === "username" || !haveUserTiles
 
     color: "#0b0f18"
 
@@ -134,11 +144,12 @@ Rectangle {
             border.width: 1
             border.color: "#26334a"
 
-            // a click on the card itself closes an open list (the lists close by themselves when the cursor moves on)
+            // a click on the card itself closes an open list and puts the keyboard back in a field of the card (the
+            // cursor in the wrong place is what "typing does nothing" is made of)
             MouseArea {
                 anchors.fill: parent
                 z: -1
-                onPressed: root.closeChoosers()
+                onPressed: { root.closeChoosers(); root.focusFirst(false); }
             }
 
             // a soft accent line on top of the card
@@ -193,7 +204,7 @@ Rectangle {
                 // the users of this computer (avatars and real names)
                 HdeUsers {
                     id: users
-                    visible: root.showUserList && root.userMode === "user"
+                    visible: root.haveUserTiles
                     width: parent.width
                     accent: root.accent
                     fontFamily: root.fontFamily
@@ -204,16 +215,18 @@ Rectangle {
                     }
                 }
 
-                // ... or a plain user name field (userMode=username)
+                // ... or a field to type a user name in: this is what the screen falls back to when there is no list
+                // to choose from (userMode=username, showUserList=false, or a greeter that gave no users at all)
                 HdeField {
                     id: nameField
-                    visible: root.userMode === "username"
+                    visible: root.showNameField
                     width: parent.width
-                    label: "User"
+                    label: "User name"
                     accent: root.accent
                     fontFamily: root.fontFamily
                     icon: "user"
-                    onAccepted: root.tryLogin()
+                    onTextChanged: if (root.userName !== nameField.text) root.userName = nameField.text
+                    onAccepted: root.nameAccepted()
                 }
 
                 HdePassword {
@@ -252,6 +265,7 @@ Rectangle {
                     }
 
                     HdeLayouts {
+                        id: layouts
                         visible: root.showLayouts
                         width: (parent.width - 10) / 2
                         accent: root.accent
@@ -300,11 +314,12 @@ Rectangle {
     function tryLogin() {
         if (root.busy) return;
         var user = root.userName;
-        if (root.userMode === "username") user = nameField.text;
+        if (root.showNameField) user = nameField.text;
         if (!user || user === "") {
-            root.message = root.userMode === "username" ? "Please type a user name." : "Please choose a user.";
+            root.message = root.showNameField ? "Please type a user name." : "Please choose a user.";
             root.messageIsError = true;
             messageLine.shake();
+            root.focusFirst(false);
             return;
         }
         root.userName = user;
@@ -313,9 +328,45 @@ Rectangle {
         sddm.login(user, field.passwordText, root.sessionIndex);
     }
 
+    // Enter in the user name field: the password is the next thing to type, so the cursor goes there (unless one was
+    // already typed, and then Enter means the same as the Sign in button)
+    function nameAccepted() {
+        root.userName = nameField.text;
+        if (field.passwordText === "") field.focusField();
+        else root.tryLogin();
+    }
+
+    // Enter with the keyboard in the card: it logs in. With the keyboard *nowhere* (the greeter took it after the
+    // theme had loaded) it must not answer "Please choose a user." to someone who was trying to type: the login
+    // screen takes the keyboard back into the field to type in, and says so in the greeter's log.
+    function enterPressed() {
+        if (root.keyboardWhere() === "") { root.focusFirst(true); return; }
+        root.tryLogin();
+    }
+
+    // where the keyboard is, in words ("user name field", "password field", or nowhere)
+    function keyboardWhere() {
+        if (nameField.visible && nameField.editing) return "user name field";
+        if (field.editing) return "password field";
+        return "";
+    }
+
+    // the keyboard goes into the name field when there is one to type in, and into the password field otherwise
+    function focusFirst(report) {
+        if (root.showNameField) nameField.focusField();
+        else field.focusField();
+        if (report) console.log("hde-login: the keyboard goes into the " + (root.showNameField ? "user name field" : "password field"));
+    }
+
     function closeChoosers() {
         if (root.showSessions) sessions.closeCombo();
         if (root.showLayouts) layouts.closeCombo();
+    }
+
+    // is a list of the card open (the session or the keyboard layout)? The keyboard belongs to it while it is, so
+    // nothing of the login screen may take it away from there
+    function chooserOpen() {
+        return (root.showSessions && sessions.open) || (root.showLayouts && layouts.open);
     }
 
     function showGreeterMessage(text, isError) {
@@ -342,17 +393,70 @@ Rectangle {
     }
 
     Component.onCompleted: {
-        // the user who logged in last (or the first one), like every login screen does
-        if (root.userMode === "user" && root.showUserList && users.count > 0) {
+        // The list of users, and whether there is one at all: the theme says so in the greeter's log (journalctl -u
+        // sddm, or the log of the session that started the greeter), which is where a login screen that offers a
+        // user name field instead of the avatars can be understood.
+        var listed = users.count;
+        if (listed === 0 && root.userMode === "user" && root.showUserList)
+            console.log("hde-login: the greeter listed no users: the login screen offers a user name field");
+        else
+            console.log("hde-login: the greeter listed " + listed + " user(s)");
+        if (listed === 0 && root.userMode === "user" && root.showUserList) {
+            // said once, in the neutral colour: the field below is not a mistake, and it is the way in
+            root.message = "This login screen has no user list: type your user name.";
+            root.messageIsError = false;
+        }
+        if (root.showNameField) {
+            // a last user the greeter remembers (SDDM's state.conf) goes into the field even when the list leaves
+            // that account out, so the only thing left to type is the password
+            var hint = (typeof userModel !== "undefined" && userModel && userModel.lastUser)
+                       ? String(userModel.lastUser) : "";
+            if (hint !== "" && nameField.text === "") nameField.text = hint;   // onTextChanged fills root.userName
+        } else {
+            // the user who logged in last (or the first one), like every login screen does
             var last = (typeof userModel !== "undefined" && userModel.lastUser !== "") ? userModel.lastUser : users.currentName;
             root.userName = last;
         }
-        if (root.userMode === "username") nameField.focusField();
-        else field.focusField();
+        root.focusFirst(true);
     }
 
-    // Enter anywhere in the card logs in (the password field handles its own Enter)
-    Keys.onReturnPressed: root.tryLogin()
-    Keys.onEnterPressed: root.tryLogin()
+    // The greeter shows its window after the theme has loaded, and the keyboard can end up on its own root object
+    // instead of on a field of the card — SDDM's greeter does this, and on a slow machine (a virtual one) it can be
+    // seconds after the screen is already up. A login screen where typing does nothing is worse than useless, so the
+    // theme keeps an eye on it and puts the keyboard back into the field to type in whenever it is nowhere. It stays
+    // out of the way while a login is being checked and while a list of the card is open (that list has it then), and
+    // it says the first time in the greeter's log that this happened.
+    Timer {
+        interval: 600
+        running: true
+        repeat: true
+        onTriggered: {
+            if (root.busy) return;
+            var where = root.keyboardWhere();
+            if (where === "") {
+                if (root.chooserOpen()) return;        // a list of the card has the keyboard: it is its turn
+                if (!root.toldAboutTheKeyboard) {
+                    root.toldAboutTheKeyboard = true;
+                    console.log("hde-login: nothing in the card had the keyboard: it is put back in the field to type in");
+                }
+                root.focusFirst(false);
+                return;
+            }
+            if (!root.reportedTheKeyboard) {            // and once it really is there, say so (not before)
+                root.reportedTheKeyboard = true;
+                console.log("hde-login: the keyboard is in the " + where);
+            }
+        }
+    }
+
+    // The keyboard on the card itself: the fields handle their own keys, so a key arriving *here* means it is
+    // nowhere — the login screen puts it back in the field to type in instead of swallowing what is typed.
+    Keys.onPressed: {
+        if (root.keyboardWhere() === "") root.focusFirst(true);
+    }
+
+    // Enter anywhere in the card logs in (the fields handle their own Enter)
+    Keys.onReturnPressed: root.enterPressed()
+    Keys.onEnterPressed: root.enterPressed()
     focus: true
 }
