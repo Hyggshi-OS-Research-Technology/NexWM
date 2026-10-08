@@ -220,8 +220,9 @@ $(BUILD)/nexwm: $(NEXWM_SRC) $(NEXWM_HEADERS) $(VERSION_H) $(NEXWM_WLR_PROTOCOL_
 	@[ -n "$(WLR_PC)" ] || echo "NOTE: libwlroots-dev (pkg-config wlroots) not found: this nexwm has no Wayland compositor"
 	$(CC) $(GUI_CFLAGS) -std=c11 $(XCB_CFLAGS) $(WLR_CFLAGS) -Inexwm/src -Isrc -I$(BUILD) -o $@ $(filter %.c,$^) \
 	    $(XCB_LIBS) $(WLR_LIBS) -lm
-# NexWM's configuration file and key bindings (nexwm/src/config.c): no display, no X server, no window manager
-$(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/nexwm.h | $(BUILD)
+# NexWM's configuration file (nexwm/src/config.c) and the arithmetic of its frames (nexwm/src/frame.c: the title bar,
+# its buttons, the mouse): no display, no X server, no window manager, so `make check-unit` runs them anywhere
+$(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/frame.c nexwm/src/frame.h nexwm/src/nexwm.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Inexwm/src -o $@ $(filter %.c,$^)
 ifeq ($(NEXWM_WAYLAND_PROBE),yes)
 $(BUILD)/nexwm-wayland-probe: tests/nexwm-wayland-probe.c | $(BUILD)

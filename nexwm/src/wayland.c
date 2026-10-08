@@ -1664,10 +1664,31 @@ static bool server_init(NexwmServer *server)
     return true;
 }
 
+/* Take a listener of this program off the object it was put on. A listener that was never added (the compositor
+ * failed before it got that far) is left alone: wl_list_remove on nothing is a crash, not a no-op. */
+static void listener_remove(struct wl_listener *listener)
+{
+    if (listener->link.prev || listener->link.next) wl_list_remove(&listener->link);
+}
+
 static void server_finish(NexwmServer *server)
 {
     stop_session_command(server);
     if (server->display) wl_display_destroy_clients(server->display);
+    /* Every listener this program put on something of wlroots comes off before the objects are destroyed. The cursor
+     * is the one that insists on it: wlr_cursor_destroy requires that nothing is listening to it any more ("Assertion
+     * `wl_list_empty(&cur->events.motion.listener_list)' failed" — wlr_cursor.c), and a distribution builds wlroots
+     * with its assertions on, so a compositor that leaves its listeners behind is ended by an abort (status 134)
+     * instead of the clean exit its session asked for. The seat's listeners go before the backend that owns the seat
+     * is destroyed, and the shell's before the display takes the shells down. */
+    listener_remove(&server->cursor_motion);
+    listener_remove(&server->cursor_motion_absolute);
+    listener_remove(&server->cursor_button);
+    listener_remove(&server->request_set_cursor);
+    listener_remove(&server->request_set_selection);
+    listener_remove(&server->new_toplevel);
+    listener_remove(&server->new_popup);
+    listener_remove(&server->new_layer_surface);
     if (server->backend) {
         wl_list_remove(&server->new_output.link);
         wl_list_remove(&server->new_input.link);
@@ -1686,7 +1707,6 @@ static void server_finish(NexwmServer *server)
     if (server->display) wl_display_destroy(server->display);
     nexwm_config_free(&server->config);
 }
-
 int nexwm_wayland_run(const char *config_path, int replace, const char *session)
 {
     if (replace) {

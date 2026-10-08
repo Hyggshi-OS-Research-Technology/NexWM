@@ -6,11 +6,13 @@
 #   1. without a display at all: the help and the version, a mistake in the configuration file (exit status 2), no
 #      display (exit status 3) — what a session shows the user on a login screen, or finds in its log;
 #   2. in Xvfb: NexWM takes the screen over (_NET_SUPPORTING_WM_CHECK and the EWMH properties a session needs), puts a
-#      frame around a window with the border from the configuration, gives it the focus, and tells the programs how
-#      thick that frame is (_NET_FRAME_EXTENTS);
+#      frame around a window — the title bar and the border from the configuration, read back off the screen — gives it
+#      the focus, and tells the programs how thick that frame is (_NET_FRAME_EXTENTS, the bar counted into the top);
 #   3. the key bindings of ~/.config/hde/nexwm.conf (HDE_NEXWM_CONF here, so the file of the user is never touched):
 #      workspaces (counted from 1 in the file, from 0 in the protocol), moving a window to another workspace, snap
-#      left/right, maximize and unmaximize, full screen, spawn, and close (WM_DELETE_WINDOW, not a kill);
+#      left/right, maximize and unmaximize, full screen, spawn, minimize, and close (WM_DELETE_WINDOW, not a kill);
+#   3b. the mouse: dragging the title bar moves the window, dragging an edge resizes it, the three buttons of the bar
+#      minimize, maximize and close it, and the drawing of the bar and of a button is read back pixel by pixel;
 #   4. what HDE's panel asks of it: the struts of a dock window shrink the work area, and a maximized window stays clear
 #      of the panel (tests/nexwm-client.c --dock is that panel);
 #   5. the way out: `quit` gives every window back (no frame, no _NET_FRAME_EXTENTS, back to the root) and leaves the
@@ -57,7 +59,7 @@ mkdir -p "$OUT/bin"
 MAIN_PID=$$
 # Every process this test starts is named here from the beginning, so the cleanup below can put all of them away even
 # when the test ends in the middle of a section.
-XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; METACITY_PID=""
+XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; CLOSE_PID=""; METACITY_PID=""
 
 # The watchdog is tests/nexwm-watchdog.sh, a separate program with its own reasons written down at the top of it: it
 # says where a hanging test got stuck, asks it to leave, and kills what is left of it when the signal cannot be acted
@@ -67,14 +69,15 @@ WATCHDOG_PID=$!
 
 # Every process this test starts is named here from the beginning, so the cleanup below can put all of them away even
 # when the test ends in the middle of a section.
-XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; METACITY_PID=""
+XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; CLOSE_PID=""; METACITY_PID=""
 
 # What the test started is put away by the test, whatever way it ends: the X server, the window manager(s), the windows
 # and the tools that may be waiting for the X server. A test that leaves a process behind leaves a CI step that never
 # finishes (the step is over only when the last holder of its stdout is gone), which is a hang nobody can read.
 cleanup() {
     kill -TERM "$WATCHDOG_PID" 2>/dev/null
-    for p in ${WM_PID:-} ${WM2_PID:-} ${METACITY_PID:-} ${ALPHA_PID:-} ${BETA_PID:-} ${DOCK_PID:-} ${XVFB_PID:-}; do
+    for p in ${WM_PID:-} ${WM2_PID:-} ${METACITY_PID:-} ${ALPHA_PID:-} ${BETA_PID:-} ${DOCK_PID:-} ${CLOSE_PID:-} \
+             ${XVFB_PID:-}; do
         [ -n "$p" ] && kill -TERM "$p" 2>/dev/null
     done
 }
@@ -213,6 +216,46 @@ pressed() {     # what it does, the key, the line the log must show
         fail "$1: '$2' did not make the log say '$3'"
     fi
 }
+# the mouse: a press, a move of the pointer, and the release that ends it (the window manager holds the pointer for the
+# whole of it, so the window follows it even when the pointer leaves the window), and a plain click. Neither waits for a
+# log line: what they did is read back from the window itself by the checks that follow.
+# A drag is four programs (a move, a press, a move, a release), and the window manager reads them from X in that order
+# whenever the server hands them over: on a machine with other work to do, the press can still be in the queue when the
+# pointer is already moving, and a drag the window manager never saw is not a window manager that cannot drag. The
+# pause between them is for X, not for the window manager, which is as fast as the server lets it be.
+drag() {        # from x,y to x2,y2
+    $TMO xdotool mousemove "$1" "$2" >/dev/null 2>&1
+    $TMO xdotool mousedown 1 >/dev/null 2>&1
+    sleep 0.2
+    $TMO xdotool mousemove --sync "$3" "$4" >/dev/null 2>&1
+    sleep 0.2
+    $TMO xdotool mouseup 1 >/dev/null 2>&1
+    sleep 0.2
+}
+click() {       # at x,y
+    $TMO xdotool mousemove --sync "$1" "$2" >/dev/null 2>&1
+    $TMO xdotool click 1 >/dev/null 2>&1
+}
+# A click that has to change something: the check below says what it must do, and it is made once more when nothing
+# changed — the pointer was put over the button by another program, and the press may have arrived before the window
+# manager had been told the pointer was there. Two clicks that change nothing are the window manager's doing.
+click_until() { # what it is, at x,y, the window, "X Y W H" it must make, the log line the action leaves
+    before=$(grep -c -- "$6" "$LOG" 2>/dev/null)
+    click "$2" "$3"
+    if wait_place "$4" "$5" 8; then return 0; fi
+    # Clicking again is only right when the click never reached the window manager at all: if it did — the log line is
+    # there — then the action was asked for, and a second click would ask for the opposite of it.
+    after=$(grep -c -- "$6" "$LOG" 2>/dev/null)
+    if [ "$before" = "$after" ] && [ "$(xywh "$4")" != "$5" ]; then
+        info "$1: the click did not reach the window manager (the window is at $(xywh "$4")), clicking again"
+        click "$2" "$3"
+    fi
+    return 0
+}
+# the colour of one pixel of the screen as "R G B": whatever is drawn on top of that pixel decides it, so a title bar
+# that is drawn can be read back from here (tests/xtool.py talks to libX11 through ctypes; without it, the checks that
+# read pixels say so instead of failing)
+px() { $XT pixel "$1" "$2" 2>/dev/null; }
 # where a window must be: the place and the size both (the message carries what was seen instead)
 at() {          # what it is, the window, "X Y W H"
     if wait_place "$2" "$3" 8; then
@@ -220,6 +263,19 @@ at() {          # what it is, the window, "X Y W H"
     else
         fail "$1: expected '$3', got '$(xywh "$2")'"
     fi
+}
+# A pixel of the screen that has to show a colour: the drawing comes after the request that caused it (a frame that was
+# just resized is painted a moment later), so the pixel is read again until the colour is there — a colour that never
+# comes is a failure that carries what was read instead, the same way a window that never gets to its place does.
+eqpx() {        # what it is, "R G B", X, Y
+    i=0
+    v=""
+    while [ "$i" -lt 8 ]; do
+        v=$(px "$3" "$4")
+        [ "$v" = "$2" ] && break
+        i=$((i + 1)); sleep 0.25
+    done
+    eq "$1" "$2" "$v"
 }
 
 # ---- what the test starts, and how it is cleaned up again -----------------------------------------------
@@ -378,7 +434,11 @@ EOF
                 "$(rval _NEXWM_KEYS)"
 
             # a window, and what the window manager does with it
-            "$CLIENT" --title nexwm-alpha --class nexwm-alpha --size 600x400 --pos 60,60 > "$OUT/alpha.out" 2>&1 &
+            # --timeout 0: this window is driven by the whole test (which is longer than the client's 60 s default,
+            # and a window that leaves in the middle of it takes every later check with it). What keeps a window from
+            # hanging the test is the cleanup below (every pid it started is killed there) and the watchdog.
+            "$CLIENT" --title nexwm-alpha --class nexwm-alpha --size 600x400 --pos 60,60 --timeout 0 \
+                > "$OUT/alpha.out" 2>&1 &
             ALPHA_PID=$!
             ALPHA=""
             i=0
@@ -396,12 +456,12 @@ EOF
                 else
                     fail "it is not in _NET_CLIENT_LIST ($(rval _NET_CLIENT_LIST))"
                 fi
-                eq "_NET_FRAME_EXTENTS is the border of the configuration file" "6, 6, 6, 6" \
+                eq "_NET_FRAME_EXTENTS is the border, with the title bar counted into the top" "6, 6, 30, 6" \
                    "$(wval "$ALPHA" _NET_FRAME_EXTENTS)"
                 eq "the window kept the place it asked for" "60 60 600 400" "$(xywh "$ALPHA")"
                 FRAME=$(parentof "$ALPHA")
                 info "the window the test window sits in is '$FRAME' (xwininfo -children)"
-                eq "the frame around it is the window plus two borders" "54 54 612 412" "$(xywh "$FRAME")"
+                eq "the frame around it is the window, its border and its title bar" "54 30 612 436" "$(xywh "$FRAME")"
                 eq "and the window has the focus" "$ALPHA" "$(rval _NET_ACTIVE_WINDOW | id_of)"
                 has "the panel is told what it may ask the window to do" "_NET_WM_ACTION_CLOSE" \
                     "$(wval "$ALPHA" _NET_WM_ALLOWED_ACTIONS)"
@@ -426,28 +486,189 @@ EOF
 
                 # snap: half of the work area (1024x768), the frame following the window
                 pressed "Super+Right snaps the window to the right half" "super+Right" "snapped right"
-                at "the right half of the screen: 512 wide, full height" "$ALPHA" "512 0 512 768"
+                at "the right half of the work area, the frame fitting it" "$ALPHA" "518 30 500 732"
                 pressed "Super+Left snaps it to the left half" "super+Left" "snapped left"
-                at "the left half of the screen" "$ALPHA" "0 0 512 768"
+                at "the left half of it" "$ALPHA" "6 30 500 732"
 
                 pressed "Super+Up maximizes it" "super+Up" "maximized 0x${ALPHA#0x}"
-                at "the whole screen while nothing reserves room" "$ALPHA" "0 0 1024 768"
+                at "the whole work area (the window keeps its bar and its border)" "$ALPHA" "6 30 1012 732"
                 has "and _NET_WM_STATE says so (the panel draws its button that way)" "_NET_WM_STATE_MAXIMIZED_VERT" \
                     "$(wval "$ALPHA" _NET_WM_STATE)"
                 has "with the horizontal half too" "_NET_WM_STATE_MAXIMIZED_HORZ" "$(wval "$ALPHA" _NET_WM_STATE)"
                 pressed "Super+Down gives the old place back" "super+Down" "unmaximized 0x${ALPHA#0x}"
-                at "the place before the maximize (the snapped one)" "$ALPHA" "0 0 512 768"
+                at "the place before the maximize (the snapped one)" "$ALPHA" "6 30 500 732"
                 hasnt "and the maximized state is gone" "_NET_WM_STATE_MAXIMIZED_VERT" "$(wval "$ALPHA" _NET_WM_STATE)"
 
                 pressed "Super+F makes it full screen" "super+f" "full screen 0x${ALPHA#0x}"
                 at "the whole screen" "$ALPHA" "0 0 1024 768"
                 has "and _NET_WM_STATE says full screen" "_NET_WM_STATE_FULLSCREEN" "$(wval "$ALPHA" _NET_WM_STATE)"
+                eq "a full screen window has no frame left for a program to keep out of" "0, 0, 0, 0" \
+                   "$(wval "$ALPHA" _NET_FRAME_EXTENTS)"
                 pressed "Super+F again takes it back" "super+f" "back from full screen"
-                at "the place it had before" "$ALPHA" "0 0 512 768"
+                at "the place it had before" "$ALPHA" "6 30 500 732"
                 hasnt "and the full screen state is gone" "_NET_WM_STATE_FULLSCREEN" "$(wval "$ALPHA" _NET_WM_STATE)"
+                eq "and the frame is back in _NET_FRAME_EXTENTS (the bar counts into the top)" "6, 6, 30, 6" \
+                   "$(wval "$ALPHA" _NET_FRAME_EXTENTS)"
+
+                # ---- 3b. the title bar and the mouse ---------------------------------------------------------
+                # The window is the one Super+Left snapped to the left half a moment ago: its frame is at 0,0 and
+                # 512x768, so the frame around the window is the strip from y=6 to y=30 (the bar is inside the border)
+                # and the three buttons stand at the right end of it.
+                has "the log says what the frames are made of" "title bar 24 px (buttons min,max,close)" "$(cat "$LOG")"
+                if have_xt; then
+                    $TMO xdotool mousemove 5 760 >/dev/null 2>&1        # the pointer out of the way: no button is lit
+                    eqpx "the title bar of the focused window is drawn on the screen in the accent colour" "58 134 255" 300 18
+                    eqpx "and the frame around it in the colour the focus gives it" "255 136 0" 2 2
+                    eqpx "the window itself is not covered by its own frame" "255 255 255" 250 400
+                else
+                    info "tests/xtool.py cannot read a pixel here: the checks of the drawing are skipped"
+                fi
+
+                # the mouse: the middle of the title bar drags the window, an edge resizes it
+                drag 256 18 456 318
+                has "dragging the title bar moves the window (the log says so)" \
+                    "moving 0x${ALPHA#0x} 'nexwm-alpha' with the mouse" "$(cat "$LOG")"
+                at "the window went where the mouse left it" "$ALPHA" "206 330 500 732"
+                has "and the log says where" "moved 0x${ALPHA#0x} 'nexwm-alpha' to 206,330" "$(cat "$LOG")"
+
+                drag 709 500 769 500
+                has "dragging the right edge resizes it (the log says so)" \
+                    "resizing 0x${ALPHA#0x} 'nexwm-alpha' with the mouse" "$(cat "$LOG")"
+                at "60 px wider, and the window did not move" "$ALPHA" "206 330 560 732"
+                # The clicks below land inside the bar of the frame (three 14 px squares at its right end): the frame
+                # has to be around the window for them to be there at all. If it is not, that is the thing to read in
+                # the results — not the five checks that would fail after it because the clicks went nowhere.
+                at "the frame is drawn around the window where the window is" "$(parentof "$ALPHA")" "200 300 572 768"
+
+                if have_xt; then
+                    # the frame is at 200,300 now and 572x768: the bar runs from y=306 to y=330, and its three buttons
+                    # are 14 px squares ending 5 px from the right end (x=725 .. 767), the left one of them the Minimize
+                    $TMO xdotool mousemove 5 760 >/dev/null 2>&1
+                    eqpx "the bar of the window is still drawn where the window is" "58 134 255" 230 318
+                    eqpx "the Minimize button has its line drawn in it" "255 255 255" 732 322
+                    eqpx "and the Close button its cross" "255 255 255" 760 318
+                fi
+
+                # the buttons of the bar: the middle one maximizes and gives the place back, the left one minimizes
+                click_until "the Maximize button" 741 318 "$ALPHA" "6 30 1012 732" "maximized 0x${ALPHA#0x}"
+                at "the Maximize button gives the window the work area" "$ALPHA" "6 30 1012 732"
+                click_until "the Maximize button (giving the place back)" 993 18 "$ALPHA" "206 330 560 732" \
+                    "unmaximized 0x${ALPHA#0x}"
+                at "and the same button gives the old place back" "$ALPHA" "206 330 560 732"
+
+                before=$(grep -c -- "minimized 0x${ALPHA#0x}" "$LOG" 2>/dev/null)
+                click 732 318
+                if ! wait_mapstate "$ALPHA" IsUnMapped 12; then
+                    after=$(grep -c -- "minimized 0x${ALPHA#0x}" "$LOG" 2>/dev/null)
+                    if [ "$before" = "$after" ]; then
+                        info "the Minimize button: the click did not reach the window manager, clicking again"
+                        click 732 318
+                    fi
+                fi
+                if wait_mapstate "$ALPHA" IsUnMapped 20; then
+                    pass "the Minimize button puts the window away"
+                else
+                    fail "the Minimize button did nothing (the window is $(mapstate "$ALPHA"))"
+                fi
+                has "and the panel is told it is hidden (its taskbar lists it all the same)" "_NET_WM_STATE_HIDDEN" \
+                    "$(wval "$ALPHA" _NET_WM_STATE)"
+                if wait_log "minimized 0x${ALPHA#0x} 'nexwm-alpha'" 12; then
+                    pass "the log says what happened to it ($(grep -m1 "minimized 0x${ALPHA#0x}" "$LOG"))"
+                else
+                    fail "the log says what happened to it ('minimized 0x${ALPHA#0x} 'nexwm-alpha'' is not in '$(cat "$LOG")')"
+                fi
+                has "it is still the session's window" "$ALPHA" "$(rval _NET_CLIENT_LIST)"
+
+                # The panel's taskbar is what brings it back: a click there is _NET_ACTIVE_WINDOW, and tests/xtool.py
+                # sends exactly that (a minimized window has no button left to click — it is not on the screen).
+                if have_xt; then
+                    $XT activate "$ALPHA" >/dev/null 2>&1
+                    if wait_mapstate "$ALPHA" IsViewable 20; then
+                        pass "the window the panel asks for comes back on the screen"
+                    else
+                        fail "the window the panel asked for did not come back ($(mapstate "$ALPHA"))"
+                    fi
+                    at "at the place it had" "$ALPHA" "206 330 560 732"
+                    if wait_log "back from the taskbar" 12; then
+                        pass "and the log says the taskbar brought it back ($(grep -m1 'back from the taskbar' "$LOG"))"
+                    else
+                        fail "and the log says the taskbar brought it back ('back from the taskbar' is not in '$(cat "$LOG")')"
+                    fi
+                else
+                    info "tests/xtool.py cannot send a client message here: the taskbar path is skipped"
+                fi
+
+                # a double click on the title bar, the same thing the Maximize button does (the sleep keeps these two
+                # clicks apart from the one the button click above made — the window manager reads a pair of clicks of
+                # the same window less than 400 ms apart as a double click)
+                sleep 0.6
+                $TMO xdotool mousemove --sync 300 318 >/dev/null 2>&1
+                double_click() { $TMO xdotool click --repeat 2 --delay 80 1 >/dev/null 2>&1; }
+                before=$(grep -c -- "maximized 0x${ALPHA#0x}" "$LOG" 2>/dev/null)
+                double_click
+                if ! wait_place "$ALPHA" "6 30 1012 732" 8; then
+                    after=$(grep -c -- "maximized 0x${ALPHA#0x}" "$LOG" 2>/dev/null)
+                    if [ "$before" = "$after" ]; then
+                        info "the double click on the title bar: the clicks did not reach the window manager, clicking again"
+                        double_click
+                    fi
+                fi
+                at "a double click on the title bar maximizes the window" "$ALPHA" "6 30 1012 732"
+                sleep 0.6
+                $TMO xdotool mousemove --sync 300 18 >/dev/null 2>&1
+                before=$(grep -c -- "unmaximized 0x${ALPHA#0x}" "$LOG" 2>/dev/null)
+                double_click
+                if ! wait_place "$ALPHA" "206 330 560 732" 8; then
+                    after=$(grep -c -- "unmaximized 0x${ALPHA#0x}" "$LOG" 2>/dev/null)
+                    if [ "$before" = "$after" ]; then
+                        info "the second double click: the clicks did not reach the window manager, clicking again"
+                        double_click
+                    fi
+                fi
+                at "and a second one gives it its place back" "$ALPHA" "206 330 560 732"
+
+                # the Close button, on a window of its own so the one the rest of the test drives is not closed
+                "$CLIENT" --title nexwm-close-me --class nexwm-close-me --size 300x200 --pos 400,400 --timeout 0 \
+                    > "$OUT/close.out" 2>&1 &
+                CLOSE_PID=$!
+                CLOSE=""
+                i=0
+                while [ "$i" -lt 30 ]; do
+                    CLOSE=$(sed -n 's/^id=//p' "$OUT/close.out" | head -n1)
+                    [ -n "$CLOSE" ] && break
+                    i=$((i + 1)); sleep 0.2
+                done
+                if [ -z "$CLOSE" ]; then
+                    fail "the window for the Close button did not start (see $OUT/close.out)"
+                else
+                    # the frame of a 300x200 window at 400,400 is at 394,370 and 312x236, so its rightmost button
+                    # (the Close of the three) is the square from x=687 to x=701, y=381 to y=395
+                    click 692 388
+                    has "the Close button asks the window to close (WM_DELETE_WINDOW, through the same path as Super+Q)" \
+                        "asked 0x${CLOSE#0x} 'nexwm-close-me' to close" "$(cat "$LOG")"
+                    if wait_gone "$CLOSE_PID" "the window the Close button asked to close" 40; then
+                        wait "$CLOSE_PID" 2>/dev/null
+                        pass "and the window went away by itself (it was asked, not killed)"
+                    else
+                        fail "the window of the Close button is still there"
+                        kill "$CLOSE_PID" 2>/dev/null
+                    fi
+                    CLOSE_PID=""
+                    i=0
+                    while [ "$i" -lt 20 ]; do
+                        case "$(rval _NET_CLIENT_LIST)" in *"$CLOSE"*) ;; *) break ;; esac
+                        i=$((i + 1)); sleep 0.25
+                    done
+                    hasnt "and it is out of the window list" "$CLOSE" "$(rval _NET_CLIENT_LIST)"
+                    has "the log says it was let go" "unmanaging 0x${CLOSE#0x} 'nexwm-close-me'" "$(cat "$LOG")"
+                fi
+                # the rest of the test drives that window: give it the focus back (a click on its title bar focuses it,
+                # and it is the same click the user would make)
+                click 300 318
+                eq "the window the mouse is used on is the one with the focus" "$ALPHA" "$(rval _NET_ACTIVE_WINDOW | id_of)"
 
                 # ---- 4. HDE's panel: a dock window reserves room on the screen ------------------------------
-                "$CLIENT" --title nexwm-dock --class nexwm-dock --dock 24 > "$OUT/dock.out" 2>&1 &
+                "$CLIENT" --title nexwm-dock --class nexwm-dock --dock 24 --timeout 0 > "$OUT/dock.out" 2>&1 &
                 DOCK_PID=$!
                 DOCK=""
                 i=0
@@ -472,13 +693,14 @@ EOF
                     eq "the dock keeps the place and the size it asked for" "0 0 1024 24" "$(xywh "$DOCK")"
 
                     pressed "Super+Up maximizes the focused window" "super+Up" "maximized 0x${ALPHA#0x}"
-                    at "a maximized window stays clear of the panel" "$ALPHA" "0 24 1024 744"
+                    at "a maximized window stays clear of the panel" "$ALPHA" "6 54 1012 708"
                     pressed "Super+Down gives the place back again" "super+Down" "unmaximized 0x${ALPHA#0x}"
-                    at "the place before (the snapped one, under the panel)" "$ALPHA" "0 0 512 768"
+                    at "the place it had (where the mouse left it, below the panel)" "$ALPHA" "206 330 560 732"
                 fi
 
                 # ---- a second window, and moving it to another workspace -----------------------------------
-                "$CLIENT" --title nexwm-beta --class nexwm-beta --size 700x500 --pos 200,150 > "$OUT/beta.out" 2>&1 &
+                "$CLIENT" --title nexwm-beta --class nexwm-beta --size 700x500 --pos 200,150 --timeout 0 \
+                    > "$OUT/beta.out" 2>&1 &
                 BETA_PID=$!
                 BETA=""
                 i=0
@@ -654,6 +876,13 @@ fi
 # not always reachable, and this is what is needed to see what happened (tests/ci-annotate.py publishes these lines).
 info "the window manager said: $(tail -n 4 "$LOG" 2>/dev/null | tr '\n' '|')"
 info "the test windows said: $(tail -n 2 "$OUT/alpha.out" 2>/dev/null | tr '\n' '|') $(tail -n 2 "$OUT/beta.out" 2>/dev/null | tr '\n' '|')"
+# ... and what it said about each of the windows the test put on the screen: a window that did not do what the test
+# expected is read here (when it left, when it moved, what was asked of it), without the whole log of the run.
+for w in "$ALPHA" "$BETA" "$CLOSE" "$DOCK"; do
+    [ -n "$w" ] || continue
+    info "the window manager about $w: $(grep -F "0x${w#0x}" "$LOG" 2>/dev/null | tail -n 8 | tr '\n' '|')"
+    info "the frame of $w and the window itself: '$(xywh "$(parentof "$w")")' / '$(xywh "$w")'"
+done
 
 echo ""
 if [ "$FAILS" = 0 ]; then

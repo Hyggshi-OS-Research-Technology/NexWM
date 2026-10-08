@@ -5,7 +5,7 @@ sides, and the session picks the side it needs:
 
 | | |
 |---|---|
-| `nexwm --x11` (the default when `$DISPLAY` is set) | a **window manager**: it puts the frames around windows, gives them the focus, keeps the workspaces, moves, snaps, maximizes, closes windows, and honours the struts of HDE's panel. It speaks to the X server through XCB directly — no libX11, no toolkit — and implements the EWMH/ICCCM parts a session and its programs ask for |
+| `nexwm --x11` (the default when `$DISPLAY` is set) | a **window manager**: it draws the frames around windows (border, title bar with the icon, the title and the buttons), gives them the focus, keeps the workspaces, moves them with the mouse, snaps, maximizes, minimizes, closes windows, and honours the struts of HDE's panel. It speaks to the X server through XCB directly — no libX11, no toolkit — and implements the EWMH/ICCCM parts a session and its programs ask for |
 | `nexwm --wayland` | the **Wayland compositor** of the additive "NexWM (Wayland)" login session (wlroots): it owns the display, manages XDG toplevels and popups, arranges layer-shell surfaces, handles input and workspaces, and publishes window state to HDE's Wayland taskbar |
 
 Both were built for HDE first: the panel above windows, the workspaces Super+1…9 are used for, the keys HDE publishes,
@@ -43,11 +43,16 @@ tests use). A file that is not there is not a mistake: the defaults are used. Li
 A mistake in the file is reported with its line number, and the session log says what is wrong.
 
 ```
-border 2                       # the frame around a window, in pixels (0 = none, up to 64)
-focus click                    # click to focus (the default), or "focus mouse" to follow the pointer
-desktops 4                     # how many workspaces
-colors 0x2a2a2a 0x3a86ff       # the frame of a window that is not focused, and of the one that is
-key Super+Return spawn xterm   # a key binding: Super, Ctrl, Alt and Shift, then a key
+border 2                           # the frame around a window, in pixels (0 = none, up to 64)
+titlebar 24                        # the title bar of that frame, in pixels (0 = none, up to 64)
+titlebar-colors 0x3a86ff 0x2f2f33  # the bar of the focused window, and of the others
+titlebar-text 0xffffff 0xb8bcc4    # the title in it: the focused window, and the others
+titlebar-buttons min,max,close     # the buttons at the right end of the bar ("none" for no buttons)
+titlebar-font fixed                # the X core font of the title (Latin-1: see frame.c)
+focus click                        # click to focus (the default), or "focus mouse" to follow the pointer
+desktops 4                         # how many workspaces
+colors 0x2a2a2a 0x3a86ff           # the frame of a window that is not focused, and of the one that is
+key Super+Return spawn xterm       # a key binding: Super, Ctrl, Alt and Shift, then a key
 ```
 
 The actions of a `key` line:
@@ -61,6 +66,7 @@ The actions of a `key` line:
 | `move-to N` | moves the focused window to workspace `N` |
 | `maximize` / `unmaximize` | the work area (what a panel's struts leave of the screen), or the place from before |
 | `fullscreen` | the whole screen (also leaves it again) |
+| `minimize` (or `iconify`) | puts the focused window away: it is unmapped and says `_NET_WM_STATE_HIDDEN`, so the panel's taskbar still lists it — and the same action brings it back |
 | `snap left/right/up/down` | half of the work area on that side |
 | `quit` | leaves the window manager (the session then sees a clean exit and does not restart it) |
 
@@ -85,6 +91,32 @@ The defaults are:
 | `Super+Up` / `Super+Down` | maximize / unmaximize |
 | `Super+F` | full screen |
 
+The title bar that NexWM draws on a window has, from left to right: the icon of the program (its `_NET_WM_ICON`), the
+title, and the buttons of `titlebar-buttons` (each of them written the way it is named: `minimize` or `min`,
+`maximize` or `max`, `close`; `none` gives a bar with no buttons at all):
+
+| Button | What a click does |
+|--------|-------------------|
+| minimize | the window is unmapped and says `_NET_WM_STATE_HIDDEN`; the panel lists it and its taskbar brings it back (`_NET_ACTIVE_WINDOW`) |
+| maximize | the work area, or the size and place from before when it is already maximized (the button is drawn with two squares then) |
+| close | asks the window to close (ICCCM `WM_DELETE_WINDOW`), the same thing `Super+Q` does |
+
+The mouse, on the frame NexWM drew:
+
+| Where | What it does |
+|-------|--------------|
+| the title bar | drags the window. A window that filled the work area (maximized or full screen) comes back to the size it had, under the pointer, as soon as the drag really starts; the title bar cannot be dragged off the top of the work area, and a window cannot be dragged so far that its bar is gone |
+| the edges and the corners | resize it (the cursor says which way); the minimum size the program asked for (`WM_NORMAL_HINTS`) is respected |
+| a double click on the title bar | maximizes, and the next one gives the old size back (the Maximize button, without aiming at it) |
+| letting go at the top of the work area | maximizes the window; at the left or right edge it takes that half of the work area |
+| any point of a window, with `Super` and button 1 | moves the window from there (for a window whose decorations leave nothing to grab) |
+| any point of a window, with `Alt` and button 3 | resizes it from the bottom right corner |
+| a button of the title bar | acts when the mouse lets go, and only if it is still on the button; the button under the pointer is drawn lighter |
+
+A program that draws its own decorations (or the panel, for a window it moves) asks for the same thing through
+`_NET_WM_MOVERESIZE`, and NexWM takes the same drag path — the pointer is held for the whole drag, so the window
+follows it even when the pointer would otherwise leave the frame.
+
 What a running NexWM listens to is published on the root window, so Settings (or `xprop`) can show it:
 
 ```
@@ -101,12 +133,23 @@ xprop -root _NEXWM_KEYS        # "Super+Q close\0Super+9 workspace 3\0…", one 
 * **EWMH**: `_NET_SUPPORTED`, `_NET_SUPPORTING_WM_CHECK` (+ `_NET_WM_NAME` = "NexWM" — that is what
   *Settings → About* shows), `_NET_CLIENT_LIST`(`_STACKING`), `_NET_ACTIVE_WINDOW`, `_NET_NUMBER_OF_DESKTOPS`,
   `_NET_DESKTOP_NAMES`, `_NET_CURRENT_DESKTOP`, `_NET_DESKTOP_GEOMETRY`, `_NET_DESKTOP_VIEWPORT`, `_NET_WM_DESKTOP`,
-  `_NET_WORKAREA`, `_NET_WM_WINDOW_TYPE*`, `_NET_WM_STATE*` (maximized, full screen, hidden, skip taskbar/pager),
-  `_NET_WM_STRUT(_PARTIAL)`, `_NET_FRAME_EXTENTS`, `_NET_WM_ALLOWED_ACTIONS`, `_NET_CLOSE_WINDOW`,
-  `WM_CHANGE_STATE`, `WM_PROTOCOLS`/`WM_DELETE_WINDOW`, `WM_STATE`.
-* **Frames**: the border around a window is drawn by NexWM (no title bar yet — that is the next step, and it is why
-  the GTK window managers are still the default in HDE). A window's own size is what the program asked for; the frame
-  around it is `border` pixels on each side, which is what `_NET_FRAME_EXTENTS` tells the programs.
+  `_NET_WORKAREA`, `_NET_WM_WINDOW_TYPE*`, `_NET_WM_STATE*` (maximized, full screen, hidden, above, below, skip
+  taskbar/pager), `_NET_WM_STRUT(_PARTIAL)`, `_NET_FRAME_EXTENTS`, `_NET_WM_ALLOWED_ACTIONS` (close, minimize,
+  maximize, move, resize, above, below, full screen), `_NET_CLOSE_WINDOW`,
+  `_NET_WM_MOVERESIZE` (what a program without NexWM's decorations asks a move or a resize with), `_NET_WM_ICON`,
+  `_NET_ACTIVE_WINDOW` (a request, as the panel's taskbar sends it), `WM_CHANGE_STATE`,
+  `WM_PROTOCOLS`/`WM_DELETE_WINDOW`/`WM_TAKE_FOCUS` (a program that wants the keyboard the ICCCM way is given it
+  without a click), `WM_STATE`.
+* **Frames**: the whole frame is drawn by NexWM — the `border` pixels of it in the colour of the focus, and above the
+  window a title bar with the program's icon (`_NET_WM_ICON`), its title (Latin-1, in the X core font of
+  `titlebar-font`) and the buttons of `titlebar-buttons`. The programs are told what the frame took
+  (`_NET_FRAME_EXTENTS`: left, right, top — the bar — and bottom), so a toolkit puts its window inside the frame
+  instead of under the title bar; the minimum size a program asks for (`WM_NORMAL_HINTS`) is respected by a resize.
+* **The mouse**: the title bar moves the window, the edges and corners resize it, a double click maximizes it, and a
+  window dropped on the edge of the work area is maximized (top) or takes that half (left, right). A window that filled
+  the work area comes back to the size it had under the pointer when it is dragged; `Super`+button 1 moves a window from
+  anywhere of it, `Alt`+button 3 resizes it from the bottom right corner, and `_NET_WM_MOVERESIZE` is the same drag for
+  a program that asks for it.
 * **Windows HDE knows about**: the panel and the desktop are docks/desktop windows: they are not framed, they are
   marked `_NET_WM_STATE_SKIP_TASKBAR`/`SKIP_PAGER`, their `_NET_WM_STRUT(_PARTIAL)` shrinks the work area, and a
   maximized window stops at the work area instead of going under the panel.
@@ -115,8 +158,9 @@ xprop -root _NEXWM_KEYS        # "Super+Q close\0Super+9 workspace 3\0…", one 
 * **Screens**: a resolution change (RandR, F8 in HDE) is noticed through the root window and the work area is
   recomputed.
 
-Still planned as separate steps: X11 title bars drawn with the GTK theme and X11 taskbar window previews. Wayland
-uses client-side decorations and accepts move/resize requests from Wayland clients.
+Still planned as separate steps: title bars drawn in the GTK theme (NexWM's own bar is XCB-only: one X core font and
+the colours of the file) and X11 taskbar window previews. Wayland uses client-side decorations and accepts move/resize
+requests from Wayland clients.
 
 ## The Wayland side
 

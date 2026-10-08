@@ -34,6 +34,7 @@ typedef enum {
     NEXWM_ACTION_UNMAXIMIZE,
     NEXWM_ACTION_FULLSCREEN,   /* toggle */
     NEXWM_ACTION_SNAP,         /* arg: NEXWM_EDGE_LEFT/RIGHT/UP/DOWN */
+    NEXWM_ACTION_MINIMIZE,     /* put the focused window away (ICCCM: IconicState) */
     NEXWM_ACTION_QUIT          /* leave the session's window manager */
 } HdeNexwmAction;
 
@@ -41,6 +42,14 @@ typedef enum {
 #define NEXWM_EDGE_RIGHT 1
 #define NEXWM_EDGE_UP    2
 #define NEXWM_EDGE_DOWN  3
+
+/* The buttons of a title bar (the frames of the X11 side; frame.h computes where they go). The order in
+ * `buttons[]` is the order they are drawn in, left to right, so `min,max,close` in the file is the ordinary
+ * little, big, cross at the right end of the bar. */
+#define NEXWM_BUTTON_MINIMIZE 1
+#define NEXWM_BUTTON_MAXIMIZE 2
+#define NEXWM_BUTTON_CLOSE    3
+#define NEXWM_MAX_BUTTONS     6
 
 /* our own modifier bits; the backend adds the masks of the X server (or of the keyboard) to them */
 #define NEXWM_MOD_SHIFT (1u << 0)
@@ -70,6 +79,17 @@ typedef struct {
     int  desktops;            /* how many workspaces */
     unsigned long border_color;   /* 0xRRGGBB, the frame of a window that is not focused */
     unsigned long focus_color;    /* ... of the focused one */
+
+    /* The title bar of the X11 side (frame.h draws it). 0 px of title bar = the frames are borders alone, the way
+     * they were before there were title bars. The Wayland side has client-side decorations and does not use these. */
+    int  titlebar;                /* px of title bar above the window (0 = none) */
+    unsigned long titlebar_color;             /* the bar of the focused window */
+    unsigned long titlebar_color_unfocused;
+    unsigned long titlebar_text;              /* the title of the focused window */
+    unsigned long titlebar_text_unfocused;
+    int  buttons[NEXWM_MAX_BUTTONS];          /* NEXWM_BUTTON_*, left to right */
+    int  n_buttons;
+    char font[64];                            /* the X core font of the title ("fixed"): see frame.c */
 
     HdeNexwmBinding *keys;
     size_t n_keys, cap_keys;
@@ -108,6 +128,9 @@ typedef enum {
     NEXWM_ATOM_STRING,
     NEXWM_ATOM_WM_PROTOCOLS,
     NEXWM_ATOM_WM_DELETE_WINDOW,
+    NEXWM_ATOM_WM_TAKE_FOCUS,
+    NEXWM_ATOM_WM_NORMAL_HINTS,
+    NEXWM_ATOM_WM_SIZE_HINTS,
     NEXWM_ATOM_WM_STATE,
     NEXWM_ATOM_WM_CHANGE_STATE,
     NEXWM_ATOM_WM_NAME,
@@ -121,6 +144,8 @@ typedef enum {
     NEXWM_ATOM_NET_CLIENT_LIST_STACKING,
     NEXWM_ATOM_NET_ACTIVE_WINDOW,
     NEXWM_ATOM_NET_CLOSE_WINDOW,
+    NEXWM_ATOM_NET_WM_MOVERESIZE,
+    NEXWM_ATOM_NET_WM_ICON,
     NEXWM_ATOM_NET_CURRENT_DESKTOP,
     NEXWM_ATOM_NET_NUMBER_OF_DESKTOPS,
     NEXWM_ATOM_NET_DESKTOP_NAMES,
@@ -143,6 +168,8 @@ typedef enum {
     NEXWM_ATOM_NET_WM_STATE_MAXIMIZED_HORZ,
     NEXWM_ATOM_NET_WM_STATE_FULLSCREEN,
     NEXWM_ATOM_NET_WM_STATE_HIDDEN,
+    NEXWM_ATOM_NET_WM_STATE_ABOVE,
+    NEXWM_ATOM_NET_WM_STATE_BELOW,
     NEXWM_ATOM_NET_WM_STATE_SKIP_TASKBAR,
     NEXWM_ATOM_NET_WM_STATE_SKIP_PAGER,
     NEXWM_ATOM_NET_WM_STRUT,
@@ -156,6 +183,8 @@ typedef enum {
     NEXWM_ATOM_NET_WM_ACTION_FULLSCREEN,
     NEXWM_ATOM_NET_WM_ACTION_CHANGE_DESKTOP,
     NEXWM_ATOM_NET_WM_ACTION_MINIMIZE,
+    NEXWM_ATOM_NET_WM_ACTION_ABOVE,
+    NEXWM_ATOM_NET_WM_ACTION_BELOW,
     NEXWM_ATOM_NET_WM_ACTION_SHADE,
     NEXWM_ATOM_NET_WM_ACTION_STICK,
     NEXWM_ATOM_NET_FRAME_EXTENTS,

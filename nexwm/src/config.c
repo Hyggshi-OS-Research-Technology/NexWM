@@ -4,6 +4,11 @@
  *
  *   # a comment; blank lines are fine
  *   border 2                      px of frame around a window (0 = none)
+ *   titlebar 24                   px of title bar above a window (0 = none: the frames are borders only)
+ *   titlebar-colors 0x3a86ff 0x2a2a2a   the bar of the focused window, and of the others
+ *   titlebar-text 0xffffff 0xb0b0b0     the title: focused, and the others
+ *   titlebar-buttons min,max,close      the buttons of the bar, left to right ("none" for no buttons)
+ *   titlebar-font fixed                 the X core font of the title (Latin-1: see frame.c)
  *   focus click                   click to focus (the default) or "mouse" to follow the pointer
  *   desktops 4                    how many workspaces (1 .. 16)
  *   colors 0x2a2a2a 0x3a86ff      the frame of a window that is not focused, and of the focused one
@@ -12,7 +17,7 @@
  *   key Super+Shift+Q quit        leave the session's window manager
  *   key Super+Tab next            the next window (Super+Shift+Tab: previous)
  *   key Super+1 workspace 1       go to a workspace;  move-to 2 sends the window there
- *   key Super+Up maximize         maximize;  unmaximize;  fullscreen;  snap left|right|up|down
+ *   key Super+Up maximize         maximize;  unmaximize;  fullscreen;  minimize;  snap left|right|up|down
  *
  * Nothing here needs a display, so tests/nexwm-test.c checks all of it (and the key names) on any machine. The
  * backends (x11.c, wayland.c) turn the bindings into the masks and keycodes of the machine they run on.
@@ -101,6 +106,7 @@ const char *nexwm_action_name(HdeNexwmAction a)
     case NEXWM_ACTION_UNMAXIMIZE: return "unmaximize";
     case NEXWM_ACTION_FULLSCREEN: return "fullscreen";
     case NEXWM_ACTION_SNAP:       return "snap";
+    case NEXWM_ACTION_MINIMIZE:   return "minimize";
     case NEXWM_ACTION_QUIT:       return "quit";
     default:                      return "none";
     }
@@ -124,6 +130,9 @@ const char *const nexwm_atom_names[] = {
     [NEXWM_ATOM_STRING]                         = "STRING",
     [NEXWM_ATOM_WM_PROTOCOLS]                   = "WM_PROTOCOLS",
     [NEXWM_ATOM_WM_DELETE_WINDOW]               = "WM_DELETE_WINDOW",
+    [NEXWM_ATOM_WM_TAKE_FOCUS]                  = "WM_TAKE_FOCUS",
+    [NEXWM_ATOM_WM_NORMAL_HINTS]                = "WM_NORMAL_HINTS",
+    [NEXWM_ATOM_WM_SIZE_HINTS]                  = "WM_SIZE_HINTS",
     [NEXWM_ATOM_WM_STATE]                       = "WM_STATE",
     [NEXWM_ATOM_WM_CHANGE_STATE]                = "WM_CHANGE_STATE",
     [NEXWM_ATOM_WM_NAME]                        = "WM_NAME",
@@ -135,6 +144,8 @@ const char *const nexwm_atom_names[] = {
     [NEXWM_ATOM_NET_CLIENT_LIST_STACKING]       = "_NET_CLIENT_LIST_STACKING",
     [NEXWM_ATOM_NET_ACTIVE_WINDOW]              = "_NET_ACTIVE_WINDOW",
     [NEXWM_ATOM_NET_CLOSE_WINDOW]               = "_NET_CLOSE_WINDOW",
+    [NEXWM_ATOM_NET_WM_MOVERESIZE]              = "_NET_WM_MOVERESIZE",
+    [NEXWM_ATOM_NET_WM_ICON]                    = "_NET_WM_ICON",
     [NEXWM_ATOM_NET_CURRENT_DESKTOP]            = "_NET_CURRENT_DESKTOP",
     [NEXWM_ATOM_NET_NUMBER_OF_DESKTOPS]         = "_NET_NUMBER_OF_DESKTOPS",
     [NEXWM_ATOM_NET_DESKTOP_NAMES]              = "_NET_DESKTOP_NAMES",
@@ -156,6 +167,8 @@ const char *const nexwm_atom_names[] = {
     [NEXWM_ATOM_NET_WM_STATE_MAXIMIZED_HORZ]    = "_NET_WM_STATE_MAXIMIZED_HORZ",
     [NEXWM_ATOM_NET_WM_STATE_FULLSCREEN]        = "_NET_WM_STATE_FULLSCREEN",
     [NEXWM_ATOM_NET_WM_STATE_HIDDEN]            = "_NET_WM_STATE_HIDDEN",
+    [NEXWM_ATOM_NET_WM_STATE_ABOVE]             = "_NET_WM_STATE_ABOVE",
+    [NEXWM_ATOM_NET_WM_STATE_BELOW]             = "_NET_WM_STATE_BELOW",
     [NEXWM_ATOM_NET_WM_STATE_SKIP_TASKBAR]      = "_NET_WM_STATE_SKIP_TASKBAR",
     [NEXWM_ATOM_NET_WM_STATE_SKIP_PAGER]        = "_NET_WM_STATE_SKIP_PAGER",
     [NEXWM_ATOM_NET_WM_STRUT]                   = "_NET_WM_STRUT",
@@ -169,6 +182,8 @@ const char *const nexwm_atom_names[] = {
     [NEXWM_ATOM_NET_WM_ACTION_FULLSCREEN]       = "_NET_WM_ACTION_FULLSCREEN",
     [NEXWM_ATOM_NET_WM_ACTION_CHANGE_DESKTOP]   = "_NET_WM_ACTION_CHANGE_DESKTOP",
     [NEXWM_ATOM_NET_WM_ACTION_MINIMIZE]         = "_NET_WM_ACTION_MINIMIZE",
+    [NEXWM_ATOM_NET_WM_ACTION_ABOVE]            = "_NET_WM_ACTION_ABOVE",
+    [NEXWM_ATOM_NET_WM_ACTION_BELOW]            = "_NET_WM_ACTION_BELOW",
     [NEXWM_ATOM_NET_WM_ACTION_SHADE]            = "_NET_WM_ACTION_SHADE",
     [NEXWM_ATOM_NET_WM_ACTION_STICK]            = "_NET_WM_ACTION_STICK",
     [NEXWM_ATOM_NET_FRAME_EXTENTS]              = "_NET_FRAME_EXTENTS",
@@ -308,6 +323,19 @@ void nexwm_config_defaults(HdeNexwmConfig *cfg)
     cfg->border_color = 0x2a2a2a;
     cfg->focus_color = 0x3a86ff;
 
+    /* the title bar: HDE's accent colour for the window in use, the frame's grey for the others, and the three
+     * buttons every desktop has taught people to expect (the middle one, in the middle) */
+    cfg->titlebar = 24;
+    cfg->titlebar_color = 0x3a86ff;
+    cfg->titlebar_color_unfocused = 0x2f2f33;
+    cfg->titlebar_text = 0xffffff;
+    cfg->titlebar_text_unfocused = 0xb8bcc4;
+    cfg->buttons[0] = NEXWM_BUTTON_MINIMIZE;
+    cfg->buttons[1] = NEXWM_BUTTON_MAXIMIZE;
+    cfg->buttons[2] = NEXWM_BUTTON_CLOSE;
+    cfg->n_buttons = 3;
+    snprintf(cfg->font, sizeof cfg->font, "fixed");
+
     /* the keys the README promises; the same table on Wayland */
     binding_add(cfg, "Super+Return", NEXWM_ACTION_SPAWN, 0, "hde-choose terminal");
     binding_add(cfg, "Super+E", NEXWM_ACTION_SPAWN, 0, "hde-files");
@@ -358,6 +386,47 @@ static char *trim(char *s)
     while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = '\0';
     return s;
 }
+
+/* two colours, the way `colors` takes them: the first for the focused window, the second for the others */
+static int colors_pair(const char *rest, unsigned long *first, unsigned long *second, const char *what,
+                       int line, char *err, size_t err_n)
+{
+    char *end = NULL;
+    unsigned long c1 = strtoul(rest, &end, 0);
+    char *tail = end ? trim(end) : (char *)rest;
+    unsigned long c2 = *tail ? strtoul(tail, &end, 0) : 0;
+    if (end == (char *)rest || !*tail || !end || *trim(end) || c1 > 0xffffff || c2 > 0xffffff || c2 == 0) {
+        snprintf(err, err_n, "line %d: %s takes two colours, like '%s 0x3a86ff 0x2a2a2a' (not '%s')",
+                 line, what, what, rest);
+        return -1;
+    }
+    *first = c1;
+    *second = c2;
+    return 0;
+}
+
+/* min,max,close -> the buttons of the title bar, left to right (frame.h draws them in this order) */
+static int buttons_parse(const char *list, HdeNexwmConfig *cfg, int line, char *err, size_t err_n)
+{
+    cfg->n_buttons = 0;
+    if (!strcmp(list, "none") || !strcmp(list, "no") || !*list) return 0;
+    char buf[128];
+    snprintf(buf, sizeof buf, "%s", list);
+    for (char *p = strtok(buf, ", "); p; p = strtok(NULL, ", ")) {
+        int kind;
+        if (!strcmp(p, "minimize") || !strcmp(p, "min")) kind = NEXWM_BUTTON_MINIMIZE;
+        else if (!strcmp(p, "maximize") || !strcmp(p, "max")) kind = NEXWM_BUTTON_MAXIMIZE;
+        else if (!strcmp(p, "close")) kind = NEXWM_BUTTON_CLOSE;
+        else {
+            snprintf(err, err_n, "line %d: '%s' is not a button (minimize|min, maximize|max, close, none)", line, p);
+            return -1;
+        }
+        if (cfg->n_buttons >= NEXWM_MAX_BUTTONS) break;
+        cfg->buttons[cfg->n_buttons++] = kind;
+    }
+    return 0;
+}
+
 
 int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t err_n)
 {
@@ -418,6 +487,31 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
             }
             cfg->border_color = c1;
             cfg->focus_color = c2;
+        } else if (!strcmp(word, "titlebar")) {
+            char *end = NULL;
+            long v = strtol(rest, &end, 10);
+            if (!*rest || (end && *trim(end)) || v < 0 || v > 64) {
+                snprintf(err, err_n, "line %d: titlebar takes a number of pixels between 0 and 64 (not '%s')",
+                         line, rest);
+                return -1;
+            }
+            cfg->titlebar = (int)v;
+        } else if (!strcmp(word, "titlebar-colors")) {
+            if (colors_pair(rest, &cfg->titlebar_color, &cfg->titlebar_color_unfocused, "titlebar-colors",
+                            line, err, err_n) != 0)
+                return -1;
+        } else if (!strcmp(word, "titlebar-text")) {
+            if (colors_pair(rest, &cfg->titlebar_text, &cfg->titlebar_text_unfocused, "titlebar-text",
+                            line, err, err_n) != 0)
+                return -1;
+        } else if (!strcmp(word, "titlebar-buttons")) {
+            if (buttons_parse(rest, cfg, line, err, err_n) != 0) return -1;
+        } else if (!strcmp(word, "titlebar-font")) {
+            if (!*rest || strlen(rest) >= sizeof cfg->font) {
+                snprintf(err, err_n, "line %d: titlebar-font takes the name of an X font (fixed, 9x15, ...)", line);
+                return -1;
+            }
+            snprintf(cfg->font, sizeof cfg->font, "%s", rest);
         } else if (!strcmp(word, "key")) {
             char *combo = rest;
             char *acts = combo;
@@ -486,9 +580,12 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
                     return -1;
                 }
                 a = NEXWM_ACTION_SNAP;
+            } else if (!strcmp(action, "minimize") || !strcmp(action, "iconify")) {
+                a = NEXWM_ACTION_MINIMIZE;
             } else {
                 snprintf(err, err_n, "line %d: '%s' is not an action (spawn, close, kill, next, prev, workspace, "
-                                     "move-to, maximize, unmaximize, fullscreen, snap, quit)", line, action);
+                                     "move-to, maximize, unmaximize, fullscreen, minimize, snap, quit)",
+                             line, action);
                 return -1;
             }
 
@@ -499,7 +596,8 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
             (void)mods;
             (void)key;         /* both were the check above; binding_add writes them down again, with the key's keysym */
         } else {
-            snprintf(err, err_n, "line %d: '%s' is not a setting (border, focus, desktops, colors, key)", line, word);
+            snprintf(err, err_n, "line %d: '%s' is not a setting (border, titlebar, titlebar-colors, titlebar-text, "
+                                 "titlebar-buttons, titlebar-font, focus, desktops, colors, key)", line, word);
             return -1;
         }
     }

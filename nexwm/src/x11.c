@@ -1,15 +1,22 @@
 /* x11.c — NexWM on an X11 session: the window manager (nexwm --x11, or plain `nexwm` when $DISPLAY is set).
  *
- * What it is: a small but real ICCCM/EWMH window manager, built on XCB alone (no libX11, no xcb-util: the atoms are
- * interned here, the key mapping is read here). It frames the windows it manages (a border of `border` px, the focused
- * one in another colour), gives them the focus, moves them between workspaces, maximizes, snaps and closes them, and
- * tells the rest of the desktop about all of it through the EWMH properties the panel, the taskbar and the task
- * managers read: _NET_CLIENT_LIST, _NET_ACTIVE_WINDOW, _NET_CURRENT_DESKTOP, _NET_WORKAREA (the struts of a panel are
- * honoured, which is how HDE's panel keeps maximized windows clear of itself), _NET_WM_STATE, _NET_SUPPORTING_WM_CHECK
- * ("NexWM"), and _NEXWM_KEYS with the key bindings it listens to.
+ * What it is: a full ICCCM/EWMH window manager, built on XCB alone (no libX11, no xcb-util: the atoms are interned
+ * here, the key mapping is read here, the title bar is drawn with the X primitives and a core font). It puts a frame
+ * and a title bar around every window it manages — the title, the icon of the program (_NET_WM_ICON), and the
+ * minimize / maximize / close buttons of the bar (frame.c works out where they go) — gives the windows their focus,
+ * moves them between workspaces, maximizes, snaps, minimizes and closes them, and moves or resizes them with the
+ * mouse: the bar drags them, the edges of the frame resize them, a double click on the bar maximizes them, and a
+ * window let go at the edge of the screen takes that half of it (or the whole work area, at the top).
  *
- * Not there yet (each one is a step of its own): title bars drawn with GTK, the mouse moving and resizing windows,
- * window rules, and a compositor for shadows and transparency.
+ * It tells the rest of the desktop about all of it through the EWMH properties the panel, the taskbar and the task
+ * managers read: _NET_CLIENT_LIST, _NET_ACTIVE_WINDOW, _NET_CURRENT_DESKTOP, _NET_WORKAREA (the struts of a panel are
+ * honoured, which is how HDE's panel keeps maximized windows clear of itself), _NET_WM_STATE (maximized, full screen,
+ * hidden, above, below, skip taskbar/pager), _NET_FRAME_EXTENTS, _NET_SUPPORTING_WM_CHECK ("NexWM"), and _NEXWM_KEYS
+ * with the key bindings it listens to. Programs may ask it to move or resize them (_NET_WM_MOVERESIZE), a window that
+ * does not place itself is put in the middle of the work area, and a window that takes its own focus (WM_TAKE_FOCUS)
+ * is told when it is its turn, the way ICCCM says.
+ *
+ * Not there yet (each one is a step of its own): window rules, and a compositor for shadows and transparency.
  *
  * Everything it does that can be seen from outside is logged on stdout with the "nexwm: " prefix (the display and its
  * size, every window it manages, the focus, the workspaces, the frames, the keys) — tests/nexwm-test.sh reads those
@@ -18,6 +25,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "nexwm.h"
+#include "frame.h"
 
 #ifdef NEXWM_HAVE_XCB
 #include <xcb/xcb.h>
@@ -63,9 +71,56 @@ typedef struct {
     int mapped;                   /* the frame is mapped (a window on another workspace is not) */
     int hidden;                   /* minimized by us */
     int maximized, fullscreen;
+    int above, below;             /* _NET_WM_STATE_ABOVE / _NET_WM_STATE_BELOW (the panel's "Always on top") */
+    int min_w, min_h;             /* WM_NORMAL_HINTS: how small a program lets its window get (0: no limit) */
+    uint32_t *icon;               /* the _NET_WM_ICON picture of the program (the pixels of the one that was picked) */
+    uint32_t *icon_alloc;         /* ... and the property it points into (what free() gets) */
+    int icon_w, icon_h;           /* the size of that picture */
+    int asked_position;           /* WM_NORMAL_HINTS said USPosition or PPosition: the program chose its place */
+    int style_key;                /* the frame the last drawing was for (a full screen window has no frame at all) */
+    int hover;                    /* the NEXWM_BUTTON_* under the pointer, 0 = none (it is drawn pressed) */
+    int cursor;                   /* the cursor this frame is showing (a NexwmCursor, 0 = the default one) */
+    /* where the frame is on the screen right now: a drag asks for the same numbers again and again, and X is told
+     * only when they change (and the frame is painted when they do) */
+    int fx, fy, fw, fh;
+    /* ... and where the window itself was last told to be (root coordinates) and how big: the frame's rectangle is
+     * not the whole of the answer client_place gives — the window inside it moves with it, and the two must not be
+     * allowed to drift apart (a frame that did not move can hold a window that did) */
+    int px, py, pw, ph;
+    /* The sizes this window was asked to take, the most recent last (a ring). X answers every configuration request
+     * with a ConfigureNotify, and moving and resizing a window are two of them: the answer to the first carries the
+     * size the window still had. That is not the program resizing itself — a window that is told what it already is
+     * has not changed. */
+    int want_w[8], want_h[8];
+    int want_n;
     char title[200];
     char class_name[120];
 } NexwmClient;
+
+/* the cursor a frame shows: one per thing the pointer can do at the edge of a frame */
+typedef enum {
+    NEXWM_CURSOR_DEFAULT = 0,
+    NEXWM_CURSOR_MOVE,
+    NEXWM_CURSOR_BUTTON,
+    NEXWM_CURSOR_T, NEXWM_CURSOR_B, NEXWM_CURSOR_L, NEXWM_CURSOR_R,
+    NEXWM_CURSOR_TL, NEXWM_CURSOR_TR, NEXWM_CURSOR_BL, NEXWM_CURSOR_BR,
+    NEXWM_CURSOR_COUNT
+} NexwmCursor;
+
+/* a window being moved or resized with the mouse (or asked to be, with _NET_WM_MOVERESIZE) */
+typedef struct {
+    NexwmClient *c;
+    int      active;
+    int      move;                /* 1: the window is being moved, 0: it is being resized */
+    unsigned sides;               /* resizing: which sides follow the pointer */
+    int      x0, y0;              /* the pointer when it began (root coordinates) */
+    NexwmRect start;              /* the window when it began */
+    int      moved;               /* it really went somewhere (the log says so, and nothing else does) */
+    int      restored;            /* a maximized window pulled off the top of the screen already came back */
+    int      button;              /* the button the drag began with (the pointer is grabbed for it) */
+    int      pressed;             /* a press on a button of the title bar, waiting for the release */
+    int      pressed_button;      /* ... which one (NEXWM_BUTTON_*) */
+} NexwmDrag;
 
 typedef struct {
     xcb_connection_t *conn;
@@ -90,6 +145,17 @@ typedef struct {
     int n_lock_masks;
 
     unsigned pixel_border, pixel_focus;    /* what the frames are painted with */
+    xcb_gcontext_t gc;                     /* the one GC every frame is drawn with (its foreground changes) */
+    xcb_font_t font;                       /* the core font of the titles (0: there is none, titles without text) */
+    int font_ascent, font_descent;
+    xcb_font_t cursor_font;                /* the "cursor" font, where the cursors of the mouse come from */
+    xcb_cursor_t cursors[NEXWM_CURSOR_COUNT];
+
+    NexwmDrag drag;                        /* what the mouse is doing right now, if anything */
+    xcb_timestamp_t last_click_time;       /* for a double click on the title bar (maximize / back) */
+    xcb_window_t last_click_window;
+    int last_click_x, last_click_y;
+
     int running;
     int replace;                           /* --replace: take the role from a window manager that is running */
     const char *config_path;
@@ -140,6 +206,20 @@ static void prop_set_window(Nexwm *w, xcb_window_t win, xcb_atom_t prop, xcb_win
 static void prop_set_string(Nexwm *w, xcb_window_t win, xcb_atom_t prop, xcb_atom_t type, const char *s)
 {
     xcb_change_property(w->conn, XCB_PROP_MODE_REPLACE, win, prop, type, 8, (uint32_t)strlen(s), s);
+}
+
+/* the ICCCM way of asking a program something (WM_DELETE_WINDOW, WM_TAKE_FOCUS): a ClientMessage about WM_PROTOCOLS */
+static void client_send_protocol(xcb_window_t win, HdeNexwmAtom protocol, xcb_timestamp_t time)
+{
+    xcb_client_message_event_t ev;
+    memset(&ev, 0, sizeof ev);
+    ev.response_type = XCB_CLIENT_MESSAGE;
+    ev.window = win;
+    ev.type = wm.atoms[NEXWM_ATOM_WM_PROTOCOLS];
+    ev.format = 32;
+    ev.data.data32[0] = wm.atoms[protocol];
+    ev.data.data32[1] = time;
+    xcb_send_event(wm.conn, 0, win, XCB_EVENT_MASK_NO_EVENT, (const char *)&ev);
 }
 
 static void prop_delete(Nexwm *w, xcb_window_t win, xcb_atom_t prop)
@@ -222,6 +302,25 @@ static NexwmClient *client_of_window(xcb_window_t win)
 
 static NexwmClient *client_focused(void) { return client_of_window(wm.focused); }
 
+/* was this window asked to be this size a moment ago? (see the ring in NexwmClient) */
+static int client_wanted_size(const NexwmClient *c, int w, int h)
+{
+    int n = c->want_n < 8 ? c->want_n : 8;
+    for (int i = 0; i < n; i++) {
+        int j = (c->want_n - 1 - i) % 8;
+        if (j < 0) j += 8;
+        if (c->want_w[j] == w && c->want_h[j] == h) return 1;
+    }
+    return 0;
+}
+
+static void client_want_size(NexwmClient *c, int w, int h)
+{
+    c->want_w[c->want_n % 8] = w;
+    c->want_h[c->want_n % 8] = h;
+    c->want_n++;
+}
+
 static NexwmClient *client_add(xcb_window_t id)
 {
     if (wm.n == wm.cap) {
@@ -249,6 +348,7 @@ static void client_remove(NexwmClient *c)
         break;
     }
     if (wm.focused == c->id) wm.focused = XCB_NONE;
+    free(c->icon_alloc);
     free(c);
 }
 
@@ -277,6 +377,55 @@ static void client_read_class(NexwmClient *c)
     free(s);
 }
 
+/* WM_NORMAL_HINTS: an XSizeHints, flags first. USPosition or PPosition in those flags means the program chose its own
+ * place (it is not for us to move it); PMinSize means min_width and min_height are there, and the mouse may not resize
+ * the window under them (the fields of an XSizeHints come in a fixed order: flags, x, y, width, height, min_width,
+ * min_height, ... — see ICCCM 4.1.2.3). */
+static void client_read_hints(NexwmClient *c)
+{
+    c->asked_position = 0;
+    c->min_w = 0;
+    c->min_h = 0;
+    uint32_t n = 0;
+    int is32 = 0;
+    uint32_t *h = prop_get(&wm, c->id, wm.atoms[NEXWM_ATOM_WM_NORMAL_HINTS], wm.atoms[NEXWM_ATOM_WM_SIZE_HINTS], &is32, &n);
+    if (!h || !is32 || n < 3) { free(h); return; }
+    if (h[0] & (1u << 0)) c->asked_position = 1;        /* USPosition */
+    if (h[0] & (1u << 2)) c->asked_position = 1;        /* PPosition */
+    if ((h[0] & (1u << 4)) && n >= 7) {                 /* PMinSize */
+        if ((int32_t)h[5] > 0 && (int32_t)h[5] <= wm.screen_w) c->min_w = (int)h[5];
+        if ((int32_t)h[6] > 0 && (int32_t)h[6] <= wm.screen_h) c->min_h = (int)h[6];
+    }
+    free(h);
+}
+
+/* _NET_WM_ICON: the pictures of the program, the biggest of them for the title bar (frame.c picks the one that fits). */
+static void client_read_icon(NexwmClient *c)
+{
+    free(c->icon_alloc);
+    c->icon = NULL;
+    c->icon_alloc = NULL;
+    c->icon_w = 0;
+    c->icon_h = 0;
+    uint32_t n = 0;
+    int is32 = 0;
+    uint32_t *data = prop_get(&wm, c->id, wm.atoms[NEXWM_ATOM_NET_WM_ICON], XCB_ATOM_CARDINAL, &is32, &n);
+    if (!data || !is32 || n < 3) { free(data); return; }
+    int want = wm.cfg.titlebar > 0 ? wm.cfg.titlebar - 2 * NEXWM_FRAME_PAD : 16;
+    if (want > 16) want = 16;
+    if (want < 8) want = 8;
+    const uint32_t *pixels = NULL;
+    int w = 0, h = 0;
+    if (!nexwm_frame_icon_pick(data, n, want, &w, &h, &pixels)) {
+        free(data);                                      /* no picture in it, or a list that says it is one and is not */
+        return;
+    }
+    c->icon = (uint32_t *)(void *)pixels;
+    c->icon_alloc = data;
+    c->icon_w = w;
+    c->icon_h = h;
+}
+
 /* ---------------------------------------------------------------- what the desktop reads about us */
 
 static void ewmh_update_supported(Nexwm *w)
@@ -301,6 +450,8 @@ static void ewmh_update_supported(Nexwm *w)
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_MAXIMIZED_HORZ];
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_FULLSCREEN];
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_HIDDEN];
+    list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_ABOVE];
+    list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_BELOW];
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_WINDOW_TYPE];
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_WINDOW_TYPE_NORMAL];
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_WINDOW_TYPE_DIALOG];
@@ -313,6 +464,7 @@ static void ewmh_update_supported(Nexwm *w)
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STRUT_PARTIAL];
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_ALLOWED_ACTIONS];
     list[n++] = w->atoms[NEXWM_ATOM_NET_FRAME_EXTENTS];
+    list[n++] = w->atoms[NEXWM_ATOM_NET_WM_MOVERESIZE];
     prop_set_atoms(w, w->root, w->atoms[NEXWM_ATOM_NET_SUPPORTED], list, n);
 }
 
@@ -372,15 +524,25 @@ static void client_set_allowed_actions(Nexwm *w, NexwmClient *c)
         w->atoms[NEXWM_ATOM_NET_WM_ACTION_RESIZE],       w->atoms[NEXWM_ATOM_NET_WM_ACTION_MAXIMIZE_HORZ],
         w->atoms[NEXWM_ATOM_NET_WM_ACTION_MAXIMIZE_VERT], w->atoms[NEXWM_ATOM_NET_WM_ACTION_FULLSCREEN],
         w->atoms[NEXWM_ATOM_NET_WM_ACTION_CHANGE_DESKTOP], w->atoms[NEXWM_ATOM_NET_WM_ACTION_MINIMIZE],
+        w->atoms[NEXWM_ATOM_NET_WM_ACTION_ABOVE],       w->atoms[NEXWM_ATOM_NET_WM_ACTION_BELOW],
     };
     prop_set_atoms(w, c->id, w->atoms[NEXWM_ATOM_NET_WM_ALLOWED_ACTIONS], list, sizeof list / sizeof list[0]);
+    (void)0;
 }
 
-/* the frame is the border (HDE has no title bar here yet): _NET_FRAME_EXTENTS tells the programs how thick it is */
+/* how thick the frame of a window is, in the order EWMH asks for it (left, right, top, bottom — the title bar is
+ * part of the top): what the panel measures a window with, and what a program that places its own dialogs reads */
 static void client_set_frame_extents(Nexwm *w, NexwmClient *c)
 {
-    uint32_t e[4] = { (uint32_t)(c->framed ? w->cfg.border : 0), (uint32_t)(c->framed ? w->cfg.border : 0),
-                      (uint32_t)(c->framed ? w->cfg.border : 0), (uint32_t)(c->framed ? w->cfg.border : 0) };
+    uint32_t e[4] = { 0, 0, 0, 0 };
+    if (c->framed && !c->fullscreen) {
+        int border = w->cfg.border > 0 ? w->cfg.border : 0;
+        int bar = w->cfg.titlebar > 0 ? w->cfg.titlebar : 0;
+        e[0] = (uint32_t)border;
+        e[1] = (uint32_t)border;
+        e[2] = (uint32_t)(border + bar);
+        e[3] = (uint32_t)border;
+    }
     prop_set_cardinal(w, c->id, w->atoms[NEXWM_ATOM_NET_FRAME_EXTENTS], e, 4);
 }
 
@@ -394,6 +556,8 @@ static void client_set_state(Nexwm *w, NexwmClient *c)
     }
     if (c->fullscreen) list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_FULLSCREEN];
     if (c->hidden) list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_HIDDEN];
+    if (c->above) list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_ABOVE];
+    if (c->below) list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_BELOW];
     if (c->dock) {
         list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_SKIP_TASKBAR];
         list[n++] = w->atoms[NEXWM_ATOM_NET_WM_STATE_SKIP_PAGER];
@@ -407,32 +571,347 @@ static void client_set_state(Nexwm *w, NexwmClient *c)
 
 /* ---------------------------------------------------------------- the frames, the workarea, the focus */
 
+/* what the frames look like: the numbers of the configuration file, in the shape frame.c works with */
+static NexwmFrameStyle frame_style(void)
+{
+    NexwmFrameStyle st;
+    st.border = wm.cfg.border;
+    st.titlebar = wm.cfg.titlebar;
+    st.buttons = wm.cfg.buttons;
+    st.n_buttons = wm.cfg.n_buttons;
+    return st;
+}
+
+/* the frame of one window: the same as the configuration's, except that a window in full screen has none (the bar of it
+ * would cover the program the user asked to see alone, and _NET_FRAME_EXTENTS of it is zeros) */
+static NexwmFrameStyle frame_style_of(const NexwmClient *c)
+{
+    NexwmFrameStyle st = frame_style();
+    if (!c || !c->framed || c->fullscreen) {
+        st.border = 0;
+        st.titlebar = 0;
+        st.buttons = NULL;
+        st.n_buttons = 0;
+    }
+    return st;
+}
+
+/* where the frame of a window is: the window plus what is drawn around it */
+static NexwmRect frame_rect(const NexwmClient *c)
+{
+    NexwmFrameStyle st = frame_style_of(c);
+    NexwmRect client = { c->x, c->y, c->w, c->h };
+    return nexwm_frame_around(&st, client);
+}
+
+static int frame_w(const NexwmClient *c) { return frame_rect(c).w; }
+static int frame_h(const NexwmClient *c) { return frame_rect(c).h; }
+
+/* the style as one number: it is compared to redraw a frame whose frame did not change size but whose look did (a window
+ * that goes full screen loses its title bar without moving at all) */
+static int style_key(const NexwmFrameStyle *st) { return st->border * 1000 + st->titlebar; }
+
+/* The window rectangle that makes the *frame* cover `area`: a maximized window is that much smaller than the work area
+ * (its title bar is above it, and there is a border around it), and the same for a snapped one. */
+static NexwmRect client_in_area(const NexwmClient *c, NexwmRect area)
+{
+    NexwmFrameStyle st = frame_style_of(c);
+    NexwmRect r = nexwm_frame_content(&st, area);
+    if (r.w < 1) r.w = 1;
+    if (r.h < 1) r.h = 1;
+    return r;
+}
+
+/* Where the pointer is inside the frame of a window, in the coordinates of the frame: the events of a grab carry root
+ * coordinates only (the frame is not the window they happened to), so every caller comes through here. */
+static int frame_hit_at(const NexwmClient *c, int root_x, int root_y, int *button, unsigned *sides)
+{
+    NexwmFrameStyle st = frame_style_of(c);
+    return nexwm_frame_hit(&st, frame_w(c), frame_h(c), root_x - c->fx, root_y - c->fy, button, sides);
+}
+
+/* ---------------------------------------------------------------- the drawing of a frame */
+
+/* one of the cursors of the "cursor" font: the glyph numbers of X11/cursorfont.h */
+static unsigned cursor_glyph(NexwmCursor k)
+{
+    switch (k) {
+    case NEXWM_CURSOR_MOVE:   return 52;       /* XC_fleur */
+    case NEXWM_CURSOR_BUTTON: return 60;       /* XC_hand2 */
+    case NEXWM_CURSOR_T:      return 138;      /* XC_top_side */
+    case NEXWM_CURSOR_B:      return 16;       /* XC_bottom_side */
+    case NEXWM_CURSOR_L:      return 70;       /* XC_left_side */
+    case NEXWM_CURSOR_R:      return 96;       /* XC_right_side */
+    case NEXWM_CURSOR_TL:     return 134;      /* XC_top_left_corner */
+    case NEXWM_CURSOR_TR:     return 136;      /* XC_top_right_corner */
+    case NEXWM_CURSOR_BL:     return 12;       /* XC_bottom_left_corner */
+    case NEXWM_CURSOR_BR:     return 14;       /* XC_bottom_right_corner */
+    default:                  return 68;       /* XC_left_ptr */
+    }
+}
+
+/* which cursor a place in the frame shows: the ends of the bar and the borders resize, the buttons are clickable */
+static NexwmCursor cursor_of_hit(int hit, unsigned sides)
+{
+    if (hit == NEXWM_HIT_BUTTON) return NEXWM_CURSOR_BUTTON;
+    if (hit == NEXWM_HIT_TITLE) return NEXWM_CURSOR_DEFAULT;
+    if (hit != NEXWM_HIT_EDGE) return NEXWM_CURSOR_DEFAULT;
+    switch (sides) {
+    case NEXWM_SIDE_TOP:                          return NEXWM_CURSOR_T;
+    case NEXWM_SIDE_BOTTOM:                       return NEXWM_CURSOR_B;
+    case NEXWM_SIDE_LEFT:                         return NEXWM_CURSOR_L;
+    case NEXWM_SIDE_RIGHT:                        return NEXWM_CURSOR_R;
+    case NEXWM_SIDE_TOP | NEXWM_SIDE_LEFT:        return NEXWM_CURSOR_TL;
+    case NEXWM_SIDE_TOP | NEXWM_SIDE_RIGHT:       return NEXWM_CURSOR_TR;
+    case NEXWM_SIDE_BOTTOM | NEXWM_SIDE_LEFT:     return NEXWM_CURSOR_BL;
+    case NEXWM_SIDE_BOTTOM | NEXWM_SIDE_RIGHT:    return NEXWM_CURSOR_BR;
+    default:                                      return NEXWM_CURSOR_DEFAULT;
+    }
+}
+
+/* The cursors of the mouse, out of the "cursor" font the X server has had since forever (no theme, no Xcursor: the
+ * window manager does not read a user's cursor theme, it draws nothing itself). A machine without that font gets the
+ * default pointer and the frames work all the same. */
+static void cursors_create(void)
+{
+    const char *name = "cursor";
+    wm.cursor_font = xcb_generate_id(wm.conn);
+    if (xcb_request_check(wm.conn, xcb_open_font_checked(wm.conn, wm.cursor_font, (uint16_t)strlen(name), name))) {
+        wm.cursor_font = 0;
+        wm_log("the 'cursor' font is not on this X server: the frames use the ordinary pointer");
+        return;
+    }
+    for (int i = 0; i < NEXWM_CURSOR_COUNT; i++) {
+        unsigned glyph = cursor_glyph((NexwmCursor)i);
+        xcb_cursor_t cur = xcb_generate_id(wm.conn);
+        /* the glyphs of that font come in pairs: the shape, then the mask of it */
+        xcb_create_glyph_cursor(wm.conn, cur, wm.cursor_font, wm.cursor_font, (uint16_t)glyph, (uint16_t)(glyph + 1),
+                                0, 0, 0, 0xffff, 0xffff, 0xffff);
+        wm.cursors[i] = cur;
+    }
+}
+
+/* the cursor a frame shows (only when it changes: a motion event is not a time to talk to the server) */
+static void frame_cursor(NexwmClient *c, NexwmCursor want)
+{
+    if (!c->frame || c->cursor == (int)want) return;
+    c->cursor = (int)want;
+    xcb_change_window_attributes(wm.conn, c->frame, XCB_CW_CURSOR, &wm.cursors[want]);
+}
+
+/* the font of the titles: a core font of the X server ("fixed"), which is why a title is drawn in Latin-1 */
+static void title_font_open(void)
+{
+    const char *name = wm.cfg.font[0] ? wm.cfg.font : "fixed";
+    wm.font = xcb_generate_id(wm.conn);
+    if (xcb_request_check(wm.conn, xcb_open_font_checked(wm.conn, wm.font, (uint16_t)strlen(name), name))) {
+        wm.font = 0;
+        wm_log("the font '%s' of the titles is not on this X server: the title bars show no text", name);
+        return;
+    }
+    xcb_query_font_reply_t *info = xcb_query_font_reply(wm.conn, xcb_query_font(wm.conn, wm.font), NULL);
+    if (info) {
+        wm.font_ascent = info->font_ascent;
+        wm.font_descent = info->font_descent;
+        free(info);
+    } else {
+        wm.font_ascent = 8;
+        wm.font_descent = 2;
+    }
+}
+
+/* the drawing of one button of the title bar: its square, and the little sign in it */
+static void frame_draw_button(xcb_window_t frame, const NexwmFrameButton *b, unsigned long bg, unsigned long fg,
+                              int maximized)
+{
+    uint32_t value = (uint32_t)bg;
+    xcb_change_gc(wm.conn, wm.gc, XCB_GC_FOREGROUND, &value);
+    xcb_rectangle_t r = { (int16_t)b->rect.x, (int16_t)b->rect.y, (uint16_t)b->rect.w, (uint16_t)b->rect.h };
+    xcb_poly_fill_rectangle(wm.conn, frame, wm.gc, 1, &r);
+
+    int x = b->rect.x, y = b->rect.y, w = b->rect.w, h = b->rect.h;
+    int pad = w / 4;
+    if (pad < 3) pad = 3;
+    int x1 = x + pad, y1 = y + pad, x2 = x + w - pad, y2 = y + h - pad;
+    value = (uint32_t)fg;
+    xcb_change_gc(wm.conn, wm.gc, XCB_GC_FOREGROUND, &value);
+
+    xcb_point_t p[8];
+    int n = 0;
+    switch (b->kind) {
+    case NEXWM_BUTTON_MINIMIZE:                     /* a line at the bottom of the square */
+        p[0] = (xcb_point_t){ (int16_t)x1, (int16_t)y2 };
+        p[1] = (xcb_point_t){ (int16_t)x2, (int16_t)y2 };
+        n = 2;
+        break;
+    case NEXWM_BUTTON_MAXIMIZE:
+        if (maximized) {                            /* two squares on top of each other: "give the old size back" */
+            p[0] = (xcb_point_t){ (int16_t)(x1 + pad / 2), (int16_t)y1 };
+            p[1] = (xcb_point_t){ (int16_t)x2, (int16_t)y1 };
+            p[2] = (xcb_point_t){ (int16_t)x2, (int16_t)(y2 - pad / 2) };
+            xcb_poly_line(wm.conn, XCB_COORD_MODE_ORIGIN, frame, wm.gc, 3, p);
+            p[0] = (xcb_point_t){ (int16_t)x1, (int16_t)(y1 + pad / 2) };
+            p[1] = (xcb_point_t){ (int16_t)(x2 - pad / 2), (int16_t)(y1 + pad / 2) };
+            p[2] = (xcb_point_t){ (int16_t)(x2 - pad / 2), (int16_t)y2 };
+            p[3] = (xcb_point_t){ (int16_t)x1, (int16_t)y2 };
+            p[4] = (xcb_point_t){ (int16_t)x1, (int16_t)(y1 + pad / 2) };
+            xcb_poly_line(wm.conn, XCB_COORD_MODE_ORIGIN, frame, wm.gc, 5, p);
+        } else {                                    /* one square: maximize */
+            p[0] = (xcb_point_t){ (int16_t)x1, (int16_t)y1 };
+            p[1] = (xcb_point_t){ (int16_t)x2, (int16_t)y1 };
+            p[2] = (xcb_point_t){ (int16_t)x2, (int16_t)y2 };
+            p[3] = (xcb_point_t){ (int16_t)x1, (int16_t)y2 };
+            p[4] = (xcb_point_t){ (int16_t)x1, (int16_t)y1 };
+            n = 5;
+        }
+        break;
+    default:                                        /* close: a cross */
+        p[0] = (xcb_point_t){ (int16_t)x1, (int16_t)y1 };
+        p[1] = (xcb_point_t){ (int16_t)x2, (int16_t)y2 };
+        xcb_poly_line(wm.conn, XCB_COORD_MODE_ORIGIN, frame, wm.gc, 2, p);
+        p[0] = (xcb_point_t){ (int16_t)x2, (int16_t)y1 };
+        p[1] = (xcb_point_t){ (int16_t)x1, (int16_t)y2 };
+        n = 2;
+        break;
+    }
+    if (n) xcb_poly_line(wm.conn, XCB_COORD_MODE_ORIGIN, frame, wm.gc, (uint32_t)n, p);
+}
+
+/* Paint a frame: the border of it, then the title bar with its icon, its title and its buttons. Everything X is not
+ * asked to keep (a window that is covered and comes back, a resize) is drawn again — this is the only place that
+ * draws a frame, so what is on the screen is what this function draws. */
 static void frame_paint(NexwmClient *c)
 {
     if (!c->frame) return;
-    uint32_t pixel = (wm.focused == c->id) ? wm.pixel_focus : wm.pixel_border;
-    xcb_change_window_attributes(wm.conn, c->frame, XCB_CW_BACK_PIXEL, &pixel);
-    xcb_clear_area(wm.conn, 1, c->frame, 0, 0, (uint16_t)(c->w + 2 * wm.cfg.border),
-                   (uint16_t)(c->h + 2 * wm.cfg.border));
+    int focused = wm.focused == c->id;
+    int fw = frame_w(c), fh = frame_h(c);
+    NexwmFrameStyle st = frame_style_of(c);
+    int border = st.border > 0 ? st.border : 0;
+    int bar = st.titlebar > 0 ? st.titlebar : 0;
+
+    /* the frame itself: the border colour (the focused one in the colour of the focus) */
+    uint32_t value = (uint32_t)(focused ? wm.pixel_focus : wm.pixel_border);
+    xcb_change_window_attributes(wm.conn, c->frame, XCB_CW_BACK_PIXEL, &value);
+    xcb_clear_area(wm.conn, 0, c->frame, 0, 0, (uint16_t)fw, (uint16_t)fh);
+    if (bar <= 0) return;                      /* a full screen window (or a bar of 0 px): the border is all of it */
+
+
+    unsigned long bar_bg = focused ? wm.cfg.titlebar_color : wm.cfg.titlebar_color_unfocused;
+    unsigned long text_px = focused ? wm.cfg.titlebar_text : wm.cfg.titlebar_text_unfocused;
+
+    /* the bar */
+    value = (uint32_t)bar_bg;
+    xcb_change_gc(wm.conn, wm.gc, XCB_GC_FOREGROUND, &value);
+    xcb_rectangle_t bar_rect = { 0, (int16_t)border, (uint16_t)fw, (uint16_t)bar };
+    xcb_poly_fill_rectangle(wm.conn, c->frame, wm.gc, 1, &bar_rect);
+
+    /* the buttons (the one under the pointer is a little lighter, so it is visible what a click would do) */
+    NexwmFrameButton b[8];
+    int n = nexwm_frame_buttons(&st, fw, b, 8);
+    for (int i = 0; i < n; i++) {
+        unsigned long bg = bar_bg;
+        if (c->hover && c->hover == b[i].kind) bg = nexwm_frame_shade(bar_bg, focused ? 140 : 120);
+        frame_draw_button(c->frame, &b[i], bg, text_px, c->maximized || c->fullscreen);
+    }
+
+    /* the icon of the program, at the left end of the bar */
+    int icon_end = 0;
+    if (c->icon && c->icon_w > 0) {
+        int want = bar - 2 * NEXWM_FRAME_PAD;
+        if (want > 16) want = 16;
+        if (want >= 8) {
+            uint8_t *pixels = malloc((size_t)want * (size_t)want * 4);
+            if (pixels) {
+                nexwm_frame_icon_draw(c->icon, c->icon_w, c->icon_h, want, bar_bg, pixels);
+                xcb_put_image(wm.conn, XCB_IMAGE_FORMAT_Z_PIXMAP, c->frame, wm.gc, (uint16_t)want, (uint16_t)want,
+                              (int16_t)NEXWM_FRAME_PAD, (int16_t)(border + (bar - want) / 2), 0,
+                              (uint8_t)wm.screen->root_depth, (uint32_t)(want * want * 4), pixels);
+                free(pixels);
+                icon_end = NEXWM_FRAME_PAD + want;
+            }
+        }
+    }
+
+    /* the title, centred in what the icon and the buttons leave of the bar */
+    if (wm.font && c->title[0]) {
+        char title[200];
+        nexwm_frame_title(c->title, title, sizeof title);
+        size_t len = strlen(title);
+        if (len > 255) len = 255;                   /* ImageText8 carries the length in one byte */
+        if (len) {
+            /* a query takes the string as 16-bit characters (the font is the one of the X server: Latin-1 here) */
+            xcb_char2b_t chars[256];
+            for (size_t i = 0; i < len; i++) {
+                chars[i].byte1 = 0;
+                chars[i].byte2 = (uint8_t)title[i];
+            }
+            xcb_query_text_extents_reply_t *ext = xcb_query_text_extents_reply(
+                wm.conn, xcb_query_text_extents(wm.conn, wm.font, (uint32_t)len, chars), NULL);
+            int text_w = ext ? ext->overall_width : (int)len * 6;
+            free(ext);
+            int tx = nexwm_frame_title_x(&st, fw, text_w, icon_end);
+            int ty = border + (bar + wm.font_ascent - wm.font_descent) / 2;
+            int clip_x = icon_end > 0 ? icon_end + 2 : 2;
+            int clip_r = n > 0 ? b[0].rect.x - 2 : fw - 2;
+            if (clip_r < clip_x) clip_r = clip_x;
+            xcb_rectangle_t clip = { (int16_t)clip_x, (int16_t)border, (uint16_t)(clip_r - clip_x), (uint16_t)bar };
+            xcb_set_clip_rectangles(wm.conn, XCB_CLIP_ORDERING_UNSORTED, wm.gc, 0, 0, 1, &clip);
+            xcb_image_text_8(wm.conn, (uint8_t)len, c->frame, wm.gc, (int16_t)tx, (int16_t)ty, title);
+            /* ... and the clip is taken off again. An empty list of clip rectangles is not "no clipping": it is a clip
+             * region that covers nothing, and every bar and every button drawn after it — of this frame, or of any
+             * other — would not appear at all. A clip mask of None is what says "draw everywhere". */
+            uint32_t no_mask = XCB_NONE;
+            xcb_change_gc(wm.conn, wm.gc, XCB_GC_CLIP_MASK, &no_mask);
+        }
+    }
 }
 
-/* move and size the frame and the client inside it (the client is at (border, border)) */
+/* Move and size the frame and the window inside it. A window sits at (border, border + title bar) of its frame, so
+ * the frame is the window plus the frame around it. The X server is told only when something really changed — a drag
+ * asks for the same numbers again and again — and a frame that changed size is painted again, because a resize
+ * leaves the new part of a window in its background colour (the bar would lose its title). */
 static void client_place(NexwmClient *c)
 {
+    NexwmFrameStyle st = frame_style_of(c);
+    int nfx = c->x, nfy = c->y, nfw = c->w, nfh = c->h, cx = 0, cy = 0;
+    int px = c->x, py = c->y;                 /* where the client window goes (root coordinates) */
+    if (c->framed) {
+        NexwmRect f = frame_rect(c);
+        nfx = f.x; nfy = f.y; nfw = f.w; nfh = f.h;
+        cx = st.border;
+        cy = st.border + (st.titlebar > 0 ? st.titlebar : 0);
+        px = nfx + cx;
+        py = nfy + cy;
+    }
+    int key = c->framed ? style_key(&st) : 0;
+    int resized = c->fw != nfw || c->fh != nfh || c->fw == 0 || c->style_key != key;
+    int restyled = c->framed && c->style_key != key;          /* the frame itself changed: no border, no bar, ... */
+    /* Nothing to say only when *all* of it is what was said last time: the frame's rectangle, the look of it, and the
+     * window inside it — place and size alike. A window that is somewhere else than where this function left it (a
+     * full screen window of the same size put back, a configuration request that never arrived) is told again here,
+     * instead of being left in a frame that no longer agrees with it. */
+    if (!resized && c->fx == nfx && c->fy == nfy && c->px == px && c->py == py && c->pw == c->w && c->ph == c->h)
+        return;
+    c->fx = nfx; c->fy = nfy; c->fw = nfw; c->fh = nfh; c->style_key = key;
+    c->px = px; c->py = py; c->pw = c->w; c->ph = c->h;
+    if (restyled) client_set_frame_extents(&wm, c);            /* a window that goes full screen has no frame any more */
+
     if (!c->framed) {
         uint32_t v[4] = { (uint32_t)c->x, (uint32_t)c->y, (uint32_t)c->w, (uint32_t)c->h };
         xcb_configure_window(wm.conn, c->id, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH |
                                              XCB_CONFIG_WINDOW_HEIGHT, v);
+        client_want_size(c, c->w, c->h);
         return;
     }
-    uint32_t f[4] = { (uint32_t)(c->x - wm.cfg.border), (uint32_t)(c->y - wm.cfg.border),
-                      (uint32_t)(c->w + 2 * wm.cfg.border), (uint32_t)(c->h + 2 * wm.cfg.border) };
+    uint32_t f[4] = { (uint32_t)nfx, (uint32_t)nfy, (uint32_t)nfw, (uint32_t)nfh };
     xcb_configure_window(wm.conn, c->frame, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH |
                                              XCB_CONFIG_WINDOW_HEIGHT, f);
-    uint32_t i[2] = { (uint32_t)wm.cfg.border, (uint32_t)wm.cfg.border };
-    xcb_configure_window(wm.conn, c->id, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, i);
-    uint32_t s[2] = { (uint32_t)c->w, (uint32_t)c->h };
-    xcb_configure_window(wm.conn, c->id, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, s);
+    uint32_t where[2] = { (uint32_t)cx, (uint32_t)cy };
+    xcb_configure_window(wm.conn, c->id, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, where);
+    uint32_t size[2] = { (uint32_t)c->w, (uint32_t)c->h };
+    xcb_configure_window(wm.conn, c->id, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, size);
+    client_want_size(c, c->w, c->h);
+    if (resized || restyled) frame_paint(c);
 }
 
 /* Is the window (and its frame) on the screen? A window of another workspace is unmapped, not destroyed: coming back
@@ -515,16 +994,65 @@ static void workarea_update(Nexwm *w)
     }
 }
 
+/* The order EWMH asks for: _NET_WM_STATE_BELOW windows under everything, then the ordinary ones, then the ones that
+ * asked for _NET_WM_STATE_ABOVE. Only the frames are put in order (each one right above the one before it in the list,
+ * which is the order they are in now), so a panel or a menu that is not ours keeps the place it chose. */
+static void restack_clients(void)
+{
+    int interesting = 0;
+    for (size_t i = 0; i < wm.n; i++)
+        if (wm.clients[i]->above || wm.clients[i]->below) interesting = 1;
+    if (!interesting || wm.n < 2) return;
+    xcb_query_tree_reply_t *tree = xcb_query_tree_reply(wm.conn, xcb_query_tree(wm.conn, wm.root), NULL);
+    if (!tree) return;
+    int kids = (int)xcb_query_tree_children_length(tree);
+    xcb_window_t *child = xcb_query_tree_children(tree);
+
+    NexwmClient **order = calloc(wm.n, sizeof *order);
+    size_t k = 0;
+    if (order) {
+        for (int pass = 0; pass < 3; pass++) {           /* 0: below, 1: the ordinary ones, 2: above */
+            for (int i = 0; i < kids; i++) {
+                NexwmClient *c = client_of_window(child[i]);
+                if (!c || !c->frame || k >= wm.n) continue;
+                int group = c->below ? 0 : (c->above ? 2 : 1);
+                if (group == pass) order[k++] = c;
+            }
+        }
+        for (size_t i = 1; i < k; i++) {
+            xcb_window_t sibling = order[i - 1]->frame;
+            uint32_t mode = XCB_STACK_MODE_ABOVE;
+            xcb_configure_window(wm.conn, order[i]->frame, XCB_CONFIG_WINDOW_SIBLING, &sibling);
+            xcb_configure_window(wm.conn, order[i]->frame, XCB_CONFIG_WINDOW_STACK_MODE, &mode);
+        }
+        free(order);
+    }
+    free(tree);
+}
+
+/* a click brings a window to the front — unless it asked to stay under the others */
+static void raise_client(NexwmClient *c)
+{
+    if (!c) return;
+    if (!c->below) {
+        /* a window without a frame of its own (a splash screen, a dialog that asked for no frame, the dock) is raised
+         * as it is: it is still a window of the screen, and a click on it puts it at the top like any other */
+        uint32_t mode = XCB_STACK_MODE_ABOVE;
+        xcb_configure_window(wm.conn, c->frame ? c->frame : c->id, XCB_CONFIG_WINDOW_STACK_MODE, &mode);
+    }
+    if (c->frame) restack_clients();
+}
+
 static void focus_client(NexwmClient *c, int raise_it)
 {
     xcb_window_t was = wm.focused;
     wm.focused = c ? c->id : XCB_NONE;
     if (c) {
-        if (raise_it && c->frame) {
-            uint32_t mode = XCB_STACK_MODE_ABOVE;
-            xcb_configure_window(wm.conn, c->frame, XCB_CONFIG_WINDOW_STACK_MODE, &mode);
-        }
-        /* the keyboard goes to the client itself, so that every program sees a normal focus */
+        if (raise_it) raise_client(c);
+        /* ICCCM: a program that asked to be told when it may take the focus gets the message (the same one the panel
+         * sends on a click). The keyboard goes to the client as well, so a program that ignores the message still has it. */
+        if (window_supports(&wm, c->id, NEXWM_ATOM_WM_TAKE_FOCUS))
+            client_send_protocol(c->id, NEXWM_ATOM_WM_TAKE_FOCUS, XCB_CURRENT_TIME);
         xcb_set_input_focus(wm.conn, XCB_INPUT_FOCUS_POINTER_ROOT, c->id, XCB_CURRENT_TIME);
     } else {
         xcb_set_input_focus(wm.conn, XCB_INPUT_FOCUS_POINTER_ROOT, XCB_NONE, XCB_CURRENT_TIME);
@@ -565,16 +1093,20 @@ static NexwmClient *client_next_in_desktop(NexwmClient *from, int direction)
 
 static void client_frame_create(NexwmClient *c)
 {
+    NexwmFrameStyle st = frame_style_of(c);
+    NexwmRect f = frame_rect(c);
     c->frame = xcb_generate_id(wm.conn);
     uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
     uint32_t values[2];
     values[0] = (uint32_t)wm.pixel_border;
-    values[1] = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_BUTTON_PRESS |
+    values[1] = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW |
+                XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION |
                 XCB_EVENT_MASK_EXPOSURE;
-    xcb_create_window(wm.conn, XCB_COPY_FROM_PARENT, c->frame, wm.root, (int16_t)(c->x - wm.cfg.border),
-                      (int16_t)(c->y - wm.cfg.border), (uint16_t)(c->w + 2 * wm.cfg.border),
-                      (uint16_t)(c->h + 2 * wm.cfg.border), 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT,
-                      mask, values);
+    xcb_create_window(wm.conn, XCB_COPY_FROM_PARENT, c->frame, wm.root, (int16_t)f.x, (int16_t)f.y,
+                      (uint16_t)(f.w > 0 ? f.w : 1), (uint16_t)(f.h > 0 ? f.h : 1), 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                      XCB_COPY_FROM_PARENT, mask, values);
+    c->fx = f.x; c->fy = f.y; c->fw = f.w; c->fh = f.h; c->style_key = style_key(&st);
+    c->cursor = NEXWM_CURSOR_DEFAULT;
 }
 
 static void client_manage(xcb_window_t id)
@@ -594,6 +1126,7 @@ static void client_manage(xcb_window_t id)
     if (!c) return;
     client_read_class(c);
     client_read_title(c);
+    client_read_hints(c);
 
     xcb_get_geometry_reply_t *geo = xcb_get_geometry_reply(wm.conn, xcb_get_geometry(wm.conn, id), NULL);
     if (geo) {
@@ -608,6 +1141,25 @@ static void client_manage(xcb_window_t id)
     int desktop_win = window_is_type(&wm, id, NEXWM_ATOM_NET_WM_WINDOW_TYPE_DESKTOP);
     c->dock = dock;
     c->framed = !(dock || desktop_win);
+    client_read_icon(c);
+
+    /* a program that did not say where it wants to be (no USPosition, no PPosition) and that is sitting in the corner of
+     * the screen is asking the window manager for a place: the middle of the work area, a little aside for every window
+     * that is already there. A program that chose its place keeps it — and so does one that only looks like it did. */
+    if (c->framed && !c->asked_position && c->x == 0 && c->y == 0) {
+        int already = 0;
+        for (size_t i = 0; i < wm.n; i++)
+            if (wm.clients[i] != c && wm.clients[i]->framed && wm.clients[i]->desktop == c->desktop) already++;
+        NexwmRect work = { wm.wx, wm.wy, wm.ww, wm.wh };
+        NexwmRect out;
+        nexwm_frame_place(work, c->w, c->h, already * 24, &out);
+        c->x = out.x;
+        c->y = out.y;
+        c->w = out.w;
+        c->h = out.h;
+        wm_log("0x%x '%s' asked for no place: %dx%d in the middle of the work area", (unsigned)c->id, c->title, c->w,
+               c->h);
+    }
 
     /* which workspace: the window itself may say (_NET_WM_DESKTOP), a dock is on all of them */
     uint32_t want = prop_get_cardinal(&wm, id, wm.atoms[NEXWM_ATOM_NET_WM_DESKTOP], 0xffffffffu);
@@ -617,7 +1169,10 @@ static void client_manage(xcb_window_t id)
                           XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_FOCUS_CHANGE };
     if (c->framed) {
         client_frame_create(c);
-        xcb_reparent_window(wm.conn, id, c->frame, (int16_t)wm.cfg.border, (int16_t)wm.cfg.border);
+        /* the window sits *inside* the frame: the border on the left, and the border plus the title bar above it (the
+         * same place client_place keeps it in: a program's window is never drawn under its own title bar) */
+        xcb_reparent_window(wm.conn, id, c->frame, (int16_t)wm.cfg.border,
+                            (int16_t)(wm.cfg.border + (wm.cfg.titlebar > 0 ? wm.cfg.titlebar : 0)));
         uint32_t zero = 0;
         xcb_configure_window(wm.conn, id, XCB_CONFIG_WINDOW_BORDER_WIDTH, &zero);
         client_place(c);
@@ -658,8 +1213,13 @@ static void client_manage(xcb_window_t id)
     (void)map_state;
 }
 
+/* the mouse may be in the middle of moving a window when it goes away (the program quit, the session ended it): the
+ * drag is let go of with it (the pointer is ungrabbed; the function itself is down in the mouse section) */
+static void drag_stop(void);
+
 static void client_unmanage(NexwmClient *c, int destroyed)
 {
+    if (wm.drag.c == c) drag_stop();
     if (wm.focused == c->id) wm.focused = XCB_NONE;
     if (c->frame && !destroyed) {
         uint32_t zero = 0;
@@ -734,15 +1294,7 @@ static void action_close(NexwmClient *c, int politely)
         return;
     }
     if (politely && window_supports(&wm, c->id, NEXWM_ATOM_WM_DELETE_WINDOW)) {
-        xcb_client_message_event_t ev;
-        memset(&ev, 0, sizeof ev);
-        ev.response_type = XCB_CLIENT_MESSAGE;
-        ev.window = c->id;
-        ev.type = wm.atoms[NEXWM_ATOM_WM_PROTOCOLS];
-        ev.format = 32;
-        ev.data.data32[0] = wm.atoms[NEXWM_ATOM_WM_DELETE_WINDOW];
-        ev.data.data32[1] = XCB_CURRENT_TIME;
-        xcb_send_event(wm.conn, 0, c->id, XCB_EVENT_MASK_NO_EVENT, (const char *)&ev);
+        client_send_protocol(c->id, NEXWM_ATOM_WM_DELETE_WINDOW, XCB_CURRENT_TIME);
         wm_log("asked 0x%x '%s' to close", (unsigned)c->id, c->title);
         return;
     }
@@ -794,12 +1346,16 @@ static void action_maximize(NexwmClient *c, int on)
     if (on && !c->maximized) {
         c->sx = c->x; c->sy = c->y; c->sw = c->w; c->sh = c->h;
         c->has_saved = 1;
-        c->x = wm.wx; c->y = wm.wy; c->w = wm.ww; c->h = wm.wh;
+        /* the *frame* covers the work area: the window is that much smaller than it (the title bar is above it, and the
+         * border is around it), so a maximized window shows its title and its buttons like any other */
+        NexwmRect area = { wm.wx, wm.wy, wm.ww, wm.wh };
+        NexwmRect r = client_in_area(c, area);
+        c->x = r.x; c->y = r.y; c->w = r.w; c->h = r.h;
         c->maximized = 1;
         client_place(c);
         client_set_state(&wm, c);
-        wm_log("maximized 0x%x '%s' (%dx%d at %d,%d: the workarea, the panel's struts left out)", (unsigned)c->id,
-               c->title, c->w, c->h, c->x, c->y);
+        wm_log("maximized 0x%x '%s' (%dx%d at %d,%d: the workarea without the panel's struts and without its frame)",
+               (unsigned)c->id, c->title, c->w, c->h, c->x, c->y);
     } else if (!on && c->maximized) {
         c->maximized = 0;
         if (c->has_saved) {
@@ -822,16 +1378,80 @@ static void action_snap(NexwmClient *c, int edge)
         c->has_saved = 1;
     }
     c->maximized = 0;
+    NexwmRect area = { wm.wx, wm.wy, wm.ww, wm.wh };
     switch (edge) {
-    case NEXWM_EDGE_LEFT:  c->x = wm.wx;                c->y = wm.wy; c->w = wm.ww / 2; c->h = wm.wh; break;
-    case NEXWM_EDGE_RIGHT: c->x = wm.wx + wm.ww / 2;    c->y = wm.wy; c->w = wm.ww - wm.ww / 2; c->h = wm.wh; break;
-    case NEXWM_EDGE_UP:    c->x = wm.wx; c->y = wm.wy;                c->w = wm.ww; c->h = wm.wh / 2; break;
-    default:               c->x = wm.wx; c->y = wm.wy + wm.wh / 2;    c->w = wm.ww; c->h = wm.wh - wm.wh / 2; break;
+    case NEXWM_EDGE_LEFT:
+        area.w /= 2;
+        break;
+    case NEXWM_EDGE_RIGHT:
+        area.w -= area.w / 2;
+        area.x += wm.ww / 2;
+        break;
+    case NEXWM_EDGE_UP:
+        area.h /= 2;
+        break;
+    default:
+        area.h -= area.h / 2;
+        area.y += wm.wh / 2;
+        break;
     }
+    NexwmRect r = client_in_area(c, area);
+    c->x = r.x; c->y = r.y; c->w = r.w; c->h = r.h;
     client_place(c);
     client_set_state(&wm, c);
     static const char *names[] = { "left", "right", "up", "down" };
     wm_log("snapped %s: 0x%x '%s' (%dx%d at %d,%d)", names[edge], (unsigned)c->id, c->title, c->w, c->h, c->x, c->y);
+}
+
+/* the Minimize button (and the panel's taskbar): the window is unmapped and says _NET_WM_STATE_HIDDEN, the panel keeps
+ * listing it, and clicking it once more brings it back */
+static void action_minimize(NexwmClient *c)
+{
+    if (!c) {
+        wm_log("no window to minimize");
+        return;
+    }
+    if (c->hidden) {
+        client_hide(c, 0);
+        focus_client(c, 1);
+        wm_log("0x%x '%s' is back from the taskbar", (unsigned)c->id, c->title);
+        return;
+    }
+    client_hide(c, 1);
+    wm_log("minimized 0x%x '%s' (the panel sees _NET_WM_STATE_HIDDEN)", (unsigned)c->id, c->title);
+    if (wm.focused == c->id) {
+        wm.focused = XCB_NONE;
+        NexwmClient *n = client_next_in_desktop(c, 1);
+        if (n && n != c) focus_client(n, 0);
+        else ewmh_update_active(&wm);
+    }
+}
+
+/* _NET_WM_STATE_ABOVE and _NET_WM_STATE_BELOW: "always on top" and its other way round (the panel offers the first) */
+static void action_above(NexwmClient *c, int on)
+{
+    if (!c) {
+        wm_log("no window for it");
+        return;
+    }
+    c->above = on;
+    if (on) c->below = 0;
+    client_set_state(&wm, c);
+    restack_clients();
+    wm_log("0x%x '%s' is %s the other windows", (unsigned)c->id, c->title, on ? "now above" : "no longer above");
+}
+
+static void action_below(NexwmClient *c, int on)
+{
+    if (!c) {
+        wm_log("no window for it");
+        return;
+    }
+    c->below = on;
+    if (on) c->above = 0;
+    client_set_state(&wm, c);
+    restack_clients();
+    wm_log("0x%x '%s' is %s the other windows", (unsigned)c->id, c->title, on ? "now below" : "no longer below");
 }
 
 static void action_fullscreen(NexwmClient *c)
@@ -847,7 +1467,7 @@ static void action_fullscreen(NexwmClient *c)
         }
         c->fullscreen = 1;
         c->maximized = 0;
-        c->x = 0; c->y = 0; c->w = wm.screen_w; c->h = wm.screen_h;
+        c->x = 0; c->y = 0; c->w = wm.screen_w; c->h = wm.screen_h;      /* the whole screen: no bar, no border */
         client_place(c);
         client_set_state(&wm, c);
         wm_log("full screen 0x%x '%s' (%dx%d)", (unsigned)c->id, c->title, c->w, c->h);
@@ -893,10 +1513,289 @@ static void action_run(HdeNexwmAction action, int arg, const char *command)
     case NEXWM_ACTION_MAXIMIZE:   action_maximize(c, 1); break;
     case NEXWM_ACTION_UNMAXIMIZE: action_maximize(c, 0); break;
     case NEXWM_ACTION_FULLSCREEN: action_fullscreen(c); break;
+    case NEXWM_ACTION_MINIMIZE:   action_minimize(c); break;
     case NEXWM_ACTION_SNAP:       action_snap(c, arg); break;
     case NEXWM_ACTION_QUIT:       action_quit(); break;
     default: break;
     }
+}
+
+/* ---------------------------------------------------------------- the mouse on the frames */
+
+/* how near the edge of the work area a window dropped there counts as "on that edge" (nexwm_frame_drop) */
+#define NEXWM_DROP_MARGIN 12
+
+/* what the pointer is on inside a frame: the button it is over is drawn lit, and the cursor says what a drag here would
+ * do. Every motion over a frame comes through here, so it talks to the X server only when something changed. */
+static void frame_pointer_update(NexwmClient *c, int root_x, int root_y)
+{
+    if (!c || !c->frame || !c->framed || c->dock || c->fullscreen) return;
+    int button = 0;
+    unsigned sides = 0;
+    int hit = frame_hit_at(c, root_x, root_y, &button, &sides);
+    int hover = hit == NEXWM_HIT_BUTTON ? button : 0;
+    if (hover != c->hover) {
+        c->hover = hover;
+        frame_paint(c);
+    }
+    frame_cursor(c, cursor_of_hit(hit, sides));
+}
+
+/* the modifier keys the bindings use, with the lock ones taken out (Caps Lock is not part of what the user pressed) */
+static unsigned mods_clean(unsigned state)
+{
+    for (int l = 1; l < wm.n_lock_masks; l++) state &= ~wm.lock_masks[l];
+    return state & (XCB_MOD_MASK_4 | XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1 | XCB_MOD_MASK_SHIFT);
+}
+
+/* what a press on one of the buttons of the title bar does when the mouse lets go over it */
+static void button_action(NexwmClient *c, int kind)
+{
+    switch (kind) {
+    case NEXWM_BUTTON_MINIMIZE: action_minimize(c); break;
+    case NEXWM_BUTTON_MAXIMIZE: action_maximize(c, !c->maximized); break;
+    default:                    action_close(c, 1); break;
+    }
+}
+
+/* A drag holds the pointer (a grab of the root window): the window has to follow the pointer even when the pointer has
+ * left it. Without the grab the window under the pointer gets the motion, and a window dragged under the pointer would
+ * stop moving. */
+static void drag_grab(xcb_cursor_t cursor)
+{
+    uint32_t mask = XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_POINTER_MOTION;
+    xcb_grab_pointer_reply_t *r = xcb_grab_pointer_reply(
+        wm.conn, xcb_grab_pointer(wm.conn, 0, wm.root, mask, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE,
+                                  cursor, XCB_CURRENT_TIME), NULL);
+    if (!r) return;
+    if (r->status != XCB_GRAB_STATUS_SUCCESS)
+        wm_log("another program holds the pointer: the window follows it inside its frame only");
+    free(r);
+}
+
+/* A maximized window that is taken by the title bar comes back to the size it had, under the pointer: the user grabbed
+ * the bar of a window, not the whole work area. The pointer keeps the place it had in the frame — where it took hold is
+ * where it holds on. */
+static void drag_restore(NexwmClient *c, int px, int py)
+{
+    NexwmRect before = frame_rect(c);
+    int fw0 = before.w > 0 ? before.w : 1;
+    int fh0 = before.h > 0 ? before.h : 1;
+    int rx = px - before.x;
+    int ry = py - before.y;
+    if (c->fullscreen) action_fullscreen(c);
+    else action_maximize(c, 0);
+    NexwmRect after = frame_rect(c);
+    NexwmFrameStyle st = frame_style_of(c);
+    int fw1 = after.w > 0 ? after.w : 1;
+    int fh1 = after.h > 0 ? after.h : 1;
+    int fx = px - (int)((long)rx * fw1 / fw0);             /* the frame back under the pointer */
+    int fy = py - (int)((long)ry * fh1 / fh0);
+    c->x = fx + st.border;
+    c->y = fy + st.border + st.titlebar;
+    client_place(c);
+    wm.drag.restored = 1;
+    wm_log("0x%x '%s': taken off the work area, back to %dx%d at %d,%d", (unsigned)c->id, c->title, c->w, c->h, c->x,
+           c->y);
+}
+
+/* the sides of a resize as the two protocols that name them do (_NET_WM_MOVERESIZE: 0..7 clockwise from the top left) */
+static unsigned sides_of_direction(unsigned direction)
+{
+    switch (direction) {
+    case 0:  return NEXWM_SIDE_TOP | NEXWM_SIDE_LEFT;
+    case 1:  return NEXWM_SIDE_TOP;
+    case 2:  return NEXWM_SIDE_TOP | NEXWM_SIDE_RIGHT;
+    case 3:  return NEXWM_SIDE_RIGHT;
+    case 4:  return NEXWM_SIDE_BOTTOM | NEXWM_SIDE_RIGHT;
+    case 5:  return NEXWM_SIDE_BOTTOM;
+    case 6:  return NEXWM_SIDE_BOTTOM | NEXWM_SIDE_LEFT;
+    default: return NEXWM_SIDE_LEFT;
+    }
+}
+
+/* begin a drag: `move` 1 moves the window, 0 resizes it by `sides`; (px, py) is where the pointer was when it began */
+static void drag_start(NexwmClient *c, int move, unsigned sides, int button, int px, int py)
+{
+    memset(&wm.drag, 0, sizeof wm.drag);
+    wm.drag.c = c;
+    wm.drag.active = 1;
+    wm.drag.move = move;
+    wm.drag.sides = sides;
+    wm.drag.button = button;
+    wm.drag.x0 = px;
+    wm.drag.y0 = py;
+    wm.drag.start.x = c->x;
+    wm.drag.start.y = c->y;
+    wm.drag.start.w = c->w;
+    wm.drag.start.h = c->h;
+    drag_grab(move ? wm.cursors[NEXWM_CURSOR_MOVE]
+                   : (sides ? wm.cursors[cursor_of_hit(NEXWM_HIT_EDGE, sides)] : XCB_NONE));
+    if (move) frame_cursor(c, NEXWM_CURSOR_MOVE);
+    if (move || sides)
+        wm_log("%s 0x%x '%s' with the mouse (button %d)", move ? "moving" : "resizing", (unsigned)c->id, c->title,
+               button);
+}
+
+/* end it: the pointer is let go, and the cursor goes back to the plain one (the caller says what the pointer is on now) */
+static void drag_stop(void)
+{
+    xcb_ungrab_pointer(wm.conn, XCB_CURRENT_TIME);
+    NexwmClient *c = wm.drag.c;
+    if (c && c->frame) frame_cursor(c, NEXWM_CURSOR_DEFAULT);
+    memset(&wm.drag, 0, sizeof wm.drag);
+}
+
+static void drag_motion(xcb_motion_notify_event_t *ev)
+{
+    NexwmClient *c = wm.drag.c;
+    if (!c || !c->framed) {
+        drag_stop();
+        return;
+    }
+    if (wm.drag.pressed) return;                       /* on a button of the bar: nothing moves until the mouse lets go */
+    int dx = (int)ev->root_x - wm.drag.x0;
+    int dy = (int)ev->root_y - wm.drag.y0;
+    if (!dx && !dy) return;
+
+    /* A window that fills the work area (maximized, full screen) comes back to the size it had once the mouse has really
+     * moved: taking hold of the title bar of a maximized window is a click (that is what a click on it does — it gives
+     * the window the focus), and it is the *drag* that says the window is meant to be moved or resized. It comes back
+     * under the pointer, where the mouse took hold of it. */
+    if (!wm.drag.restored && (c->maximized || c->fullscreen) && (dx > 8 || dx < -8 || dy > 8 || dy < -8)) {
+        if (wm.drag.move) drag_restore(c, ev->root_x, ev->root_y);
+        else if (c->fullscreen) action_fullscreen(c);
+        else action_maximize(c, 0);
+        wm.drag.x0 = ev->root_x;
+        wm.drag.y0 = ev->root_y;
+        wm.drag.start.x = c->x;
+        wm.drag.start.y = c->y;
+        wm.drag.start.w = c->w;
+        wm.drag.start.h = c->h;
+        wm.drag.restored = 1;
+        return;                                        /* this motion took the window out of its place */
+    }
+    NexwmFrameStyle st = frame_style_of(c);
+    int border = st.border;
+    int bar = st.border + st.titlebar;                 /* from the top of the frame to the top of the window */
+    if (wm.drag.move) {
+        /* the frame the drag began with, moved by the pointer */
+        int fx = wm.drag.start.x - border;
+        int fy = wm.drag.start.y - border - st.titlebar;
+        int fw = wm.drag.start.w + 2 * border;
+        int nx = fx + dx;
+        int ny = fy + dy;
+        if (nx < wm.wx - fw + 40) nx = wm.wx - fw + 40;            /* 40 px of it stay on the screen... */
+        if (nx > wm.wx + wm.ww - 40) nx = wm.wx + wm.ww - 40;
+        if (ny < wm.wy)                                            /* ... and the bar stays on the work area: a window
+                                                                    * that already sits above the edge (a program put it
+                                                                    * there) keeps its place instead of jumping down */
+            ny = (wm.drag.start.y - border - st.titlebar < wm.wy) ? wm.drag.start.y - border - st.titlebar : wm.wy;
+        if (ny + bar > wm.wy + wm.wh) ny = wm.wy + wm.wh - bar;
+        c->x = nx + border;
+        c->y = ny + border + st.titlebar;
+    } else {
+        NexwmRect r = nexwm_frame_resize(wm.drag.start, wm.drag.sides, dx, dy, c->min_w, c->min_h);
+        c->x = r.x;
+        c->y = r.y;
+        c->w = r.w;
+        c->h = r.h;
+    }
+    client_place(c);
+    wm.drag.moved = 1;
+}
+
+/* the mouse let go: a button of the title bar acts, a window dropped on the edge of the work area is maximized or takes
+ * half of it, and anything else is just where it was left */
+static void drag_finish(xcb_button_release_event_t *ev)
+{
+    NexwmClient *c = wm.drag.c;
+    int move = wm.drag.move;
+    int moved = wm.drag.moved;
+    int pressed = wm.drag.pressed;
+    int which = wm.drag.pressed_button;
+    if (!c) {
+        drag_stop();
+        return;
+    }
+    if (pressed) {
+        int button = 0;
+        unsigned sides = 0;
+        if (frame_hit_at(c, ev->root_x, ev->root_y, &button, &sides) == NEXWM_HIT_BUTTON && button == which)
+            button_action(c, which);
+        else
+            wm_log("0x%x '%s': the mouse left the button before it let go, so nothing was asked", (unsigned)c->id,
+                   c->title);
+    } else if (move && moved) {
+        NexwmRect work = { wm.wx, wm.wy, wm.ww, wm.wh };
+        int drop = nexwm_frame_drop(&work, ev->root_x, ev->root_y, NEXWM_DROP_MARGIN);
+        if (drop == NEXWM_DROP_MAXIMIZE) {
+            wm_log("0x%x '%s' let go at the top of the work area", (unsigned)c->id, c->title);
+            action_maximize(c, 1);
+        } else if (drop == NEXWM_DROP_LEFT || drop == NEXWM_DROP_RIGHT) {
+            wm_log("0x%x '%s' let go at the %s edge of the work area", (unsigned)c->id, c->title,
+                   drop == NEXWM_DROP_LEFT ? "left" : "right");
+            action_snap(c, drop == NEXWM_DROP_LEFT ? NEXWM_EDGE_LEFT : NEXWM_EDGE_RIGHT);
+        } else {
+            wm_log("moved 0x%x '%s' to %d,%d", (unsigned)c->id, c->title, c->x, c->y);
+        }
+    } else if (moved) {
+        wm_log("resized 0x%x '%s' to %dx%d at %d,%d", (unsigned)c->id, c->title, c->w, c->h, c->x, c->y);
+    }
+    drag_stop();
+    frame_pointer_update(c, ev->root_x, ev->root_y);   /* the pointer is somewhere: show what is under it */
+}
+
+/* the press of a button of the mouse: focus, then what it begins (a move, a resize, a button of the title bar) */
+static void handle_button_press(xcb_button_press_event_t *b)
+{
+    NexwmClient *c = client_of_window(b->event);
+    if (!c || c->dock || !c->framed) return;
+    int on_frame = c->frame && b->event == c->frame;
+
+    /* a click on a window is a click on that window: it comes to the front and takes the focus (the click itself is the
+     * program's; this is only what every window manager does with it) */
+    if (c->desktop == wm.desktop && !c->hidden) {
+        if (wm.focused == c->id) raise_client(c);
+        else focus_client(c, 1);
+    }
+    if (wm.drag.active) return;
+
+    if (!on_frame) {
+        /* Super and the first button moves a window from anywhere of it, Alt and the third one resizes it from its
+         * bottom right: what a window manager offers when the window has nothing left to grab (no title bar, or a bar
+         * that is off the screen) */
+        unsigned mods = mods_clean(b->state);
+        if (b->detail == 1 && mods == XCB_MOD_MASK_4) drag_start(c, 1, 0, 1, b->root_x, b->root_y);
+        else if (b->detail == 3 && mods == XCB_MOD_MASK_1)
+            drag_start(c, 0, NEXWM_SIDE_BOTTOM | NEXWM_SIDE_RIGHT, 3, b->root_x, b->root_y);
+        return;
+    }
+
+    int button = 0;
+    unsigned sides = 0;
+    int hit = frame_hit_at(c, b->root_x, b->root_y, &button, &sides);
+    if (hit == NEXWM_HIT_BUTTON) {
+        if (b->detail != 1) return;
+        drag_start(c, 0, 0, b->detail, b->root_x, b->root_y);
+        wm.drag.pressed = 1;
+        wm.drag.pressed_button = button;
+        return;
+    }
+    if (hit == NEXWM_HIT_TITLE && b->detail == 1) {
+        /* a double click on the bar gives the window the work area and takes it back: the same as the Maximize button */
+        if (wm.last_click_window == c->id && wm.last_click_time != 0 && b->time - wm.last_click_time < 400) {
+            wm.last_click_window = 0;
+            wm.last_click_time = 0;
+            action_maximize(c, !c->maximized);
+            return;
+        }
+        wm.last_click_window = c->id;
+        wm.last_click_time = b->time;
+        drag_start(c, 1, 0, b->detail, b->root_x, b->root_y);
+        return;
+    }
+    if (hit == NEXWM_HIT_EDGE) drag_start(c, 0, sides, b->detail, b->root_x, b->root_y);
 }
 
 /* ---------------------------------------------------------------- the keys */
@@ -1097,12 +1996,31 @@ static void handle_configure_request(xcb_configure_request_event_t *ev)
     }
     if (ev->value_mask & XCB_CONFIG_WINDOW_WIDTH) c->w = ev->width;
     if (ev->value_mask & XCB_CONFIG_WINDOW_HEIGHT) c->h = ev->height;
-    if (ev->value_mask & XCB_CONFIG_WINDOW_X) c->x = ev->x + (c->framed ? wm.cfg.border : 0);
-    if (ev->value_mask & XCB_CONFIG_WINDOW_Y) c->y = ev->y + (c->framed ? wm.cfg.border : 0);
+    /* A program that asks to be at (x, y) means the window *and its frame*: a toolkit that moves a window of a
+     * reparenting window manager moves the frame it was given. So the place asked for is the frame's, and the window
+     * inside it sits where the frame puts it (the border, and the title bar under the top of the frame). */
+    NexwmFrameStyle st = frame_style_of(c);
+    int offx = c->framed ? st.border : 0;
+    int offy = c->framed ? st.border + (st.titlebar > 0 ? st.titlebar : 0) : 0;
+    if (ev->value_mask & XCB_CONFIG_WINDOW_X) c->x = (int)ev->x + offx;
+    if (ev->value_mask & XCB_CONFIG_WINDOW_Y) c->y = (int)ev->y + offy;
     client_place(c);
     if (ev->value_mask & XCB_CONFIG_WINDOW_STACK_MODE) {
         uint32_t mode = configure_value(ev, XCB_CONFIG_WINDOW_STACK_MODE);
         xcb_configure_window(wm.conn, c->frame ? c->frame : c->id, XCB_CONFIG_WINDOW_STACK_MODE, &mode);
+    }
+}
+
+static void handle_map_notify(xcb_map_notify_event_t *ev)
+{
+    NexwmClient *c = client_of_window(ev->window);
+    if (!c || !c->framed || c->id != ev->window) return;   /* the frame of a window being mapped: our own doing */
+    if (c->hidden) {
+        /* we put the window away (the taskbar, or the Minimize button) and the program mapped it again: it is on the
+         * screen now, so it is not hidden — and the panel is told the same thing */
+        c->hidden = 0;
+        client_set_state(&wm, c);
+        wm_log("0x%x '%s' put itself back on the screen", (unsigned)c->id, c->title);
     }
 }
 
@@ -1140,8 +2058,16 @@ static void handle_configure_notify(xcb_configure_notify_event_t *ev)
         c->h = ev->height;
         return;
     }
-    /* the client resized itself (a program that changed its own size): the frame follows */
+    /* The size of a window that fills the work area is the window manager's: the same rule the requests above are
+     * answered with. A program that resizes its window while it is maximized or full screen does not get to shrink its
+     * own frame around it — the next maximize or full screen would put the work area back, and until then what the
+     * screen shows and what the frame extents say stay what they were. */
+    if (c->maximized || c->fullscreen) return;
+    /* the client resized itself (a program that changed its own size): the frame follows — unless the size is one this
+     * window manager asked for a moment ago, which makes the event the echo of its own request (the answer to the move
+     * of a move-and-resize carries the size from before the resize, and following it would undo that resize) */
     if (c->w == ev->width && c->h == ev->height) return;
+    if (client_wanted_size(c, ev->width, ev->height)) return;
     c->w = ev->width;
     c->h = ev->height;
     client_place(c);
@@ -1155,7 +2081,15 @@ static void handle_property_notify(xcb_property_notify_event_t *ev)
         char before[200];
         snprintf(before, sizeof before, "%s", c->title);
         client_read_title(c);
-        if (strcmp(before, c->title)) wm_log("0x%x is now '%s'", (unsigned)c->id, c->title);
+        if (strcmp(before, c->title)) {
+            wm_log("0x%x is now '%s'", (unsigned)c->id, c->title);
+            frame_paint(c);                      /* the title bar shows what the program calls itself now */
+        }
+    } else if (ev->atom == wm.atoms[NEXWM_ATOM_NET_WM_ICON]) {
+        client_read_icon(c);
+        frame_paint(c);
+    } else if (ev->atom == wm.atoms[NEXWM_ATOM_WM_NORMAL_HINTS]) {
+        client_read_hints(c);                    /* a program that changes how small it lets itself get */
     } else if (ev->atom == wm.atoms[NEXWM_ATOM_NET_WM_STRUT] || ev->atom == wm.atoms[NEXWM_ATOM_NET_WM_STRUT_PARTIAL]) {
         workarea_update(&wm);
     } else if (ev->atom == wm.atoms[NEXWM_ATOM_NET_WM_WINDOW_TYPE]) {
@@ -1176,8 +2110,10 @@ static void handle_client_message(xcb_client_message_event_t *ev)
     } else if (ev->type == wm.atoms[NEXWM_ATOM_NET_ACTIVE_WINDOW]) {
         if (!c) return;
         if (c->desktop != wm.desktop) action_workspace(c->desktop);
-        if (c->hidden) client_hide(c, 0);
-        focus_client(c, 1);
+        /* the taskbar of the panel asks for a window the same way the Minimize button brings one back: it is the same
+         * path, so a window that was put away comes back on the screen (and the log says the same thing) */
+        if (c->hidden) action_minimize(c);
+        else focus_client(c, 1);
     } else if (ev->type == wm.atoms[NEXWM_ATOM_NET_CLOSE_WINDOW]) {
         action_close(c, 1);
     } else if (ev->type == wm.atoms[NEXWM_ATOM_NET_WM_STATE] && c) {
@@ -1195,8 +2131,25 @@ static void handle_client_message(xcb_client_message_event_t *ev)
                 if (want != c->maximized) action_maximize(c, want);
             } else if (prop == wm.atoms[NEXWM_ATOM_NET_WM_STATE_HIDDEN]) {
                 int want = action == 1 ? 1 : (action == 0 ? 0 : !c->hidden);
-                if (c->framed) client_hide(c, want);
+                if (c->framed && want != c->hidden) action_minimize(c);
+            } else if (prop == wm.atoms[NEXWM_ATOM_NET_WM_STATE_ABOVE]) {
+                action_above(c, action == 1 ? 1 : (action == 0 ? 0 : !c->above));
+            } else if (prop == wm.atoms[NEXWM_ATOM_NET_WM_STATE_BELOW]) {
+                action_below(c, action == 1 ? 1 : (action == 0 ? 0 : !c->below));
             }
+        }
+    } else if (ev->type == wm.atoms[NEXWM_ATOM_NET_WM_MOVERESIZE] && c) {
+        /* a program (the panel, or a window that draws its own decorations) asks for a move or a resize with the mouse:
+         * the same drag as a press on the title bar — the program took the press, so the button is the one it says */
+        unsigned direction = ev->data.data32[2];
+        if (direction == 11) {                             /* _NET_WM_MOVERESIZE_CANCEL */
+            if (wm.drag.active && wm.drag.c == c) drag_stop();
+        } else if (c->framed && !c->dock && c->desktop == wm.desktop && !c->hidden) {
+            int button = (int)ev->data.data32[3] ? (int)ev->data.data32[3] : 1;
+            if (direction == 8) drag_start(c, 1, 0, button, (int)ev->data.data32[0], (int)ev->data.data32[1]);
+            else if (direction < 8)
+                drag_start(c, 0, sides_of_direction(direction), button, (int)ev->data.data32[0],
+                           (int)ev->data.data32[1]);
         }
     } else if (ev->type == wm.atoms[NEXWM_ATOM_WM_CHANGE_STATE] && c) {
         /* ICCCM: 3 = IconicState, the program asks to be minimized */
@@ -1218,24 +2171,57 @@ static void handle_event(xcb_generic_event_t *ev)
     switch (ev->response_type & 0x7f) {
     case XCB_MAP_REQUEST:        handle_map_request((xcb_map_request_event_t *)ev); break;
     case XCB_CONFIGURE_REQUEST:  handle_configure_request((xcb_configure_request_event_t *)ev); break;
+    case XCB_MAP_NOTIFY:         handle_map_notify((xcb_map_notify_event_t *)ev); break;
     case XCB_UNMAP_NOTIFY:       handle_unmap_notify((xcb_unmap_notify_event_t *)ev); break;
     case XCB_DESTROY_NOTIFY:     handle_destroy_notify((xcb_destroy_notify_event_t *)ev); break;
     case XCB_CONFIGURE_NOTIFY:   handle_configure_notify((xcb_configure_notify_event_t *)ev); break;
     case XCB_PROPERTY_NOTIFY:    handle_property_notify((xcb_property_notify_event_t *)ev); break;
     case XCB_CLIENT_MESSAGE:     handle_client_message((xcb_client_message_event_t *)ev); break;
     case XCB_KEY_PRESS:          handle_key_press((xcb_key_press_event_t *)ev); break;
-    case XCB_BUTTON_PRESS: {
-        xcb_button_press_event_t *b = (xcb_button_press_event_t *)ev;
-        NexwmClient *c = client_of_window(b->event);
-        if (c && c->framed && !c->dock) focus_client(c, 1);
+    case XCB_BUTTON_PRESS:       handle_button_press((xcb_button_press_event_t *)ev); break;
+    case XCB_BUTTON_RELEASE: {
+        if (wm.drag.active) drag_finish((xcb_button_release_event_t *)ev);
+        break;
+    }
+    case XCB_MOTION_NOTIFY: {
+        xcb_motion_notify_event_t *m = (xcb_motion_notify_event_t *)ev;
+        if (wm.drag.active) {
+            drag_motion(m);
+            break;
+        }
+        NexwmClient *c = client_of_window(m->event);
+        if (c) frame_pointer_update(c, m->root_x, m->root_y);
+        break;
+    }
+    case XCB_EXPOSE: {
+        /* the bar has to be drawn again: the window under it was covered, or it changed size (the new part of it is in
+         * the background colour, which is not the bar) */
+        xcb_expose_event_t *e = (xcb_expose_event_t *)ev;
+        NexwmClient *c = client_of_window(e->window);
+        if (c && c->frame == e->window && e->count == 0) frame_paint(c);
         break;
     }
     case XCB_ENTER_NOTIFY: {
         xcb_enter_notify_event_t *e = (xcb_enter_notify_event_t *)ev;
-        if (!wm.cfg.focus_mouse) break;
+        if (e->mode != XCB_NOTIFY_MODE_NORMAL) break;               /* a grab, or a window that opened under the pointer */
         NexwmClient *c = client_of_window(e->event);
-        if (c && c->framed && !c->dock && !c->hidden && c->desktop == wm.desktop && wm.focused != c->id)
+        if (!c) break;
+        frame_pointer_update(c, e->root_x, e->root_y);
+        if (!wm.cfg.focus_mouse) break;
+        if (c->framed && !c->dock && !c->hidden && c->desktop == wm.desktop && wm.focused != c->id)
             focus_client(c, 1);
+        break;
+    }
+    case XCB_LEAVE_NOTIFY: {
+        xcb_leave_notify_event_t *e = (xcb_leave_notify_event_t *)ev;
+        if (e->mode != XCB_NOTIFY_MODE_NORMAL) break;
+        NexwmClient *c = client_of_window(e->event);
+        if (!c || c->frame != e->event) break;
+        if (c->hover) {                                             /* the pointer is not over a button any more */
+            c->hover = 0;
+            frame_paint(c);
+        }
+        frame_cursor(c, NEXWM_CURSOR_DEFAULT);
         break;
     }
     case XCB_FOCUS_IN: {
@@ -1343,6 +2329,7 @@ static void scan_existing_windows(Nexwm *w)
 
 static void wm_cleanup(Nexwm *w)
 {
+    if (wm.drag.active) drag_stop();
     for (size_t i = 0; i < w->n; i++) {
         NexwmClient *c = w->clients[i];
         if (c->frame) {
@@ -1351,6 +2338,7 @@ static void wm_cleanup(Nexwm *w)
         }
         prop_delete(w, c->id, w->atoms[NEXWM_ATOM_NET_WM_STATE]);
         prop_delete(w, c->id, w->atoms[NEXWM_ATOM_NET_FRAME_EXTENTS]);
+        free(c->icon_alloc);
         free(c);
     }
     w->n = 0;
@@ -1360,6 +2348,11 @@ static void wm_cleanup(Nexwm *w)
     prop_delete(w, w->root, w->atoms[NEXWM_ATOM_NET_SUPPORTING_WM_CHECK]);
     prop_delete(w, w->root, w->atoms[NEXWM_ATOM_NET_KEYS]);
     if (w->wm_check) xcb_destroy_window(w->conn, w->wm_check);
+    for (int i = 0; i < NEXWM_CURSOR_COUNT; i++)
+        if (w->cursors[i]) xcb_free_cursor(w->conn, w->cursors[i]);
+    if (w->cursor_font) xcb_close_font(w->conn, w->cursor_font);
+    if (w->font) xcb_close_font(w->conn, w->font);
+    if (w->gc) xcb_free_gc(w->conn, w->gc);
     xcb_set_input_focus(w->conn, XCB_INPUT_FOCUS_POINTER_ROOT, XCB_NONE, XCB_CURRENT_TIME);
     xcb_flush(w->conn);
     /* Flush only sends the hand-back requests. Round-trip once so the X server has applied the reparents and property
@@ -1436,8 +2429,32 @@ int nexwm_x11_run(const char *config_path, int replace)
 
     wm_log("%s %s on %s (screen %d: %dx%d)", NEXWM_NAME, NEXWM_RELEASE,
            getenv("DISPLAY") ? getenv("DISPLAY") : "?", screen_num, wm.screen_w, wm.screen_h);
-    wm_log("frame %d px, %s to focus, %d workspaces%s", wm.cfg.border, wm.cfg.focus_mouse ? "the mouse" : "a click",
-           wm.cfg.desktops, replace ? ", taking over from another window manager" : "");
+    /* the one GC every frame is drawn with (its colour and its font change between the drawings), the core font of the
+     * titles, and the cursors of the mouse out of the font the X server has always had */
+    wm.gc = xcb_generate_id(wm.conn);
+    uint32_t gc_mask = XCB_GC_FOREGROUND | XCB_GC_BACKGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+    uint32_t gc_values[3] = { (uint32_t)wm.pixel_border, (uint32_t)wm.pixel_border, 0 };
+    xcb_create_gc(wm.conn, wm.gc, wm.root, gc_mask, gc_values);
+    title_font_open();
+    if (wm.font) {
+        uint32_t font = wm.font;
+        xcb_change_gc(wm.conn, wm.gc, XCB_GC_FONT, &font);
+    }
+    cursors_create();
+
+    char buttons[64] = "none";
+    if (wm.cfg.titlebar > 0 && wm.cfg.n_buttons > 0) {
+        size_t used = 0;
+        buttons[0] = '\0';
+        for (int i = 0; i < wm.cfg.n_buttons && used + 8 < sizeof buttons; i++) {
+            const char *name = wm.cfg.buttons[i] == NEXWM_BUTTON_MINIMIZE ? "min"
+                               : (wm.cfg.buttons[i] == NEXWM_BUTTON_MAXIMIZE ? "max" : "close");
+            used += (size_t)snprintf(buttons + used, sizeof buttons - used, "%s%s", i ? "," : "", name);
+        }
+    }
+    wm_log("frame %d px, title bar %d px (buttons %s), %s to focus, %d workspaces%s", wm.cfg.border, wm.cfg.titlebar,
+           buttons, wm.cfg.focus_mouse ? "the mouse" : "a click", wm.cfg.desktops,
+           replace ? ", taking over from another window manager" : "");
     if (config_path) wm_log("configuration: %s (%d keys)", config_path, (int)wm.cfg.n_keys);
 
     wm.wx = 0; wm.wy = 0; wm.ww = wm.screen_w; wm.wh = wm.screen_h;
