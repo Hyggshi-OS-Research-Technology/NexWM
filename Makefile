@@ -37,7 +37,7 @@ WLR_PC:=$(shell for n in wlroots-0.21 wlroots-0.20 wlroots-0.19 wlroots-0.18 wlr
                     [ "$$major" = 0 ] && [ "$$minor" -ge 17 ] && { echo $$n; break; }; done)
 WLR_MINOR:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --modversion $(WLR_PC) | cut -d. -f2)
 WLR_CFLAGS:=$(shell [ -n "$(WLR_PC)" ] && echo "-DNEXWM_HAVE_WLROOTS -DWLR_USE_UNSTABLE -DNEXWM_WLROOTS_MINOR=$(WLR_MINOR) `pkg-config --cflags $(WLR_PC)`")
-WLR_LIBS:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --libs $(WLR_PC))
+WLR_LIBS:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --libs $(WLR_PC) wayland-server)
 # A small Wayland client verifies the real headless compositor in `make check-nexwm`; keep it optional alongside wlroots.
 NEXWM_WAYLAND_PROBE:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --exists wayland-client 2>/dev/null && echo yes)
 ifeq ($(NEXWM_WAYLAND_PROBE),yes)
