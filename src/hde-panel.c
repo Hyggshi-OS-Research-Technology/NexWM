@@ -99,6 +99,21 @@ static int icon_px(void) { return CLAMP(pcfg.size * 10 / 17, 14, 36); }   /* 20 
 /* ---------- clock + calendar ---------- */
 static GtkWidget *cal_win, *cal_title, *cal;
 
+/* the font the clock's labels use right now (the log line below is about font metrics: say which font decided them).
+ * The layout GTK makes for a widget carries the font of that widget, CSS and all, so it is asked rather than the
+ * style context (gtk_style_context_get_font is deprecated). */
+static const char *label_font_name(GtkWidget *label)
+{
+    static char buf[128] = "";
+    PangoLayout *l = gtk_widget_create_pango_layout(label, "0123456789/:");
+    PangoFontDescription *fd = pango_layout_get_font_description(l);
+    char *s = fd ? pango_font_description_to_string(fd) : NULL;
+    g_strlcpy(buf, s ? s : "?", sizeof buf);
+    g_free(s);
+    g_object_unref(l);
+    return buf;
+}
+
 /* height of one line of text in the font of a label (also when the label is hidden: GTK measures hidden widgets as 0) */
 static int line_height(GtkWidget *label)
 {
@@ -136,9 +151,11 @@ static gboolean update_clock(gpointer data)
     if (now_shown != shown || pcfg.size != shown_size) {
         shown = now_shown;
         shown_size = pcfg.size;
-        if (shown == 2) DBG("clock: the date under the time (2 lines: %d px, the panel has %d)", need, room);
+        if (shown == 2) DBG("clock: the date under the time (2 lines: %d px, the panel has %d, %s)", need, room,
+                            label_font_name(clock_label));
         else if (shown == 1 && pcfg.size < 30) DBG("clock: time and date on one line (a thin panel, %d px)", pcfg.size);
-        else if (shown == 1) DBG("clock: time and date on one line (2 lines need %d px, the panel has %d)", need, room);
+        else if (shown == 1) DBG("clock: time and date on one line (2 lines need %d px, the panel has %d, %s)", need, room,
+                                 label_font_name(clock_label));
         else DBG("clock: no date");
     }
     char *time_s = g_date_time_format(now, tf);

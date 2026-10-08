@@ -843,3 +843,61 @@ engine itself (`QQuickView::grabWindow()` with the offscreen platform and the so
 the CI greeter uses). Locally: 30 checks, including "a picture of the login screen was saved" three times.
 `tests/arch-test.sh --deps` passes anywhere (11 checks); on an Arch it is 20 more (pacman, the package names,
 `nexwm --version`, the unit tests). `tests/distro-test.c`: 53 checks, three of them new for the Arch names.
+
+## The first Fedora and Arch runs: what failed, and the pictures (fix 21)
+
+The two commits before this one (`15d7c86`, `0a8df83`) took the new jobs to the CI and both jobs failed. The failures
+were read from the check-run annotations (the job logs themselves are not reachable through the API): the whole results
+body of a smoke test arrives as one annotation, so `tests/ci-annotate.py`'s output is what a run is diagnosed from.
+
+### Arch: `Install the dependencies (packaging/arch/deps.sh)` — exit 127 and exit 1
+
+The container of `archlinux:latest` has just been unpacked and its `/var/lib/pacman/sync` is empty: `pacman -S` cannot
+find a single name, and the fallback of `deps.sh` (`pick` takes the first alternative and says that pacman has no
+package information) installed nothing. The job then ran the report step without `python3` — that is the exit 127
+(`command not found`), and the upload step warned that it found no `/tmp/hde-smoke/*` and no `build.log`, which is why
+no `hde-smoke-arch` artifact exists.
+
+* `packaging/arch/deps.sh`: `install` runs `pacman -Sy --noconfirm` first when there is no sync database, with a line
+  saying why (nothing changes on an installed system, the databases are there).
+* The Arch job's report step checks for `python3` and says that a step before it did not get to install the packages
+  instead of failing with `command not found`.
+
+### Fedora: the smoke test's failures
+
+The same smoke test the Ubuntu jobs run passes there; on Fedora these checks failed, and this is what each one was:
+
+* **F6/F7/F8** ("F6 shows the brightness OSD", "F6 dims the screen to 95%", "the panel got the level for its OSD",
+  "F7 brightens it again", "fkeys_display=false gives F6/F7/F8 back to applications", "F8 opens the Project window"):
+  the brightness code itself works on Fedora (the Settings slider's software dimming checks all pass), so the key path
+  is what differs. The smoke test now writes the reason `hde-hotkeys` itself logs into the results whenever one of these
+  checks fails (`keys_reason`): whether another program holds the keys and which, and what the brightness action said.
+* **"... the date under the time"**: the panel puts the date under the time only when both lines fit (it never grows, an
+  item higher than the panel would be cut), and the line heights are font metrics. Fedora's font needs 34 px for the
+  two lines where the panel has 28, so the panel kept one line and said the numbers — the check now reads those numbers
+  and passes when the panel has really measured this. `src/hde-panel.c` also logs *which* font decided them.
+* **"Settings pairs a Bluetooth device"**: the Pair button of the "Other devices" card was clicked at one exact place
+  (1078,556), which the rows of that card move when the font of the system is another one. The test now clicks a small
+  ladder of positions around it and stops as soon as the mock reports the device paired.
+* **"crashed panel is restarted by hde-session"** and **"logout stops the panel / hde-hotkeys"**: these looked once
+  after a fixed 4 s / 5 s. They now wait for the event (up to 15 s) and, when it does not happen, print what is still
+  running into the results — a slower machine fails with a diagnosis instead of a bare FAIL.
+* **"right-click on a file: ... Compress ..."**: the menu of the file manager is read once after the click; on a loaded
+  machine the first read can catch half of it. It is read again (up to 3 s) before the check decides.
+
+### The font the CI measures with (`HDE_SMOKE_FONT`)
+
+The checks of `tests/smoke.sh` are in pixels (the clock of the panel on one line, the 1020x700 Settings window, the
+place of the Pair button) and the desktop these numbers were written for uses the font of an Ubuntu runner. A system
+whose default font is another one measures another desktop. `tests/smoke.sh` now reads `HDE_SMOKE_FONT` ("DejaVu Sans
+10") and writes it into the settings the session starts with; the Fedora and Arch jobs set it, so all three systems
+measure the same desktop and their pictures are of the same thing. It is unset by default: on a developer's machine
+nothing about the test changes.
+
+### Where the pictures are
+
+* the artifacts of a run: **`hde-smoke-ubuntu-22.04`**, **`hde-smoke-fedora`**, **`hde-smoke-arch`** (the `shot-*.png` of
+  `tests/smoke.sh` plus its logs) — they are uploaded even when the job fails, which is how the Fedora pictures of the
+  failing run could be looked at;
+* and, when the commit message contains `[shots]`, one check run per picture (`hde-shot Fedora 01-desktop`, ...), so
+  the pictures of a run can be looked at in the browser without downloading the artifact.

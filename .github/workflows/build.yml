@@ -440,7 +440,10 @@ jobs:
     - name: Fedora smoke test in Xvfb (the whole desktop, like the Ubuntu jobs)
       run: |
         set -o pipefail
-        timeout -k 10 1800 sh -c 'HDE_TEST_OUT=/tmp/hde-smoke HDE_TEST_DISPLAY=:77 sh tests/smoke.sh' 2>&1 | tee -a build.log
+        # The font the desktop is measured with: the pictures and the checks are written for what the Ubuntu jobs
+        # measure (their default font resolves to DejaVu Sans), while this system's resolves to a taller one that moves
+        # the clock of the panel and the rows of the Settings window. DejaVu Sans is installed here too (the test group).
+        timeout -k 10 1800 sh -c 'HDE_SMOKE_FONT="DejaVu Sans 10" HDE_TEST_OUT=/tmp/hde-smoke HDE_TEST_DISPLAY=:77 sh tests/smoke.sh' 2>&1 | tee -a build.log
 
     - name: Report the smoke test results
       if: always()
@@ -544,14 +547,23 @@ jobs:
     - name: "Smoke test in Xvfb (the whole desktop: the panel, the Start menu, the Control Center, Settings, the pictures)"
       run: |
         set -o pipefail
-        timeout -k 10 1800 sh -c 'HDE_TEST_OUT=/tmp/hde-smoke HDE_TEST_DISPLAY=:77 sh tests/smoke.sh' 2>&1 | tee -a build.log
+        # The font the desktop is measured with: the pictures and the checks are written for what the Ubuntu jobs
+        # measure (their default font resolves to DejaVu Sans), while this system's resolves to a taller one that moves
+        # the clock of the panel and the rows of the Settings window. DejaVu Sans is installed here too (the test group).
+        timeout -k 10 1800 sh -c 'HDE_SMOKE_FONT="DejaVu Sans 10" HDE_TEST_OUT=/tmp/hde-smoke HDE_TEST_DISPLAY=:77 sh tests/smoke.sh' 2>&1 | tee -a build.log
 
     - name: Unit tests (no display)
       run: make check-unit
 
     - name: Report results
       if: always()
-      run: python3 tests/ci-annotate.py /tmp/hde-smoke results "HDE smoke test (Arch)"
+      run: |
+        if command -v python3 >/dev/null 2>&1; then
+          python3 tests/ci-annotate.py /tmp/hde-smoke results "HDE smoke test (Arch)"
+        else
+          echo "::warning::python3 is missing (a step before this one did not get to install the packages): the results are in the job log"
+          sed 's/^/INFO: /' /tmp/hde-smoke/results.txt 2>/dev/null || true
+        fi
 
     - name: Publish the Arch screenshots
       if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')

@@ -187,6 +187,13 @@ pulseaudio libnotify-bin imagemagick xinput`). CI runs it on Ubuntu 22.04 and 24
 pictures of the Fedora desktop) and on Arch (`archlinux:latest` with the current rolling wlroots — `tests/arch-test.sh`
 checks the list of `packaging/arch/deps.sh` and that HDE speaks pacman, then `make check` photographs the Arch
 desktop), and also builds HDE on Debian 13 (trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
+`tests/smoke.sh` saves its pictures as `shot-*.png` in `HDE_TEST_OUT` (`/tmp/hde-smoke` in the CI): the job uploads them
+as the artifact of that system (`hde-smoke-ubuntu-22.04`, `hde-smoke-fedora`, `hde-smoke-arch`, ...) and, when the
+commit message contains `[shots]`, publishes each one as a check run of its own (`hde-shot ubuntu-22.04 01-desktop`,
+`hde-shot Fedora ...`), so a picture can be looked at without downloading anything. The checks of that test are in
+pixels (the clock of the panel, the width of the Settings window), so the Fedora and Arch jobs run it with
+`HDE_SMOKE_FONT="DejaVu Sans 10"`: the font the Ubuntu jobs happen to measure with, which makes the three systems
+measure the same desktop.
 
 `tests/display-test.sh` (CI only: needs root) runs a whole session on Xorg with the dummy video driver, whose RandR
 outputs act as real connectors: F8 / Super+P, Extend / Duplicate / Second screen only (with the automatic way back) /

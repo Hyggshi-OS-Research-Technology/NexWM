@@ -27,6 +27,14 @@ if [ -z "${HDE_SMOKE_INNER:-}" ]; then
     mkdir -p "$OUT/home/.config/hde" "$OUT/home/Desktop" "$OUT/home/.local/share/applications" "$OUT/run" "$OUT/fakebin"
     chmod 700 "$OUT/run"
     printf '[settings]\nwm=auto\n' > "$OUT/home/.config/hde/settings.ini"
+    # HDE_SMOKE_FONT (e.g. "DejaVu Sans 10"): the font the desktop is measured with. The checks below are in pixels
+    # (the panel's clock fits on one line, the Settings window is 1020x700, the Pair button is here), so a test run on
+    # a system whose default font is another size measures another desktop. The CI sets it on Fedora and on Arch,
+    # where the container's font is not the one these numbers were written for.
+    if [ -n "${HDE_SMOKE_FONT:-}" ]; then
+        printf 'font=%s\n' "$HDE_SMOKE_FONT" >> "$OUT/home/.config/hde/settings.ini"
+        echo "INFO: the desktop is measured with the font '$HDE_SMOKE_FONT' (HDE_SMOKE_FONT)" >> "$OUT/results.txt"
+    fi
     sed "s|@PREFIX@/bin/hde-settings|$B/hde-settings|" "$HERE/../data/hyggshi-settings.desktop" \
         > "$OUT/home/.local/share/applications/hyggshi-settings.desktop"
     printf '[Desktop Entry]\nType=Link\nName=HDE Website\nURL=https://github.com/Hyggshi-OS-Research-Technology/NexWM\nIcon=web-browser\n' \
@@ -370,28 +378,37 @@ soft() { xprop -root _HDE_BRIGHTNESS 2>/dev/null | sed -n 's/.*= //p'; }
 binfo=$(head -n 1 "$OUT/brightness.txt")
 echo "INFO: brightness in Xvfb: $binfo" | tee -a "$OUT/results.txt"
 sleep 1.6
+# why a key did nothing: hde-hotkeys writes the reason into the session log (a key another program holds, a brightness
+# that cannot be changed and why). Printed into the results, which is what the CI publishes and the artifact keeps.
+keys_reason() {
+    grep -h "hde-hotkeys: \(already used by another program\|brightness \|.* is free again\|.* is taken\)" "$OUT/session.log" 2>/dev/null |
+        tail -n 4 | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+    grep -h "hde-panel: command 6 " "$OUT/session.log" 2>/dev/null | tail -n 2 | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+    grep -h "hde-hotkeys" "$OUT/session.log" 2>/dev/null | tail -n 6 | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+}
 case "$binfo" in
     "software dimming"*)
         xdotool key F6
-        if wait_osd; then pass "F6 shows the brightness OSD"; else fail "F6 shows the brightness OSD"; fi
+        if wait_osd; then pass "F6 shows the brightness OSD"; else fail "F6 shows the brightness OSD"; keys_reason; fi
         shot 04b-osd-brightness
         sleep 1
         if [ "$(soft)" = 95 ]; then pass "F6 dims the screen (software dimming: no backlight in a VM) to 95%"
-        else fail "F6 dims the screen to 95% (_HDE_BRIGHTNESS=$(soft))"; fi
+        else fail "F6 dims the screen to 95% (_HDE_BRIGHTNESS=$(soft))"; keys_reason; fi
+        if ! grep -q "hde-panel: command 6 (time [0-9]*, arg 95)" "$OUT/session.log"; then keys_reason; fi
         check "... the panel got the level for its OSD" grep -q "hde-panel: command 6 (time [0-9]*, arg 95)" "$OUT/session.log"
         xdotool key F7; sleep 1.5
-        if [ "$(soft)" = 100 ]; then pass "F7 brightens it again (100%)"; else fail "F7 brightens it again (_HDE_BRIGHTNESS=$(soft))"; fi
+        if [ "$(soft)" = 100 ]; then pass "F7 brightens it again (100%)"; else fail "F7 brightens it again (_HDE_BRIGHTNESS=$(soft))"; keys_reason; fi
         echo "fkeys_display=false" >> "$SETTINGS_INI"; sleep 2.5
         xdotool key F6; sleep 1.5
         if [ "$(soft)" = 100 ]; then pass "fkeys_display=false gives F6/F7/F8 back to applications"
-        else fail "fkeys_display=false gives F6/F7/F8 back to applications (F6 still dimmed: $(soft))"; fi
+        else fail "fkeys_display=false gives F6/F7/F8 back to applications (F6 still dimmed: $(soft))"; keys_reason; fi
         sed -i '/^fkeys_display=/d' "$SETTINGS_INI"; sleep 2 ;;
     *)
         n0=$(grep -c "from HDE: Brightness" "$OUT/session.log")
         xdotool key F6; sleep 2
         n1=$(grep -c "from HDE: Brightness" "$OUT/session.log")
         if [ "$n1" -gt "$n0" ]; then pass "F6 where nothing can change the brightness: a notification says why (no error dialog)"
-        else fail "F6 where nothing can change the brightness: a notification says why"; fi
+        else fail "F6 where nothing can change the brightness: a notification says why"; keys_reason; fi
         shot 04b-brightness-impossible ;;
 esac
 
@@ -716,8 +733,14 @@ if [ -n "$BLUEZ_MOCK" ]; then
                   --method org.freedesktop.DBus.Properties.Get org.bluez.Device1 "$2" 2>/dev/null; }
     case "$(bprop 11_22_33_44_55_66 Paired)" in *true*) pass "Bluetooth: paired + connected device is listed (BlueZ mock)" ;;
         *) skip "Bluetooth mock could not pair the test device" ;; esac
-    # Pair through Settings itself: the "Pair" button of "Pixel 8" (the Other devices card has 1 row left)
-    xdotool mousemove 1078 556 click 1; sleep 4
+    # Pair through Settings itself: the "Pair" button of "Pixel 8" (the Other devices card has 1 row left).
+    # The row heights follow the font of the system, so the button is looked for around the place it sits with the
+    # font the numbers were written for (x=1078: the right edge of the card, all rows end in their button).
+    for y in 556 552 560 548 564 544 568 540 572; do
+        xdotool mousemove 1078 "$y" click 1; sleep 2.5
+        bprop AA_BB_CC_DD_EE_02 Paired | grep -q true && break
+    done
+    sleep 1.5
     shot 07c-bluetooth-paired-by-settings
     if bprop AA_BB_CC_DD_EE_02 Paired | grep -q true; then
         pass "Settings pairs a Bluetooth device (Device1.Pair)"
@@ -726,7 +749,7 @@ if [ -n "$BLUEZ_MOCK" ]; then
         if grep -Eq "^[0-9.]+ Connect( |$)" "$OUT/bluez-mock.log"; then pass "Settings connects the device after pairing (Device1.Connect)"
         else fail "Settings connects the device after pairing (Device1.Connect)"; fi
     else
-        fail "Settings pairs a Bluetooth device (Pair button at 1078,556 — see shot 07c)"
+        fail "Settings pairs a Bluetooth device (the Pair button of the card, 1078x540..572 — see shot 07c)"
         grep "hde-settings: bt device" "$OUT/settings.log" | tail -n 3 | cut -c1-400 | sed 's/^/INFO: /' >> "$OUT/results.txt"
     fi
     if grep -q "AgentManager1\|RegisterAgent" "$OUT/bluez-mock.log" 2>/dev/null; then :; fi
@@ -1120,7 +1143,19 @@ case "$st" in
 esac
 l=$(grep "hde-panel: clock: " "$OUT/session.log" | tail -n 1)
 case "$l" in
-    *"the date under the time"*) pass "... the date under the time ${l#hde-panel: clock: the date under the time }" ;;
+    *"the date under the time"*)
+        pass "... the date under the time ${l#hde-panel: clock: the date under the time }" ;;
+    *"time and date on one line (2 lines need "*)
+        # the date under the time is what a 34 px panel does *when both lines fit in it*: with a taller font (a
+        # distribution's own, or HDE_SMOKE_FONT) the panel says how much room it would need and keeps one line —
+        # an item higher than the panel would be cut off. Both are the panel measuring itself and deciding.
+        n_need=$(printf '%s' "$l" | sed -n 's/.*2 lines need \([0-9]*\) px, the panel has \([0-9]*\).*/\1/p')
+        n_room=$(printf '%s' "$l" | sed -n 's/.*2 lines need \([0-9]*\) px, the panel has \([0-9]*\).*/\2/p')
+        if [ -n "$n_need" ] && [ -n "$n_room" ] && [ "$n_need" -gt "$n_room" ]; then
+            pass "... the date still on one line: the font of this system needs ${n_need} px for two lines and the panel has ${n_room} (it never grows: an item higher than the panel would be cut)"
+        else
+            fail "... the date under the time or on one line with a reason (${l:-nothing logged})"
+        fi ;;
     *) fail "... the date under the time (${l:-nothing logged})" ;;
 esac
 shot 16j-panel-default-again
@@ -1569,6 +1604,11 @@ sleep 0.8
 set -- $(fitem readme.txt)
 if [ -n "${4:-}" ]; then
     xdotool mousemove $(($1 + $3 / 2)) $(($2 + 30)) click 3; sleep 1
+    # the menu is drawn a moment after the click: read it again instead of failing on a first look that caught half of it
+    for _ in 1 2 3 4 5 6; do
+        case "$(fmenu)" in *"Compress | Properties"*) break ;; esac
+        sleep 0.5
+    done
     case "$(fmenu)" in
         *"| Cut | Copy | Copy Path | Rename… | Make Link | Move to Trash | Delete Permanently | Compress | Properties")
             pass "right-click on a file: Open, Open With…, Cut, Copy, Rename, Trash, Compress, Properties ($(fmenu | cut -d'|' -f1))" ;;
@@ -1728,9 +1768,19 @@ fi
 # ---------- 8. restart after a crash ----------
 pid=$(pgrep -x hde-panel | head -n1)
 if [ -n "$pid" ]; then
-    kill -SEGV "$pid"; sleep 4
-    new=$(pgrep -x hde-panel | head -n1)
-    if [ -n "$new" ] && [ "$new" != "$pid" ]; then pass "crashed panel is restarted by hde-session"; else fail "crashed panel is restarted by hde-session"; fi
+    kill -SEGV "$pid"
+    new=""; i=0
+    while [ "$i" -lt 75 ]; do
+        new=$(pgrep -x hde-panel | head -n1)
+        [ -n "$new" ] && [ "$new" != "$pid" ] && break
+        sleep 0.2; i=$((i + 1))
+    done
+    if [ -n "$new" ] && [ "$new" != "$pid" ]; then pass "crashed panel is restarted by hde-session (after $((i * 200)) ms)"
+    else
+        fail "crashed panel is restarted by hde-session"
+        grep -E "hde-session: .*(panel|restart)" "$OUT/session.log" | tail -n 5 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        pgrep -a -x hde-panel | sed 's/^/INFO:   still running: /' | tee -a "$OUT/results.txt"
+    fi
 fi
 shot 14-after-restart
 
@@ -1740,11 +1790,30 @@ if grep -q "Failed to execute child process" "$OUT/session.log"; then
 else pass "no 'Failed to execute child process' errors during the session"; fi
 
 # ---------- 9. logout ----------
-kill -TERM "$SESSION"; sleep 5
-check "logout stops the panel" sh -c "! pgrep -x hde-panel"
-check "logout stops hde-hotkeys" sh -c "! pgrep -x hde-hotkeys"
-check "logout stops hde-xsettings" sh -c "! pgrep -x hde-xsettings"
-check "logout stops the window manager" sh -c "! pgrep -x metacity && ! pgrep -x openbox"
+kill -TERM "$SESSION"
+# up to 15 s for a program of the session to be gone; the FAIL says what is still running and from where
+stopped() {
+    name=$1; i=0
+    while [ "$i" -lt 75 ]; do pgrep -x "$name" >/dev/null 2>&1 || return 0; sleep 0.2; i=$((i + 1)); done
+    return 1
+}
+logout_check() {
+    name=$1
+    if stopped "$name"; then pass "logout stops $name"
+    else
+        fail "logout stops $name"
+        pgrep -a -x "$name" | sed 's/^/INFO:   still running: /' | tee -a "$OUT/results.txt"
+    fi
+}
+logout_check hde-panel
+logout_check hde-hotkeys
+logout_check hde-xsettings
+if stopped metacity && stopped openbox; then pass "logout stops the window manager"
+else
+    fail "logout stops the window manager"
+    pgrep -a -x metacity | sed 's/^/INFO:   still running: /' | tee -a "$OUT/results.txt"
+    pgrep -a -x openbox  | sed 's/^/INFO:   still running: /' | tee -a "$OUT/results.txt"
+fi
 grep -E "hde-(panel|desktop|settings).*(CRITICAL|WARNING)" "$OUT/session.log" "$OUT/settings.log" > "$OUT/gtk-warnings.txt" 2>/dev/null
 grep -E "(Gtk|GLib|GLib-GObject|Gdk|Wnck)-(CRITICAL|WARNING)" "$OUT/session.log" "$OUT/settings.log" >> "$OUT/gtk-warnings.txt" 2>/dev/null
 n=$(sort -u "$OUT/gtk-warnings.txt" | wc -l)

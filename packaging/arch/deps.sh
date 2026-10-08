@@ -138,6 +138,15 @@ if [ "$action" != list ]; then
     command -v pacman >/dev/null 2>&1 || { echo "$0: pacman not found: this script is for Arch Linux" >&2; exit 1; }
 fi
 
+# `install` on a machine that has never run -Sy (a container that has just been unpacked: no sync database) would fail
+# on every name: get the package information first. On an installed system the databases are there and nothing happens.
+SUDO=""
+[ "$(id -u)" = 0 ] || SUDO="sudo"
+if [ "$action" = install ] && [ -z "$(ls -A /var/lib/pacman/sync 2>/dev/null)" ]; then
+    echo "note: no package information yet (a container that has just been unpacked): running 'pacman -Sy' first" >&2
+    $SUDO pacman -Sy --noconfirm
+fi
+
 # pacman knows this package (it is in the sync databases: -Sy has been run)
 available() {
     pacman -Si "$1" >/dev/null 2>&1
@@ -188,8 +197,6 @@ done
 [ "$action" = install ] || exit 0
 [ -n "${names# }" ] || { echo "$0: nothing to install" >&2; exit 0; }
 
-SUDO=""
-[ "$(id -u)" = 0 ] || SUDO="sudo"
 echo "$SUDO pacman -S --needed --noconfirm$names" >&2
 # shellcheck disable=SC2086  # a list of package names
 $SUDO pacman -S --needed --noconfirm $names
