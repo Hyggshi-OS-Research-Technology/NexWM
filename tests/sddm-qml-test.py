@@ -10,6 +10,10 @@ objects (sddm, userModel, sessionModel, screenModel, config) as stand-ins — an
 
     python3 tests/sddm-qml-test.py [theme dir]     (default: login/sddm/hde of this checkout)
 
+It also writes a picture of each case (shot-sddm-*.png in $HDE_TEST_OUT, default /tmp/hde-sddm): the login screen as it
+really renders, which is what the CI job uploads as an artifact and what a reader who cannot log out of their own
+session can look at.
+
   1. one user from the greeter: the tiles are shown, no name field, the keyboard in the password field
   2. an empty user list:        a field to type a user name in, the keyboard in it, and typing a name reaches
                                 sddm.login() with what was typed
@@ -265,6 +269,20 @@ def run(case, user_model, expect_users, expect_field, expect_message):
     KEEP.extend([settle, timer])
     timer.start()
     settle.exec()
+
+    # a picture of the screen as it is now: the card, the users (or the field to type a name in), the accent, the
+    # wallpaper — the thing a reader wants to see and cannot, since this machine's own login screen is not this theme
+    shot = os.path.join(OUT, "shot-sddm-%s.png" % case.split(" ")[0])
+    saved = False
+    try:
+        grabbed = view.grabWindow()                              # offscreen + software: this is the rendered theme
+        saved = bool(grabbed) and grabbed.save(shot, "PNG")
+    except Exception as e:                                       # no grabWindow in this PySide6, or no software render
+        say("INFO: sddm-qml: no picture of %s (%s)" % (case, e))
+    if saved:
+        pass_("%s: a picture of the login screen was saved (%s)" % (case, shot))
+    else:
+        fail("%s: the login screen could not be saved as a picture (%s)" % (case, shot))
 
     errors = errors_in(messages)
     if errors:

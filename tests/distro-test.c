@@ -198,6 +198,17 @@ int main(void)
     hint = hde_install_hint("libgtk-3-dev");
     CHECK(hint && !strcmp(hint, "sudo pacman -S gtk3"), "Arch: '%s'", hint ? hint : "(null)");
     free(hint);
+    /* the ones that are not simply the library: Arch's interpreter is `python`, xrandr is its own package, and the
+     * build tools are `base-devel` (a user on Arch must not be told to install python3 or build-essential) */
+    hint = hde_install_hint("python3");
+    CHECK(hint && !strcmp(hint, "sudo pacman -S python"), "Arch: '%s'", hint ? hint : "(null)");
+    free(hint);
+    hint = hde_install_hint("x11-xserver-utils");
+    CHECK(hint && strstr(hint, "xorg-xrandr") != NULL, "Arch: '%s' (xrandr is a package of its own there)", hint ? hint : "(null)");
+    free(hint);
+    hint = hde_install_hint("build-essential");
+    CHECK(hint && !strcmp(hint, "sudo pacman -S base-devel"), "Arch: '%s'", hint ? hint : "(null)");
+    free(hint);
     check_system("openSUSE", OPENSUSE, "opensuse-tumbleweed", HDE_FAMILY_SUSE, "zypper");
     hint = hde_install_hint("libxi-dev");
     CHECK(hint && !strcmp(hint, "sudo zypper install libXi-devel"), "openSUSE: '%s'", hint ? hint : "(null)");

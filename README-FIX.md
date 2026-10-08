@@ -797,3 +797,47 @@ situations end to end — one user (tiles, keyboard in the password field), an e
 The greeter runs on a pty in the test (`tests/ptylog.py`): SDDM's greeter only writes the theme's own output to stderr
 when it is on a terminal and sends it to journald otherwise (Fedora's SDDM, in a CI container without a journal: the
 log the test reads stays empty), which is what the Fedora job caught.
+
+## Fedora and Arch Linux, and the pictures of the login screen (fix 20)
+
+Three things a user asked for in one go: the login screen of HDE *seen*, not only described; the Fedora job doing what
+the Ubuntu job does (a whole desktop test, with pictures); and Arch Linux supported as a distribution, with the way it
+is done written down.
+
+### Added
+
+- **Pictures of the login screen.** `tests/sddm-qml-test.py` now photographs the theme as it renders, in every case it
+  checks: with the users as tiles, with an empty user list (the field to type a user name in, which is what fixes 19 is
+  about) and with no user model at all. They are `shot-sddm-*.png` in `$HDE_TEST_OUT`, they travel in the
+  `hde-sddm-login` artifact of the CI job, and the job publishes them as check runs (`hde-shot sddm-1`, …) when the
+  commit message says `[shots]` — so the login screen can be looked at without logging out of one's own session, and
+  without downloading anything.
+- **Fedora runs the smoke test, and gets the same pictures.** The Fedora job (`Fedora (dnf, full desktop)`) now runs
+  `tests/smoke.sh` — the same test the Ubuntu jobs run — after its own Fedora test: the whole desktop in Xvfb (the
+  panel, the Start menu, the Control Center, Settings, notifications, the desktop icons) *photographed* along the way,
+  the results published as annotations and the pictures in the `hde-fedora` artifact. Its check runs are labelled
+  (`hde-shot Fedora 01-panel`) so Fedora's, Ubuntu's and Arch's pictures of the same test are told apart.
+- **Arch Linux: `packaging/arch/README.md`, `packaging/arch/deps.sh` and a CI job.** Arch names its development
+  packages like the libraries (gtk3, libwnck3, libxcb, pam, wlroots: no `-dev`, no `-devel`), its Python package is
+  `python`, xrandr is a package of its own (`xorg-xrandr`) and its windows are in `xorg-xset`/`xorg-xsetroot` — all of
+  that is in the list, and `hde-settings --deps` prints `sudo pacman -S` with those names on an Arch (the translation
+  table in `src/hde-distro.h` got the rows it was missing: `python3` → `python`, `xsltproc` → `libxslt`, and `xrandr`
+  in the `x11-xserver-utils` row; `tests/distro-test.c` checks the three of them without an Arch machine).
+  `packaging/arch/README.md` has the package table (Debian ↔ Arch) and a word on the **rolling wlroots**: Arch carries
+  the newest release, `nexwm/src/wayland.c` supports 0.17 and newer (`-DNEXWM_WLROOTS_MINOR`), and the new CI job
+  builds the compositor against whatever Arch has today — a wlroots release that breaks the source is found there
+  first. `tests/arch-test.sh` checks the list everywhere (off an Arch it checks the list in the repository and skips
+  the machine-specific half), and on an Arch it checks pacman, the translation, and that NexWM was built with its
+  wlroots compositor. `make check-unit` runs it, `make check-arch` is the same test on an Arch.
+- **An Arch CI job** (`Arch Linux (pacman, current wlroots)`, `container: archlinux:latest`): install through
+  `packaging/arch/deps.sh install build runtime-minimal test`, build every target (and say which wlroots that was),
+  `tests/arch-test.sh --deps`, the smoke test in Xvfb (the pictures of the Arch desktop: the `hde-arch` artifact),
+  the unit tests, and the pictures as check runs under `[shots]`.
+
+### Tests
+
+`tests/sddm-qml-test.py` did not need a display before and does not need one now: the pictures come from the QML
+engine itself (`QQuickView::grabWindow()` with the offscreen platform and the software backend — the same rendering
+the CI greeter uses). Locally: 30 checks, including "a picture of the login screen was saved" three times.
+`tests/arch-test.sh --deps` passes anywhere (11 checks); on an Arch it is 20 more (pacman, the package names,
+`nexwm --version`, the unit tests). `tests/distro-test.c`: 53 checks, three of them new for the Arch names.

@@ -78,7 +78,7 @@ jobs:
       if: always() && matrix.os == 'ubuntu-22.04' && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: python3 tests/ci-annotate.py /tmp/hde-smoke checkruns
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke checkruns "${{ matrix.os }}"
 
     - name: Upload test output (logs + screenshots)
       if: always()
@@ -434,6 +434,24 @@ jobs:
         set -o pipefail
         sh tests/fedora-test.sh --full 2>&1 | tee -a build.log
 
+    # The same smoke test the Ubuntu jobs run (tests/smoke.sh), so Fedora has the same checks *and the same pictures*
+    # of the panel, the Start menu, the Control Center and Settings: the artifact below is the Fedora one, which is
+    # what hde-smoke-ubuntu-22.04 is for Ubuntu.
+    - name: Fedora smoke test in Xvfb (the whole desktop, like the Ubuntu jobs)
+      run: |
+        set -o pipefail
+        timeout -k 10 1800 sh -c 'HDE_TEST_OUT=/tmp/hde-smoke HDE_TEST_DISPLAY=:77 sh tests/smoke.sh' 2>&1 | tee -a build.log
+
+    - name: Report the smoke test results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke results "HDE smoke test (Fedora)"
+
+    - name: Publish the Fedora screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke checkruns Fedora
+
     - name: NexWM in a real X server (Fedora, with XCB, the frames, the keys and --replace with Metacity)
       # ... bounded for the same reason as the same step in the build job above (a hung test is a failure to read)
       run: timeout -k 10 900 make check-nexwm
@@ -462,6 +480,85 @@ jobs:
           /tmp/hde-fedora/*.log
           /tmp/hde-fedora/shot-*.png
           /tmp/hde-fedora/sddm/**
+          /tmp/hde-smoke/*.txt
+          /tmp/hde-smoke/*.log
+          /tmp/hde-smoke/shot-*.png
+          build.log
+
+  # Arch Linux: a rolling distribution, which makes it the one that finds a broken build first — above all wlroots,
+  # where Arch carries the newest release and nexwm/src/wayland.c has to support it (the Makefile picks the version
+  # and the source is told with -DNEXWM_WLROOTS_MINOR). package manager and package names: packaging/arch/deps.sh,
+  # and `hde-settings --deps` has to speak pacman on it (`sudo pacman -S`, not `install`).
+  arch:
+    name: Arch Linux (pacman, current wlroots)
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install the dependencies (packaging/arch/deps.sh)
+      run: |
+        cat /etc/os-release | sed -n '1,3p'
+        # the build list plus what the test needs; runtime-minimal brings the window manager the session starts one with
+        sh packaging/arch/deps.sh install build runtime-minimal test
+        pacman -Q gtk3 libwnck3 gtk-layer-shell wlroots | sed 's/^/::notice::Arch package: /'
+
+    - name: Build (all targets)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log || {
+          echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
+          grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
+          exit 1
+        }
+        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm hde-lock; do
+          test -x "build/$p" || { echo "::error::build/$p was not built"; exit 1; }
+        done
+        pkg-config --modversion wlroots-0.21 wlroots-0.20 wlroots-0.19 wlroots-0.18 wlroots 2>/dev/null | head -n1 | sed 's/^/::notice::Arch wlroots: /'
+        grep -q "NEXWM_HAVE_WLROOTS" build.log || { echo "::error::NexWM was built without its wlroots compositor on Arch"; exit 1; }
+
+    - name: Compiler warnings
+      if: always()
+      run: |
+        n=$(grep -c "warning:" build.log || true)
+        echo "compiler warnings (Arch gcc $(gcc -dumpfullversion)): $n"
+        grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::arch: /' || true
+
+    - name: Arch speaks pacman (hde-settings --deps, the Arch package names)
+      run: |
+        sh tests/arch-test.sh --deps
+
+    - name: "Smoke test in Xvfb (the whole desktop: the panel, the Start menu, the Control Center, Settings, the pictures)"
+      run: |
+        set -o pipefail
+        timeout -k 10 1800 sh -c 'HDE_TEST_OUT=/tmp/hde-smoke HDE_TEST_DISPLAY=:77 sh tests/smoke.sh' 2>&1 | tee -a build.log
+
+    - name: Unit tests (no display)
+      run: make check-unit
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke results "HDE smoke test (Arch)"
+
+    - name: Publish the Arch screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-smoke checkruns Arch
+
+    - name: Upload test output (logs + screenshots)
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-arch
+        path: |
+          /tmp/hde-smoke/*.log
+          /tmp/hde-smoke/*.txt
+          /tmp/hde-smoke/shot-*.png
           build.log
 
   # Base Fedora: a Fedora with *nothing* but what compiles HDE (packaging/fedora/deps.sh list build) and Xvfb — no
@@ -587,6 +684,12 @@ jobs:
     - name: Report results
       if: always()
       run: python3 tests/ci-annotate.py /tmp/hde-sddm results "HDE login screen"
+
+    - name: Publish the pictures of the login screen (the theme as it really renders)
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-sddm checkruns
 
     - name: Upload the pictures of the login screen
       if: always()

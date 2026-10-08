@@ -59,6 +59,11 @@ Without a display manager: `echo 'exec /usr/local/bin/hde-start' > ~/.xinitrc &&
 Try it in a window without logging out: `scripts/test-nexde` (a whole HDE session from `./build` in Xephyr, on its own
 D-Bus, with a throw-away copy of your settings; `--fresh` = a new user, `--wm openbox`, `1920x1080 :3`, `--help`).
 Needs `sudo apt install xserver-xephyr`.
+Other systems: [`packaging/fedora/README.md`](packaging/fedora/README.md) (Fedora, Nobara, RHEL, ...
+`sh packaging/fedora/deps.sh install build runtime-minimal`), [`packaging/arch/README.md`](packaging/arch/README.md)
+(Arch, Manjaro, EndeavourOS, ... `sh packaging/arch/deps.sh install build runtime-minimal`) and
+`hde-settings --deps build|runtime|test`, which prints the command and the package names of *this* system (apt, dnf,
+pacman, zypper).
 Hyggshi OS: `packaging/hyggshi-os/build-nexwm.sh` builds and installs HDE inside the ISO's chroot.
 Reload a running session after rebuilding: `make dev` (from `./build`) or `sudo make install && make reload`.
 
@@ -155,7 +160,9 @@ written to `~/.config/hde/labwc/` from these settings (rewritten when they chang
 
 ## Tests
 
-`make check` starts a complete HDE session inside Xvfb and checks the Super key, F1–F3 volume
+`make check` starts a complete HDE session inside Xvfb and *photographs it* (`shot-*.png` next to the results in
+`$HDE_TEST_OUT`, default /tmp/hde-smoke: the panel, the Start menu, the Control Center, Settings, the notifications,
+the desktop icons) and checks the Super key, F1–F3 volume
 (PulseAudio), notifications, PrtSc screenshots (also with an Openbox `rc.xml` that binds `Print`, and with Openbox
 holding `Print` before `hde-hotkeys` starts), `Ctrl+Print` to the clipboard, the desktop
 icon selection frame and icon menu (Rename, Trash, Copy/Paste, Properties), the Wi-Fi list (with a simulated
@@ -176,8 +183,10 @@ battery numbers (µWh / µAh, time left, health, two batteries, a mouse) and the
 `--display-set`, the screens beside moving along, kept or reverted, back at login) and DDC/CI with a simulated `ddcutil`;
 `scripts/test-nexde --check` starts a nested session in Xephyr; `packaging/hyggshi-os/build-nexwm.sh` runs in a Debian 13
 container and the installed session is started. Needs `xvfb xdotool dbus-x11` (optionally `metacity openbox
-pulseaudio libnotify-bin imagemagick xinput`). CI runs it on Ubuntu 22.04 and 24.04 and also builds HDE on Debian 13
-(trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
+pulseaudio libnotify-bin imagemagick xinput`). CI runs it on Ubuntu 22.04 and 24.04, on Fedora (`fedora:latest`, the
+pictures of the Fedora desktop) and on Arch (`archlinux:latest` with the current rolling wlroots — `tests/arch-test.sh`
+checks the list of `packaging/arch/deps.sh` and that HDE speaks pacman, then `make check` photographs the Arch
+desktop), and also builds HDE on Debian 13 (trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
 
 `tests/display-test.sh` (CI only: needs root) runs a whole session on Xorg with the dummy video driver, whose RandR
 outputs act as real connectors: F8 / Super+P, Extend / Duplicate / Second screen only (with the automatic way back) /

@@ -300,7 +300,7 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
 UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/lock-core-test \
             $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test $(BUILD)/cmd-vt-test \
-            tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh
+            tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh tests/arch-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
 check-unit: $(UNIT_TESTS) $(BUILD)/hde-choose-stub
@@ -312,6 +312,12 @@ check-unit: $(UNIT_TESTS) $(BUILD)/hde-choose-stub
 # SDDM's greeter installed) it renders the theme for real. See tests/sddm-test.sh
 check-login:
 	sh tests/sddm-test.sh
+
+# HDE on Arch (packaging/arch/deps.sh, pacman, Arch's package names). `make check-unit` runs it everywhere — off an
+# Arch it checks the list in the repository and skips the machine-specific half; this target is the same test on a
+# machine where the whole thing runs. See tests/arch-test.sh
+check-arch:
+	sh tests/arch-test.sh
 
 # Hyggshi Media in a real X server (Xvfb + Metacity): the picture viewer (the keys, the pixels, full screen, a second
 # hde-media handing its picture to the window that is open — tests/media-test.sh) and then the player (the list, the
@@ -417,4 +423,4 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop \
 	    $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-.PHONY: all clean install uninstall components dev reload check check-unit check-login check-media check-nexwm FORCE
+.PHONY: all clean install uninstall components dev reload check check-unit check-login check-arch check-media check-nexwm FORCE

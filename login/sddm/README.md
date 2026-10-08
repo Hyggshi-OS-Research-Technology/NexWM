@@ -135,6 +135,11 @@ the greeter's log for QML errors and looks at the pixels of the screen: the dark
 on it — and whether typing reaches the card. The login screen of a distribution is not something that can be checked by
 looking at it once.
 
+The test also keeps pictures of the screen it looked at (`shot-sddm-*.png` in `$HDE_TEST_OUT`, uploaded as the
+`hde-sddm-login` artifact of the CI job): the login screen as it really renders — with the user tiles, and with the
+field to type a user name in when the greeter hands over no users. Nothing else shows a reader what their login screen
+will look like without logging out of their own session.
+
 `tests/sddm-qml-test.py` goes one step further and does what a machine's own greeter cannot be asked for: it loads
 `Main.qml` with a greeter made for the occasion (PySide6, Qt 6, offscreen — no display, no SDDM, no root) and checks
 three situations: one user from the greeter (tiles, the keyboard in the password field), an *empty* user list, and no

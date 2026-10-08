@@ -2,8 +2,10 @@
 """ci-annotate.py — publish the HDE smoke test results on GitHub (readable through the API, no artifacts needed).
 
   ci-annotate.py OUTDIR results [TITLE]   PASS/FAIL summary as job annotations (TITLE default: HDE smoke test)
-  ci-annotate.py OUTDIR checkruns    each screenshot -> one check run "hde-shot NAME" (base64 JPEG
+  ci-annotate.py OUTDIR checkruns [LABEL]   each screenshot -> one check run "hde-shot [LABEL ]NAME" (base64 JPEG
                                      in output.summary + output.text). Needs a GITHUB_TOKEN with checks:write permission.
+                                     The label tells the systems apart (the same smoke test runs on Ubuntu, Fedora and
+                                     Arch, and their pictures have the same names: "hde-shot Fedora 01-panel").
 """
 import base64
 import glob
@@ -54,7 +56,7 @@ def encode(png):
     return None
 
 
-def checkruns(out):
+def checkruns(out, label=""):
     token, repo, sha = os.environ.get("GITHUB_TOKEN"), os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_SHA")
     if not (token and repo and sha):
         print("GITHUB_TOKEN / GITHUB_REPOSITORY / GITHUB_SHA missing", file=sys.stderr)
@@ -65,19 +67,20 @@ def checkruns(out):
         if not data:
             print(f"skip {name}: too large", file=sys.stderr)
             continue
+        title = f"{label} {name}".strip()
         body = {
-            "name": f"hde-shot {name}",
+            "name": f"hde-shot {title}",
             "head_sha": sha,
             "status": "completed",
             "conclusion": "neutral",
-            "output": {"title": f"HDE screenshot {name} (base64 JPEG)", "summary": data[:FIELD], "text": data[FIELD:] or "-"},
+            "output": {"title": f"HDE screenshot {title} (base64 JPEG)", "summary": data[:FIELD], "text": data[FIELD:] or "-"},
         }
         req = urllib.request.Request(f"https://api.github.com/repos/{repo}/check-runs", data=json.dumps(body).encode(),
                                      method="POST", headers={"Authorization": f"Bearer {token}",
                                                              "Accept": "application/vnd.github+json"})
         try:
             with urllib.request.urlopen(req) as r:
-                print(f"{name}: check run {json.load(r)['id']} ({len(data)} chars)")
+                print(f"{title}: check run {json.load(r)['id']} ({len(data)} chars)")
         except Exception as e:  # noqa: BLE001
             print(f"{name}: failed to create check run: {e}", file=sys.stderr)
 
@@ -87,7 +90,7 @@ if __name__ == "__main__":
     if mode == "results":
         results(out, *(sys.argv[3:4] or []))
     elif mode == "checkruns":
-        checkruns(out)
+        checkruns(out, *(sys.argv[3:4] or []))
     else:
         print(__doc__)
         sys.exit(2)

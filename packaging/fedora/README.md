@@ -83,8 +83,15 @@ sh tests/fedora-test.sh --full   # a Fedora with the desktop packages: a whole s
                                  # the SDDM theme, the Wayland session with labwc
 sh tests/fedora-test.sh --base   # a *base* Fedora (only the build dependencies): HDE builds, the unit tests pass,
                                  # the session starts without a window manager and says so, with dnf hints
-sh tests/smoke.sh            # the full feature test (Debian's CI job; portable, but the Debian packages are assumed)
+make check                   # == make check-unit + the smoke test above (the whole desktop in Xvfb)
+sh tests/smoke.sh            # ... or just the smoke test: the same one the Ubuntu and Arch jobs run
+make check-login             # the SDDM login screen (login/sddm/hde)
 ```
 
-CI runs both of them separately: the **Fedora (dnf, full desktop)** job and the **Fedora base (minimal, no desktop
-packages)** job in `.github/workflows/build.yml`, next to the Ubuntu, Debian and Wayland jobs.
+`sh tests/smoke.sh` installs nothing onto the machine: it starts an HDE session inside Xvfb and photographs it as it
+goes (`shot-*.png` next to `results.txt`), so a Fedora build can be looked at, not only measured. Needs
+`sh packaging/fedora/deps.sh install test` (Xvfb, xdotool, ImageMagick, python-dbusmock, a window manager, icons).
+
+CI runs all of it: the **Fedora (dnf, full desktop)** job (the Fedora test *and* the smoke test, whose pictures land
+in the `hde-fedora` artifact), the **Fedora base (minimal, no desktop packages)** job, and the Ubuntu, Debian, Arch and
+Wayland jobs in `.github/workflows/build.yml`.
