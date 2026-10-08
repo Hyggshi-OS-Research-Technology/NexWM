@@ -928,7 +928,7 @@ static HdeLockBackend pick_backend(HdeLockBackend want)
     return HDE_LOCK_X11;
 }
 
-#if defined(HDE_LOCK_HAVE_WAYLAND)
+#if defined(HDE_LOCK_HAVE_WAYLAND) && defined(HDE_LOCK_HAVE_PAM)
 struct wl_probe { bool found; };
 
 static void probe_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t version)
@@ -958,7 +958,7 @@ static bool wayland_can_lock(void)
     wl_display_disconnect(d);
     return p.found;
 }
-#endif
+#endif /* HDE_LOCK_HAVE_WAYLAND && HDE_LOCK_HAVE_PAM */
 
 static int check_session(HdeLockBackend b)
 {

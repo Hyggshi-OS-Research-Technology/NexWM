@@ -85,20 +85,22 @@ endif
 # to lock, so HDE_SH_LOCK (src/hde-commands.h) can fall back to the lockers the machine does have.
 LOCKXML=ext-session-lock-v1
 LOCK_CAIRO:=$(shell pkg-config --exists cairo 2>/dev/null && echo yes)
-LOCK_PAM:=$(shell pkg-config --exists pam 2>/dev/null && echo yes)
+# PAM is asked for the way a compiler asks for it: the header and -lpam (libpam0g-dev on Debian/Ubuntu, pam-devel on
+# Fedora). Not through pkg-config -- pam.pc is not in every one of those packages.
+LOCK_PAM:=$(shell printf '#include <security/pam_appl.h>\nint main(void){return 0;}\n' | $(CC) -x c - -o /dev/null -lpam >/dev/null 2>&1 && echo yes)
 LOCK_XCB:=$(shell pkg-config --exists xcb 2>/dev/null && echo yes)
 LOCK_WL:=$(shell [ -n "$(WAYLAND_SCANNER)" ] && pkg-config --exists wayland-client xkbcommon 2>/dev/null && echo yes)
 HDE_LOCK:=$(shell [ -n "$(LOCK_CAIRO)" ] && { [ -n "$(LOCK_XCB)" ] || [ -n "$(LOCK_WL)" ]; } && echo yes)
 ifeq ($(HDE_LOCK),yes)
 HDE_LOCK_TARGET=$(BUILD)/hde-lock
 HDE_LOCK_CFLAGS=$(shell pkg-config --cflags cairo) $(if $(LOCK_XCB),-DHDE_LOCK_HAVE_XCB $(shell pkg-config --cflags xcb)) \
-                 $(if $(LOCK_PAM),-DHDE_LOCK_HAVE_PAM $(shell pkg-config --cflags pam))
+                 $(if $(LOCK_PAM),-DHDE_LOCK_HAVE_PAM)
 HDE_LOCK_LIBS=$(shell pkg-config --libs cairo) $(if $(LOCK_XCB),$(shell pkg-config --libs xcb)) \
-               $(if $(LOCK_PAM),$(shell pkg-config --libs pam)) -lm
+               $(if $(LOCK_PAM),-lpam) -lm
 ifeq ($(LOCK_WL),yes)
 HDE_LOCK_CFLAGS+=-DHDE_LOCK_HAVE_WAYLAND -I$(BUILD) $(shell pkg-config --cflags wayland-client xkbcommon)
 HDE_LOCK_LIBS+=$(shell pkg-config --libs wayland-client xkbcommon)
-HDE_LOCK_DEPS=$(BUILD)/$(LOCKXML)-client-protocol.h
+HDE_LOCK_DEPS=$(BUILD)/$(LOCKXML)-client-protocol.h $(BUILD)/$(LOCKXML)-protocol.c
 endif
 endif
 
@@ -249,7 +251,7 @@ $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h 
 # `hde-lock --check` says 0 when this build can lock the session in front of it. Not built unless the libraries are
 # there: $(HDE_LOCK) above says whether they are.
 $(BUILD)/hde-lock: src/hde-lock.c src/hde-lock-core.c src/hde-lock-core.h $(HDE_HEADERS) $(HDE_LOCK_DEPS) $(VERSION_H) | $(BUILD)
-	@[ -n "$(LOCK_PAM)" ] || echo "NOTE: libpam0g-dev / pam-devel (pkg-config pam) not found: hde-lock cannot check a password and will refuse to lock"
+	@[ -n "$(LOCK_PAM)" ] || echo "NOTE: libpam0g-dev / pam-devel (security/pam_appl.h and -lpam) not found: hde-lock cannot check a password and will refuse to lock"
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) -std=c11 $(HDE_LOCK_CFLAGS) -o $@ src/hde-lock.c src/hde-lock-core.c $(if $(LOCK_WL),$(BUILD)/$(LOCKXML)-protocol.c) $(HDE_LOCK_LIBS)
 # What hde-lock does with the typing, the clock and the English it shows (tests/lock-core-test.c): no display, no PAM
 # and no session to lock, so `make check-unit` runs it everywhere
