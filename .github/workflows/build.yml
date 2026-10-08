@@ -500,7 +500,7 @@ jobs:
       if: always()
       run: |
         mkdir -p /tmp/hde-fedora-units
-        grep -E "^(PASS|FAIL|==) " build.log > /tmp/hde-fedora-units/results.txt || true
+        grep -E "^(PASS:|FAIL:|PASS |FAIL |== )" build.log > /tmp/hde-fedora-units/results.txt || true
         python3 tests/ci-annotate.py /tmp/hde-fedora-units results "HDE unit tests on a base Fedora"
 
     - name: Fedora base test (a session without any desktop package)

@@ -1362,6 +1362,10 @@ static void wm_cleanup(Nexwm *w)
     if (w->wm_check) xcb_destroy_window(w->conn, w->wm_check);
     xcb_set_input_focus(w->conn, XCB_INPUT_FOCUS_POINTER_ROOT, XCB_NONE, XCB_CURRENT_TIME);
     xcb_flush(w->conn);
+    /* Flush only sends the hand-back requests. Round-trip once so the X server has applied the reparents and property
+     * deletes before the client connection closes; the next session manager may inspect the root as soon as we exit. */
+    xcb_get_input_focus_reply_t *barrier = xcb_get_input_focus_reply(w->conn, xcb_get_input_focus(w->conn), NULL);
+    free(barrier);
 }
 
 static void wm_setup_check_window(Nexwm *w)
