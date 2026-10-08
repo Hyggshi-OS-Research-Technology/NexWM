@@ -120,6 +120,7 @@ has "and names the status it left with (4: not in this build)" "status 4" "$out"
 has "and it starts labwc instead, so the entry is never a black screen" "labwc: stand-in started" "$out"
 has "and the labwc session is the one that runs inside it" "--wayland-inner" "$out"
 
+cp "$OUT/bin/nexwm-stays" "$OUT/bin/nexwm"
 run_session nexwm-stays "$OUT/bin/hde-session" --wayland --wm nexwm
 out=$(cat "$OUT/nexwm-stays.log")
 has "a compositor that is there gets the session command to run inside itself" "--session" "$out"

@@ -6,7 +6,7 @@ sides, and the session picks the side it needs:
 | | |
 |---|---|
 | `nexwm --x11` (the default when `$DISPLAY` is set) | a **window manager**: it puts the frames around windows, gives them the focus, keeps the workspaces, moves, snaps, maximizes, closes windows, and honours the struts of HDE's panel. It speaks to the X server through XCB directly — no libX11, no toolkit — and implements the EWMH/ICCCM parts a session and its programs ask for |
-| `nexwm --wayland` | the **compositor** of the "NexWM (Wayland)" session (wlroots), i.e. the program that owns the display there. This is the next step of the work: `nexwm --wayland` prints what this build has and where it is going until then |
+| `nexwm --wayland` | the **Wayland compositor** of the additive "NexWM (Wayland)" login session (wlroots): it owns the display, manages XDG toplevels and popups, arranges layer-shell surfaces, handles input and workspaces, and publishes window state to HDE's Wayland taskbar |
 
 Both were built for HDE first: the panel above windows, the workspaces Super+1…9 are used for, the keys HDE publishes,
 and a configuration file the user edits.
@@ -15,22 +15,26 @@ and a configuration file the user edits.
 nexwm                      the X11 window manager (when $DISPLAY is set)
 nexwm --x11                the X11 window manager, whatever the environment says
 nexwm --wayland            the Wayland compositor (a build made with wlroots)
+nexwm --wayland --session CMD  start CMD inside this compositor (used by hde-session)
 nexwm --replace            take the window manager role over from the one that is running (X11)
 nexwm --config FILE        another configuration file
 nexwm --version, --help
 ```
 
-Exit status: `0` the window manager ran and left cleanly, `2` the configuration file has a mistake, `3` there is no
-display (or another window manager holds the screen and `--replace` was not given), `4` this build has no Wayland
-compositor.
+Exit status: `0` the compositor/window manager or its session exited cleanly, `2` the configuration file has a mistake,
+`3` the display/runtime directory is not available (or an X11 window manager holds the screen and `--replace` was not
+given), `4` this build has no Wayland compositor.
 
 ## Where it is used
 
-* **Settings → Window Management**: NexWM is in the list next to Metacity, Openbox and the others. It supports
-  `--replace`, so it takes the screen over from the running window manager and the switch needs no logout.
-* **The login screen**: the **NexWM** entry (`/usr/share/xsessions/nexwm.desktop`) is the HDE session started with
-  `hde-start --wm nexwm` — HDE with its own window manager from the first window on.
-* On the command line, in a running HDE session: `nexwm --replace &`.
+* **Settings → Window Management**: NexWM is in the list next to Metacity, Openbox and the others. On X11 it supports
+  `--replace`, so it takes over from the running window manager without a logout.
+* **The login screen**: **NexWM** (`/usr/share/xsessions/nexwm.desktop`) is the X11 session; **NexWM (Wayland)**
+  (`/usr/share/wayland-sessions/nexwm-wayland.desktop`) is the additive Wayland session. The existing **HDE (Wayland)**
+  entry stays on labwc. `hde-session --wayland` prefers NexWM's compositor when this build has wlroots and otherwise
+  starts labwc.
+* On the command line, in a running X11 HDE session: `nexwm --replace &`. A Wayland compositor cannot replace the
+  compositor that owns its display.
 
 ## The configuration file
 
@@ -111,36 +115,44 @@ xprop -root _NEXWM_KEYS        # "Super+Q close\0Super+9 workspace 3\0…", one 
 * **Screens**: a resolution change (RandR, F8 in HDE) is noticed through the root window and the work area is
   recomputed.
 
-Not there yet (each one is a step of its own): title bars drawn with the GTK theme, moving and resizing a window with
-the mouse, window previews in the taskbar, and the Wayland compositor.
+Still planned as separate steps: X11 title bars drawn with the GTK theme and X11 taskbar window previews. Wayland
+uses client-side decorations and accepts move/resize requests from Wayland clients.
 
 ## The Wayland side
 
-A compositor is a different program from a window manager: it owns the display, it draws every window itself, and the
-input devices of the machine talk to it. NexWM builds it on **wlroots** — the library labwc, sway and HDE's own
-layer-shell panels are written with — so that the same configuration file, the same key bindings and the same
-`_NEXWM_KEYS` idea can be used on both sides. wlroots is only needed for `--wayland`: a build without it still has the
-X11 window manager, and the program says which one it has.
+A Wayland compositor owns the display and receives its input; it is distinct from NexWM's X11 window-manager role.
+`nexwm --wayland` uses **wlroots** (minimum supported API 0.17) for the backend, renderer, protocol implementations and
+scene graph. NexWM supplies the policies: the shared `~/.config/hde/nexwm.conf`, keyboard shortcuts, focus, workspaces,
+window placement and the HDE session process. wlroots is optional at build time; without it the X11 binary remains
+usable and `nexwm --wayland` exits 4 with the missing package named.
 
-`--wayland` is the door today: it prints what this build has and returns 4. The compositor itself, the session entry
-`NexWM (Wayland)`, and `hde-session --wayland` preferring it over labwc come with it. Until then the Wayland session
-of HDE is the "HDE (Wayland)" entry, which runs labwc.
+The compositor publishes `wl_compositor`, `xdg_wm_base`, `zwlr_layer_shell_v1` and
+`zwlr_foreign_toplevel_manager_v1`; it displays XDG toplevels/popups and layer-shell surfaces, handles pointer and
+keyboard input, and reports windows to HDE's Wayland taskbar. X11 clients are not provided by this compositor (there is
+no Xwayland integration yet). The X11 backend remains a separate session and continues to use XCB directly.
+
+The additive **NexWM (Wayland)** login entry runs `nexwm --wayland --session ...`, so HDE starts on NexWM's compositor.
+The existing **HDE (Wayland)** entry and labwc fallback remain intact. A Wayland compositor cannot use `--replace`:
+only one compositor can own a Wayland display socket.
 
 ## Building and testing it
 
 ```
-make build/nexwm            # the program (XCB and wlroots are picked up by pkg-config, both optional)
-make build/nexwm-test       # the configuration and key bindings, no display needed
-make build/nexwm-client     # the window the shell test puts on the screen
-make check-unit             # every test that needs no display, nexwm-test among them
-make check-nexwm            # NexWM in Xvfb: frames, keys, workspaces, panel struts, --replace (tests/nexwm-test.sh)
+make build/nexwm                  # the program (XCB and wlroots are picked up by pkg-config, both optional)
+make build/nexwm-test             # configuration and key bindings, no display needed
+make build/nexwm-client           # the window the X11 shell test puts on the screen
+make check-unit                   # every test that needs no display, nexwm-test among them
+make check-nexwm                  # X11 in Xvfb plus the wlroots headless Wayland smoke test when available
+sh tests/nexwm-wayland-test.sh    # compositor globals, --session and clean shutdown on WLR_BACKENDS=headless
 ```
 
-Build dependencies: `libxcb1-dev` (Debian/Ubuntu), `libxcb-devel` (Fedora/openSUSE) — and `libwlroots-dev` for the
-Wayland side. Running the shell test needs `xvfb xdotool x11-utils` (and `metacity` for the `--replace` part).
+Build dependencies: `libxcb1-dev` (Debian/Ubuntu), `libxcb-devel` (Fedora/openSUSE), and wlroots 0.17+ development
+files for the Wayland side (`libwlroots-0.18-dev` on Debian trixie, `libwlroots-0.19-dev` on Debian sid, `libwlroots-dev`
+on Ubuntu/older Debian, or `wlroots-devel` on Fedora). The optional Wayland smoke test also needs `wayland-client` development files and
+a wlroots build with the headless backend and pixman renderer. The X11 shell test needs `xvfb xdotool x11-utils` (and
+`metacity` for its `--replace` part).
 
-Both of them are **optional at build time**, and the program says which ones it got: `nexwm --version` and the last
-lines of `nexwm --help` name each side with *yes* or *no* (and what to install for the missing one). A build without
-`libxcb` still compiles — `nexwm --x11` then explains what is missing and exits `3`, the same way `--wayland` does
-without wlroots and exits `4` — and `make check-nexwm` says there is nothing to drive instead of failing. That is how
-the window manager builds on a machine (or in a CI job) that has no X11 development files at all.
+XCB and wlroots are **optional at build time**. `nexwm --version` and `nexwm --help` report each backend as *yes* or
+*no*, with the package to install when it is missing. A build without `libxcb` still compiles; `nexwm --x11` explains
+the missing dependency, and `make check-nexwm` runs whichever backend tests this machine can support instead of failing
+just because the other backend's development files are absent.

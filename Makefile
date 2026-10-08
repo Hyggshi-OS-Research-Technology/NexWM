@@ -28,12 +28,22 @@ XFIXES_LIBS:=$(shell pkg-config --libs xfixes 2>/dev/null)
 # libX11, no toolkit in between. Without it there is no `nexwm --x11` (the program says what to install).
 XCB_CFLAGS:=$(shell pkg-config --exists xcb 2>/dev/null && echo "-DNEXWM_HAVE_XCB `pkg-config --cflags xcb`")
 XCB_LIBS:=$(shell pkg-config --libs xcb 2>/dev/null)
-# wlroots (libwlroots-dev): the Wayland compositor of NexWM (`nexwm --wayland`, the "NexWM (Wayland)" session). wlroots
-# names its pkg-config file after its version (wlroots-0.19.pc since 0.17), older ones after the library itself.
-WLR_PC:=$(shell for n in wlroots wlroots-0.19 wlroots-0.18 wlroots-0.17 wlroots-0.16; do \
-                    pkg-config --exists $$n 2>/dev/null && { echo $$n; break; }; done)
-WLR_CFLAGS:=$(shell [ -n "$(WLR_PC)" ] && echo "-DNEXWM_HAVE_WLROOTS `pkg-config --cflags $(WLR_PC)`")
+# wlroots (libwlroots-dev): NexWM's Wayland compositor. 0.17 is the oldest API this source supports; the unversioned
+# pkg-config name is tried last and its version is checked, so an older `wlroots.pc` cannot accidentally enable it.
+WLR_PC:=$(shell for n in wlroots-0.21 wlroots-0.20 wlroots-0.19 wlroots-0.18 wlroots-0.17 wlroots; do \
+                    pkg-config --exists $$n 2>/dev/null || continue; \
+                    v=`pkg-config --modversion $$n`; major=`echo $$v | cut -d. -f1`; minor=`echo $$v | cut -d. -f2`; \
+                    [ "$$major" = 0 ] && [ "$$minor" -ge 17 ] && { echo $$n; break; }; done)
+WLR_MINOR:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --modversion $(WLR_PC) | cut -d. -f2)
+WLR_CFLAGS:=$(shell [ -n "$(WLR_PC)" ] && echo "-DNEXWM_HAVE_WLROOTS -DWLR_USE_UNSTABLE -DNEXWM_WLROOTS_MINOR=$(WLR_MINOR) `pkg-config --cflags $(WLR_PC)`")
 WLR_LIBS:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --libs $(WLR_PC))
+# A small Wayland client verifies the real headless compositor in `make check-nexwm`; keep it optional alongside wlroots.
+NEXWM_WAYLAND_PROBE:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --exists wayland-client 2>/dev/null && echo yes)
+ifeq ($(NEXWM_WAYLAND_PROBE),yes)
+NEXWM_WAYLAND_PROBE_TARGET=$(BUILD)/nexwm-wayland-probe
+NEXWM_WAYLAND_CLIENT_CFLAGS=$(shell pkg-config --cflags wayland-client)
+NEXWM_WAYLAND_CLIENT_LIBS=$(shell pkg-config --libs wayland-client)
+endif
 # gtk-layer-shell (libgtk-layer-shell-dev): the "HDE (Wayland)" session — panel, desktop, Start menu and popups as
 # layer-shell surfaces. Without it HDE builds for X11 only. It must come before libwayland-client when linking.
 LAYER_CFLAGS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo "-DHAVE_GTK_LAYER_SHELL `pkg-config --cflags gtk-layer-shell-0`")
@@ -185,6 +195,10 @@ $(BUILD)/nexwm: $(NEXWM_SRC) nexwm/src/nexwm.h $(VERSION_H) | $(BUILD)
 # NexWM's configuration file and key bindings (nexwm/src/config.c): no display, no X server, no window manager
 $(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/nexwm.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Inexwm/src -o $@ $(filter %.c,$^)
+ifeq ($(NEXWM_WAYLAND_PROBE),yes)
+$(BUILD)/nexwm-wayland-probe: tests/nexwm-wayland-probe.c | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 $(NEXWM_WAYLAND_CLIENT_CFLAGS) -o $@ $< $(NEXWM_WAYLAND_CLIENT_LIBS)
+endif
 # The window the test of the window manager puts on the screen (tests/nexwm-client.c): a plain XCB client, so it only
 # exists where libxcb does (both are needed by tests/nexwm-test.sh, which then drives a real NexWM in Xvfb)
 ifneq ($(XCB_CFLAGS),)
@@ -233,12 +247,15 @@ check-media: $(BUILD)/hde-media
 # NexWM in a real X server (Xvfb + a window of its own): the takeover, the frames, the key bindings, the workspaces,
 # the work area a panel reserves with its struts, the way out and --replace. See tests/nexwm-test.sh
 ifneq ($(XCB_CFLAGS),)
-check-nexwm: $(BUILD)/nexwm $(BUILD)/nexwm-client
+check-nexwm: $(BUILD)/nexwm $(BUILD)/nexwm-client $(NEXWM_WAYLAND_PROBE_TARGET)
 	sh tests/nexwm-test.sh
+	@if [ -n "$(NEXWM_WAYLAND_PROBE_TARGET)" ]; then sh tests/nexwm-wayland-test.sh; \
+	  else echo "SKIP: nexwm-wayland: wlroots or wayland-client development files were not present at build time"; fi
 else
-check-nexwm: $(BUILD)/nexwm
-	@echo "NOTE: libxcb1-dev (pkg-config xcb) not found: the window manager test needs a real X server and a NexWM"
-	@echo "      built with libxcb — nothing to drive here. (build/nexwm says what to install: nexwm --version.)"
+check-nexwm: $(BUILD)/nexwm $(NEXWM_WAYLAND_PROBE_TARGET)
+	@echo "NOTE: libxcb1-dev (pkg-config xcb) not found: the X11 window-manager test needs an X server and XCB build"
+	@if [ -n "$(NEXWM_WAYLAND_PROBE_TARGET)" ]; then sh tests/nexwm-wayland-test.sh; \
+	  else echo "SKIP: nexwm-wayland: wlroots or wayland-client development files were not present at build time"; fi
 endif
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh

@@ -38,9 +38,9 @@ static void build_report(FILE *out)
     fprintf(out, "X11 window manager (XCB): no — build with libxcb: libxcb1-dev on Debian/Ubuntu, libxcb-devel on Fedora\n");
 #endif
 #ifdef NEXWM_HAVE_WLROOTS
-    fprintf(out, "Wayland compositor (wlroots): yes (the compositor itself is still being written: nexwm/README.md)\n");
+    fprintf(out, "Wayland compositor (wlroots): yes\n");
 #else
-    fprintf(out, "Wayland compositor (wlroots): no — build with libwlroots-dev (Debian/Ubuntu) or wlroots-devel (Fedora)\n");
+    fprintf(out, "Wayland compositor (wlroots): no — install wlroots 0.17+ development files (Debian: libwlroots-0.18-dev/libwlroots-0.19-dev; Ubuntu: libwlroots-dev; Fedora: wlroots-devel)\n");
 #endif
 }
 
