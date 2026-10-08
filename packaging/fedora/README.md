@@ -92,6 +92,7 @@ make check-login             # the SDDM login screen (login/sddm/hde)
 goes (`shot-*.png` next to `results.txt`), so a Fedora build can be looked at, not only measured. Needs
 `sh packaging/fedora/deps.sh install test` (Xvfb, xdotool, ImageMagick, python-dbusmock, a window manager, icons).
 
-CI runs all of it: the **Fedora (dnf, full desktop)** job (the Fedora test *and* the smoke test, whose pictures land
-in the `hde-fedora` artifact), the **Fedora base (minimal, no desktop packages)** job, and the Ubuntu, Debian, Arch and
+CI runs all of it: the **Fedora (dnf, full desktop)** job (the Fedora test *and* the smoke test — its logs and
+pictures travel in the `hde-smoke-fedora` artifact, the Fedora twin of `hde-smoke-ubuntu-22.04`, and the Fedora test's
+own output in `hde-fedora`), the **Fedora base (minimal, no desktop packages)** job, and the Ubuntu, Debian, Arch and
 Wayland jobs in `.github/workflows/build.yml`.

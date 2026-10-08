@@ -452,6 +452,18 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: python3 tests/ci-annotate.py /tmp/hde-smoke checkruns Fedora
 
+    # the smoke test's own artifact, the Fedora twin of hde-smoke-ubuntu-22.04: the logs and the pictures of the
+    # desktop as it was during the test (the hde-fedora artifact above is the Fedora test's own output)
+    - name: Upload the smoke test output (logs + screenshots)
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-smoke-fedora
+        path: |
+          /tmp/hde-smoke/*.log
+          /tmp/hde-smoke/*.txt
+          /tmp/hde-smoke/shot-*.png
+
     - name: NexWM in a real X server (Fedora, with XCB, the frames, the keys and --replace with Metacity)
       # ... bounded for the same reason as the same step in the build job above (a hung test is a failure to read)
       run: timeout -k 10 900 make check-nexwm
@@ -480,9 +492,6 @@ jobs:
           /tmp/hde-fedora/*.log
           /tmp/hde-fedora/shot-*.png
           /tmp/hde-fedora/sddm/**
-          /tmp/hde-smoke/*.txt
-          /tmp/hde-smoke/*.log
-          /tmp/hde-smoke/shot-*.png
           build.log
 
   # Arch Linux: a rolling distribution, which makes it the one that finds a broken build first — above all wlroots,
@@ -554,7 +563,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v6
       with:
-        name: hde-arch
+        name: hde-smoke-arch
         path: |
           /tmp/hde-smoke/*.log
           /tmp/hde-smoke/*.txt

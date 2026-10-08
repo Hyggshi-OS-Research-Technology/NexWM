@@ -815,7 +815,8 @@ is done written down.
 - **Fedora runs the smoke test, and gets the same pictures.** The Fedora job (`Fedora (dnf, full desktop)`) now runs
   `tests/smoke.sh` — the same test the Ubuntu jobs run — after its own Fedora test: the whole desktop in Xvfb (the
   panel, the Start menu, the Control Center, Settings, notifications, the desktop icons) *photographed* along the way,
-  the results published as annotations and the pictures in the `hde-fedora` artifact. Its check runs are labelled
+  the results published as annotations and the pictures in the **`hde-smoke-fedora`** artifact — the Fedora twin of
+  `hde-smoke-ubuntu-22.04`. Its check runs are labelled
   (`hde-shot Fedora 01-panel`) so Fedora's, Ubuntu's and Arch's pictures of the same test are told apart.
 - **Arch Linux: `packaging/arch/README.md`, `packaging/arch/deps.sh` and a CI job.** Arch names its development
   packages like the libraries (gtk3, libwnck3, libxcb, pam, wlroots: no `-dev`, no `-devel`), its Python package is
@@ -831,8 +832,9 @@ is done written down.
   wlroots compositor. `make check-unit` runs it, `make check-arch` is the same test on an Arch.
 - **An Arch CI job** (`Arch Linux (pacman, current wlroots)`, `container: archlinux:latest`): install through
   `packaging/arch/deps.sh install build runtime-minimal test`, build every target (and say which wlroots that was),
-  `tests/arch-test.sh --deps`, the smoke test in Xvfb (the pictures of the Arch desktop: the `hde-arch` artifact),
-  the unit tests, and the pictures as check runs under `[shots]`.
+  `tests/arch-test.sh --deps`, the smoke test in Xvfb (the pictures of the Arch desktop: the **`hde-smoke-arch`**
+  artifact), the unit tests, and the pictures as check runs under `[shots]` (named `hde-shot Arch …`, and Fedora's
+  `hde-shot Fedora …`, so the three systems' pictures of the same test are told apart).
 
 ### Tests
 
