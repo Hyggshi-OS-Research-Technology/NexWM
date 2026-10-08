@@ -70,6 +70,8 @@ int nexwm_wayland_run(const char *config_path, int replace, const char *session)
 #define NEXWM_CHILD_POLL_MS 100
 #define NEXWM_DEFAULT_WIDTH 800
 #define NEXWM_DEFAULT_HEIGHT 600
+/* Wayland keyboard keycodes are evdev codes; xkbcommon keycodes include the 8-code offset. */
+#define NEXWM_XKB_KEYCODE_OFFSET 8u
 
 #define NEXWM_ADD_LISTENER(signal, listener, callback) do { \
     (listener).notify = (callback); \
@@ -773,7 +775,7 @@ static bool handle_binding(NexwmServer *server, struct wlr_keyboard *keyboard, u
 {
     if (!keyboard->xkb_state) return false;
     xkb_keysym_t sym = xkb_state_key_get_one_sym(keyboard->xkb_state,
-                                                   keycode + XKB_KEYCODE_OFFSET);
+                                                   keycode + NEXWM_XKB_KEYCODE_OFFSET);
     if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) sym += XKB_KEY_a - XKB_KEY_A;
     unsigned modifiers = wayland_modifiers(keyboard);
     for (size_t i = 0; i < server->config.n_keys; i++) {
@@ -793,7 +795,7 @@ static void keyboard_key(struct wl_listener *listener, void *data)
     struct wlr_keyboard_key_event *event = data;
     if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
         handle_binding(keyboard->server, keyboard->wlr, event->keycode)) return;
-    wlr_seat_set_keyboard(keyboard->server->seat, keyboard->device);
+    wlr_seat_set_keyboard(keyboard->server->seat, keyboard->wlr);
     wlr_seat_keyboard_notify_key(keyboard->server->seat, event->time_msec,
                                  event->keycode, event->state);
 }
@@ -802,7 +804,7 @@ static void keyboard_modifiers(struct wl_listener *listener, void *data)
 {
     (void)data;
     NexwmKeyboard *keyboard = wl_container_of(listener, keyboard, modifiers);
-    wlr_seat_set_keyboard(keyboard->server->seat, keyboard->device);
+    wlr_seat_set_keyboard(keyboard->server->seat, keyboard->wlr);
     wlr_seat_keyboard_notify_modifiers(keyboard->server->seat, &keyboard->wlr->modifiers);
 }
 
@@ -855,7 +857,7 @@ static void server_new_input(struct wl_listener *listener, void *data)
         NEXWM_ADD_LISTENER(&wlr_keyboard->events.modifiers, keyboard->modifiers, keyboard_modifiers);
         NEXWM_ADD_LISTENER(&device->events.destroy, keyboard->destroy, keyboard_destroy);
         wl_list_insert(&server->keyboards, &keyboard->link);
-        wlr_seat_set_keyboard(server->seat, device);
+        wlr_seat_set_keyboard(server->seat, wlr_keyboard);
         server_update_seat_capabilities(server);
         focus_workspace_view(server);
         break;
@@ -957,7 +959,7 @@ static void cursor_motion(struct wl_listener *listener, void *data)
 {
     NexwmServer *server = wl_container_of(listener, server, cursor_motion);
     struct wlr_pointer_motion_event *event = data;
-    wlr_cursor_move(server->cursor, event->device, event->delta_x, event->delta_y);
+    wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
     cursor_process_motion(server, event->time_msec);
 }
 
@@ -965,7 +967,7 @@ static void cursor_motion_absolute(struct wl_listener *listener, void *data)
 {
     NexwmServer *server = wl_container_of(listener, server, cursor_motion_absolute);
     struct wlr_pointer_motion_absolute_event *event = data;
-    wlr_cursor_warp_absolute(server->cursor, event->device, event->x, event->y);
+    wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
     cursor_process_motion(server, event->time_msec);
 }
 
@@ -973,7 +975,7 @@ static void cursor_button(struct wl_listener *listener, void *data)
 {
     NexwmServer *server = wl_container_of(listener, server, cursor_button);
     struct wlr_pointer_button_event *event = data;
-    if (event->state == WLR_BUTTON_PRESSED) {
+    if (event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
         double sx = 0, sy = 0;
         struct wlr_scene_node *node = NULL;
         scene_surface_at(server, server->cursor->x, server->cursor->y, &sx, &sy, &node);
@@ -982,7 +984,7 @@ static void cursor_button(struct wl_listener *listener, void *data)
     }
     wlr_seat_pointer_notify_button(server->seat, event->time_msec,
                                     event->button, event->state);
-    if (event->state == WLR_BUTTON_RELEASED) {
+    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
         server->cursor_mode = NEXWM_CURSOR_PASSTHROUGH;
         server->grabbed_view = NULL;
     }
@@ -1431,7 +1433,11 @@ static void create_scene_popup(NexwmServer *server, struct wlr_xdg_popup *wlr_po
     if (!wlr_popup || !parent_tree || wlr_popup->base->data) return;
 
     struct wlr_scene_tree *root_tree = popup_root_tree(server, wlr_popup, parent_tree);
+#if NEXWM_WLROOTS_MINOR >= 21
     double root_x = 0, root_y = 0;
+#else
+    int root_x = 0, root_y = 0;
+#endif
     if (root_tree) wlr_scene_node_coords(&root_tree->node, &root_x, &root_y);
     struct wlr_box constraint = server_workarea(server);
     constraint.x -= (int)root_x;
