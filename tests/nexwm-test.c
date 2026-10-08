@@ -52,8 +52,8 @@ static void test_defaults(void)
     CHECK(cfg.n_keys > 20, "the default keys are all there (%d of them)", (int)cfg.n_keys);
 
     HdeNexwmBinding *b = binding(&cfg, "Super+Return");
-    CHECK(b && b->action == NEXWM_ACTION_SPAWN && b->command && *b->command, "Super+Return starts a terminal (%s)",
-          b && b->command ? b->command : "nothing");
+    CHECK(b && b->action == NEXWM_ACTION_SPAWN && b->command && !strcmp(b->command, "hde-choose terminal"),
+          "Super+Return opens HDE's terminal chooser (got %s)", b && b->command ? b->command : "nothing");
     CHECK(b && b->keysym == 0xff0d && b->mods == NEXWM_MOD_SUPER, "and it is Super and the Return key");
     b = binding(&cfg, "Super+Q");
     CHECK(b && b->action == NEXWM_ACTION_CLOSE && b->keysym == 0x71 && b->mods == NEXWM_MOD_SUPER,

@@ -9,6 +9,11 @@ CORE_OBJ=$(CORE_SRC:.c=.o) $(BACKEND_SRC:.c=.o)
 
 GTK_CFLAGS:=$(shell pkg-config --cflags gtk+-3.0 2>/dev/null)
 GTK_LIBS:=$(shell pkg-config --libs gtk+-3.0 2>/dev/null)
+# HDE Cmd's optional VTE backend: hde-cmd/src/vt.c is still the default; --vte opts into this adapter only when VTE
+# development files were available while building.
+CMD_VTE_PC:=$(shell pkg-config --exists vte-2.91 2>/dev/null && echo vte-2.91)
+CMD_VTE_CFLAGS:=$(shell [ -n "$(CMD_VTE_PC)" ] && echo "-DHDE_CMD_HAVE_VTE `pkg-config --cflags $(CMD_VTE_PC)`")
+CMD_VTE_LIBS:=$(shell [ -n "$(CMD_VTE_PC)" ] && pkg-config --libs $(CMD_VTE_PC))
 WNCK_CFLAGS:=$(shell pkg-config --cflags libwnck-3.0 x11 2>/dev/null)
 WNCK_LIBS:=$(shell pkg-config --libs libwnck-3.0 x11 2>/dev/null)
 GLIBX_CFLAGS:=$(shell pkg-config --cflags glib-2.0 x11 2>/dev/null)
@@ -93,6 +98,9 @@ FILES_SRC=$(wildcard hde-files/src/*.c) src/hde-theme.c
 # Hyggshi Media, the pictures (its own folder: hde-media/, which also has a Makefile to build it alone); the media
 # player and the recorder join it there
 MEDIA_SRC=$(wildcard hde-media/src/*.c) src/hde-theme.c
+# HDE Cmd, the terminal emulator (hde-cmd/: its own GTK window and PTY, built-in VT engine, optional VTE adapter)
+CMD_SRC=$(wildcard hde-cmd/src/*.c)
+CMD_HEADERS=$(wildcard hde-cmd/src/*.h)
 # Build stamp (commit + date) shown in Settings > About, by --version and at the top of the session log, to tell at a
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
@@ -103,14 +111,14 @@ NEXWM_SRC=$(wildcard nexwm/src/*.c)
 NEXWM_HEADERS=$(wildcard nexwm/src/*.h)
 
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media \
-         hde-choose nexwm
+         hde-choose hde-cmd nexwm
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
 # The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/nexwm
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd $(BUILD)/nexwm
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -141,6 +149,11 @@ $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
 # so that tests/choose-test.c can check them without a display. Run by the key bindings, the Start menu and Settings.
 $(BUILD)/hde-choose: apps/hde-choose.c src/hde-choose.c src/hde-choose.h src/hde-distro.h src/hde-build.h | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# HDE Cmd (hde-cmd/): its own GTK terminal window and PTY, with the built-in VT parser as the default and VTE as an
+# optional backend (`--vte`); hde-cmd/src/vt.c is display-independent and is covered by `make check-unit`.
+$(BUILD)/hde-cmd: $(CMD_SRC) $(CMD_HEADERS) | $(BUILD)
+	@[ -n "$(GTK_CFLAGS)" ] || echo "WARNING: libgtk-3-dev (pkg-config gtk+-3.0) not found: hde-cmd needs GTK 3"
+	$(CC) $(GUI_CFLAGS) -std=c11 -Ihde-cmd/src $(GTK_CFLAGS) $(CMD_VTE_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(CMD_VTE_LIBS) -lutil -lm
 # Hyggshi Files (hde-files/): folders, tabs, search, trash, thumbnails, drag and drop; the default file manager of HDE
 $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-files/src -Isrc $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
@@ -177,6 +190,9 @@ $(BUILD)/media-test: tests/media-test.c hde-media/src/gallery.c hde-media/src/me
 # read from the files themselves, and the state of the playback — plain C, no display and no sound card needed
 $(BUILD)/player-test: tests/player-test.c hde-media/src/playlist.c hde-media/src/gallery.c hde-media/src/engine.c hde-media/src/playlist.h hde-media/src/engine.h hde-media/src/media.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-media/src -o $@ $(filter %.c,$^) -lm
+# HDE Cmd's built-in VT parser and screen model (hde-cmd/src/vt.c): no GTK or display server needed
+$(BUILD)/cmd-vt-test: tests/cmd-vt-test.c hde-cmd/src/vt.c hde-cmd/src/vt.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Ihde-cmd/src -o $@ $(filter %.c,$^)
 # The stand-in for GTK3 of tests/choose-run-test.sh (tests/choose-stub/): the question of hde-choose ("which program
 # for this?") cannot be answered in CI — there is no display, and a user clicking a radio button is not a test — so the
 # test brings a toolkit of its own that says what was clicked (HDE_CHOOSE_STUB=..., see tests/choose-stub/gtk.c). It is
@@ -235,7 +251,7 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
 UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test \
-            $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test \
+            $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test $(BUILD)/cmd-vt-test \
             tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
@@ -287,7 +303,7 @@ APPS_DIR ?= /usr/share/applications
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(XSESSIONS) $(DESTDIR)$(APPS_DIR)
 	install -m755 $(BUILD)/hde-session $(DESTDIR)$(PREFIX)/bin/hde-session
-	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose; do \
+	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd; do \
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
@@ -308,10 +324,12 @@ install: all
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-screenshot.desktop > $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-files/hde-files.desktop > $(DESTDIR)$(APPS_DIR)/hde-files.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-media/hde-media.desktop > $(DESTDIR)$(APPS_DIR)/hde-media.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' hde-cmd/hde-cmd.desktop > $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop
 	install -m644 hde-files/hde-mimeapps.list $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
-	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop
+	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop
 	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
 	# the HDE login screen (SDDM theme, login/sddm/): the files, and hde-login to install/choose it on a running
 	# system (it also writes /etc/sddm.conf.d/50-hde-theme.conf so SDDM uses the theme)
@@ -342,7 +360,8 @@ uninstall:
 	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
 	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
-	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
+	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop \
+	      $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -rf $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login

@@ -535,9 +535,22 @@ gboolean files_open_terminal(GFile *dir, GtkWindow *parent)
         files_error(parent, "Cannot open a terminal here", "This place is not a folder of this computer.");
         return FALSE;
     }
-    static const char *const terms[] = { "x-terminal-emulator", "gnome-terminal", "xfce4-terminal", "mate-terminal",
-        "tilix", "konsole", "lxterminal", "qterminal", "terminator", "alacritty", "kitty", "foot", "xterm", NULL };
+    /* Keep the folder as cwd while letting HDE ask which terminal to use when there is more than one. */
+    char *chooser = g_find_program_in_path("hde-choose");
     gboolean ok = FALSE;
+    if (chooser) {
+        char *argv[] = { chooser, (char *)"terminal", NULL };
+        GError *e = NULL;
+        ok = g_spawn_async(path, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &e);
+        if (ok) files_log("terminal chooser opened in %s", path);
+        else {
+            g_printerr("hde-files: cannot start hde-choose: %s\n", e->message);
+            g_clear_error(&e);
+        }
+        g_free(chooser);
+    }
+    static const char *const terms[] = { "hde-cmd", "x-terminal-emulator", "gnome-terminal", "xfce4-terminal", "mate-terminal",
+        "tilix", "konsole", "lxterminal", "qterminal", "terminator", "alacritty", "kitty", "foot", "xterm", NULL };
     for (int i = 0; terms[i] && !ok; i++) {
         char *prog = g_find_program_in_path(terms[i]);
         if (!prog) continue;

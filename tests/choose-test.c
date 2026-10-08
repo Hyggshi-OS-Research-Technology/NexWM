@@ -105,6 +105,8 @@ int main(void)
     CHECK(all_offered, "every feature offers more than one program (otherwise there would be nothing to ask)");
 
     /* HDE's own program comes first where HDE has one: that is what HDE is for */
+    CHECK(!strcmp(hde_choose_feature("terminal")->candidates[0].program, "hde-cmd"), "HDE Cmd is the first terminal candidate");
+    CHECK(hde_choose_feature("terminal")->candidates[0].note != NULL, "and it is marked as HDE's own");
     CHECK(!strcmp(hde_choose_feature("files")->candidates[0].program, "hde-files"), "Hyggshi Files is the first for files");
     CHECK(!strcmp(hde_choose_feature("pictures")->candidates[0].program, "hde-media"), "Hyggshi Media is the first for pictures");
     CHECK(!strcmp(hde_choose_feature("player")->candidates[0].program, "hde-media"), "... and for music and video");

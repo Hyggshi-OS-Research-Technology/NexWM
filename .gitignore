@@ -8,6 +8,7 @@ bin/
 #  goes to $(BUILD)/nexwm — the "nexwm" entry that used to be here hid the whole source directory)
 build/
 bin
+hde-cmd/hde-cmd
 
 # Debug/IDE
 .vscode/

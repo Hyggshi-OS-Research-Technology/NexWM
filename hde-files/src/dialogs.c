@@ -751,7 +751,7 @@ void files_open_with_dialog(FilesWindow *w, GList *files)
 static const char *find_terminal(const char **exec_flag)
 {
     static const struct { const char *prog, *flag; } terms[] = {
-        { "x-terminal-emulator", "-e" }, { "gnome-terminal", "--" }, { "xfce4-terminal", "-x" }, { "mate-terminal", "-x" },
+        { "hde-cmd", "-e" }, { "x-terminal-emulator", "-e" }, { "gnome-terminal", "--" }, { "xfce4-terminal", "-x" }, { "mate-terminal", "-x" },
         { "tilix", "-e" }, { "konsole", "-e" }, { "lxterminal", "-e" }, { "qterminal", "-e" }, { "terminator", "-x" },
         { "alacritty", "-e" }, { "kitty", NULL }, { "foot", NULL }, { "xterm", "-e" } };
     for (guint i = 0; i < G_N_ELEMENTS(terms); i++) {

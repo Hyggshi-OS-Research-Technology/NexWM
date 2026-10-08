@@ -75,7 +75,7 @@ The defaults are:
 
 | Keys | |
 |------|--|
-| `Super+Return` | a terminal (`x-terminal-emulator`) |
+| `Super+Return` | a terminal (`hde-choose terminal`: HDE Cmd first, then other installed terminals; asks and remembers when there is a choice) |
 | `Super+E` | Hyggshi Files (`hde-files`) |
 | `Super+Q` / `Super+Shift+Q` | close the focused window / leave the window manager |
 | `Super+Tab` / `Super+Shift+Tab` | the next / previous window |

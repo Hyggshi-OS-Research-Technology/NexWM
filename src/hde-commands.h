@@ -86,7 +86,7 @@
  * there too (hde-choose offers it as "HDE's own"). */
 #define HDE_SH_TERMINAL \
     "if command -v hde-choose >/dev/null 2>&1; then exec hde-choose terminal; fi; " \
-    "for t in x-terminal-emulator gnome-terminal xfce4-terminal mate-terminal tilix konsole lxterminal " \
+    "for t in hde-cmd x-terminal-emulator gnome-terminal xfce4-terminal mate-terminal tilix konsole lxterminal " \
     "qterminal terminator alacritty kitty xterm; do " \
     "if command -v \"$t\" >/dev/null 2>&1; then exec \"$t\"; fi; done; exit 127"
 

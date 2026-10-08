@@ -981,8 +981,8 @@ static void keys_grab(Nexwm *w)
 
 static void keys_publish(Nexwm *w)
 {
-    /* _NEXWM_KEYS: every binding as one NUL-terminated string ("Super+Q close\0Super+Return spawn xterm\0"), so that
-     * anything that wants to show them (a Settings page, a help window) has the list the window manager really uses */
+    /* _NEXWM_KEYS: every binding as one NUL-terminated string ("Super+Q close\0Super+Return spawn hde-choose terminal\0").
+     * Anything that wants to show them (a Settings page, a help window) has the list the window manager really uses. */
     char *list = calloc(1, 1);
     size_t len = 0;
     for (size_t i = 0; i < w->cfg.n_keys; i++) {

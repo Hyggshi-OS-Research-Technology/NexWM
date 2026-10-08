@@ -1,7 +1,7 @@
 /* hde-choose — "which program for this?" HDE asks, once, and remembers the answer.
  *
  * HDE has a program of its own for some of the things a session does, and the machine usually has another one
- * installed: a terminal (HDE's own hde-cmd one day, gnome-terminal, xterm …), folders (Hyggshi Files, Thunar,
+ * installed: a terminal (HDE's own hde-cmd, gnome-terminal, xterm …), folders (Hyggshi Files, Thunar,
  * Nautilus …), pictures and music and video (Hyggshi Media, eog, mpv …), the screen (HDE's own hde-screenshot, scrot
  * …), what the system is doing (gnome-system-monitor, …). Where HDE used to run the first one on a list, it now asks
  * which one to use — and when there is only one, it does not ask at all.

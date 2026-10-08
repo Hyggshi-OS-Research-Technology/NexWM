@@ -95,7 +95,7 @@ fi
 
 say "make"
 make -C "$SRC" -j"$(nproc)" all
-PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files nexwm"
+PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm"
 for p in $PROGRAMS; do
     [ -x "$SRC/build/$p" ] || die "build/$p was not built (see the make output above)"
 done
@@ -110,6 +110,8 @@ for f in /usr/share/xsessions/hde.desktop /usr/share/xsessions/nexwm.desktop \
     [ -f "$f" ] || die "$f is missing after make install"
     grep -q "^Exec=$PREFIX/bin/hde-start" "$f" || die "$f does not start $PREFIX/bin/hde-start"
 done
+[ -f /usr/share/applications/hde-cmd.desktop ] || die "/usr/share/applications/hde-cmd.desktop is missing after make install"
+grep -q "^Exec=$PREFIX/bin/hde-cmd$" /usr/share/applications/hde-cmd.desktop || die "hde-cmd.desktop does not start $PREFIX/bin/hde-cmd"
 
 # what the old NexDE script left: its programs no longer exist, so the login screen would offer a broken session. The
 # nexwm.desktop that `make install` just wrote is not one of them (it starts hde-start and a window manager built from
@@ -163,6 +165,8 @@ missing=$(for b in "$PREFIX"/bin/hde-* "$PREFIX"/bin/nexwm; do ldd "$b" 2>/dev/n
 [ -z "$missing" ] || die "libraries missing after the build tools were removed:
 $missing"
 "$PREFIX/bin/hde-settings" --version
+"$PREFIX/bin/hde-cmd" --version
+"$PREFIX/bin/hde-choose" --version
 echo "OK: HDE is installed in $PREFIX/bin; sessions: /usr/share/xsessions/hde.desktop (HDE)," \
      "/usr/share/xsessions/nexwm.desktop (HDE with NexWM, its own window manager)," \
      "/usr/share/wayland-sessions/hde-wayland.desktop (HDE (Wayland), with labwc)"

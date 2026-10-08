@@ -356,7 +356,7 @@ jobs:
         set -e
         cat /usr/share/xsessions/hde.desktop /usr/share/xsessions/nexwm.desktop \
             /usr/share/wayland-sessions/hde-wayland.desktop /usr/share/wayland-sessions/nexwm-wayland.desktop
-        for p in hde-start hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files nexwm; do
+        for p in hde-start hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm; do
           test -x "/usr/bin/$p" || { echo "::error::/usr/bin/$p is missing"; exit 1; }
         done
         # the NexWM entry is the HDE session with HDE's own window manager (not the old NexDE one, which no longer exists)
@@ -369,6 +369,8 @@ jobs:
         if command -v gcc; then echo "::error::the build tools were not removed"; exit 1; fi
         /usr/bin/hde-settings --version
         /usr/bin/hde-files --version
+        /usr/bin/hde-cmd --version
+        /usr/bin/hde-choose --version
         grep -q "^inode/directory=hde-files.desktop" /usr/share/applications/hde-mimeapps.list
         /usr/bin/hde-settings --power
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb xauth x11-utils fonts-dejavu-core
@@ -414,7 +416,7 @@ jobs:
           grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
           exit 1
         }
-        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media nexwm; do
+        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm; do
           test -x "build/$p" || { echo "::error::build/$p was not built"; exit 1; }
         done
         grep -q "HAVE_WAYLAND_TASKBAR" build.log || echo "::warning::hde-panel was built without the Wayland taskbar"
@@ -608,7 +610,7 @@ jobs:
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
           build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev \
-          libxcb1-dev
+          libxcb1-dev libvte-2.91-dev
         gcc --version | head -n1
         pkg-config --modversion xcb
 
@@ -620,9 +622,13 @@ jobs:
           grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
           exit 1
         }
-        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media nexwm; do
+        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm; do
           test -x "build/$p" || { echo "::error::build/$p was not built"; exit 1; }
         done
+        build/hde-cmd --version | tee /tmp/hde-cmd-version.txt
+        grep -q "optional VTE backend: yes" /tmp/hde-cmd-version.txt || {
+          echo "::error::hde-cmd did not detect the VTE package installed for the optional-backend build"; exit 1;
+        }
 
     - name: Compiler warnings
       if: always()

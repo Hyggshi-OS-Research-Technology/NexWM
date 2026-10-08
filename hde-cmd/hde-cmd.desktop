@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=HDE Cmd
+GenericName=Terminal Emulator
+Comment=Run commands in a terminal
+Exec=@PREFIX@/bin/hde-cmd
+Icon=utilities-terminal
+Terminal=false
+Type=Application
+Categories=GTK;System;TerminalEmulator;Utility;
+Keywords=terminal;shell;console;command;cmd;
+StartupNotify=true
+StartupWMClass=hde-cmd

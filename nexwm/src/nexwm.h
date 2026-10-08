@@ -75,8 +75,8 @@ typedef struct {
     size_t n_keys, cap_keys;
 } HdeNexwmConfig;
 
-/* The defaults (2 px, click to focus, 4 workspaces, and the keys of the README): Super+Return a terminal, Super+E
- * the file manager, Super+Q close, Super+Shift+Q quit, Super+Tab / Super+Shift+Tab the next / previous window,
+/* The defaults (2 px, click to focus, 4 workspaces, and the keys of the README): Super+Return hde-choose terminal,
+ * Super+E the file manager, Super+Q close, Super+Shift+Q quit, Super+Tab / Super+Shift+Tab the next / previous window,
  * Super+1..9 a workspace and Super+Shift+1..9 the window to another one, Super+Left/Right a half screen, Super+Up
  * maximize, Super+Down back, Super+F full screen. */
 void nexwm_config_defaults(HdeNexwmConfig *cfg);

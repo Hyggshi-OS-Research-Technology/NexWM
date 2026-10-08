@@ -42,7 +42,8 @@ if [ -z "${HDE_FEDORA_INNER:-}" ]; then
         command -v $t >/dev/null 2>&1 ||
             { echo "FAIL: fedora: missing $t (dnf install xorg-x11-server-Xvfb dbus-daemon python3 rpm)" | tee -a "$OUT/results.txt"; exit 2; }
     done
-    printf '[settings]\nwm=auto\n' > "$OUT/home/.config/hde/settings.ini"
+    # A stable remembered terminal keeps the key-binding smoke test noninteractive even when both hde-cmd and xterm are present.
+    printf '[settings]\nwm=auto\nchoice_terminal=hde-cmd\n' > "$OUT/home/.config/hde/settings.ini"
     printf '[Desktop Entry]\nType=Application\nName=Fedora Test App\nComment=HDE on Fedora\nExec=touch %s/fedora-test-app\nIcon=applications-utilities\nCategories=Utility;\n' \
         "$OUT" > "$OUT/home/.local/share/applications/fedora-test-app.desktop"
     export HOME="$OUT/home" XDG_CONFIG_HOME="$OUT/home/.config" XDG_CACHE_HOME="$OUT/home/.cache"
@@ -235,8 +236,8 @@ if [ "$MODE" = full ]; then
     shot "02-start-menu"
     xdotool key Escape; sleep 0.5
 
-    # a real window: the terminal key (Ctrl+Alt+T). On Fedora HDE finds what is installed (xterm in the test image,
-    # hde-cmd once this repository ships it)
+    # a real window: the terminal key (Ctrl+Alt+T). The fixture remembers hde-cmd above so the automated shortcut does
+    # not wait on the chooser dialog when multiple terminal providers are installed.
     before=$(xdotool search --onlyvisible --class "" 2>/dev/null | wc -l)
     xdotool key ctrl+alt+t; sleep 3
     after=$(xdotool search --onlyvisible --class "" 2>/dev/null | wc -l)

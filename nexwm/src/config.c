@@ -309,7 +309,7 @@ void nexwm_config_defaults(HdeNexwmConfig *cfg)
     cfg->focus_color = 0x3a86ff;
 
     /* the keys the README promises; the same table on Wayland */
-    binding_add(cfg, "Super+Return", NEXWM_ACTION_SPAWN, 0, "x-terminal-emulator");
+    binding_add(cfg, "Super+Return", NEXWM_ACTION_SPAWN, 0, "hde-choose terminal");
     binding_add(cfg, "Super+E", NEXWM_ACTION_SPAWN, 0, "hde-files");
     binding_add(cfg, "Super+Q", NEXWM_ACTION_CLOSE, 0, NULL);
     binding_add(cfg, "Super+Shift+Q", NEXWM_ACTION_QUIT, 0, NULL);
