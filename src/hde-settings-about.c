@@ -3,6 +3,7 @@
  * build), this computer, and how much memory (RAM) the desktop uses right now, measured live (src/hde-sysinfo.c).
  * `hde-settings --about` prints the same as text; `hde-settings --about-window` is the small "About HDE" window of
  * the desktop menu. */
+#include "hde-distro.h"
 #include "hde-settings.h"
 #include "hde-sysinfo.h"
 #include "hde-randr.h"
@@ -525,11 +526,16 @@ GtkWidget *page_about_new(void)
     debug_geometry_watch(mem_card, "about-memory");
 
     gtk_box_pack_start(GTK_BOX(box), section("How much RAM is needed?"), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), info_label(
-        "HDE itself needs only what is shown above. For the whole system, Debian asks for at least 1 GB of RAM for a "
-        "desktop and recommends 2 GB (with swap; a live USB stick needs more, it runs from RAM). Applications come on "
-        "top: a web browser alone often takes several hundred MB to a few GB depending on the tabs, so 4 GB or more is "
-        "best for everyday browsing. Give a virtual machine at least 2 GB."), FALSE, FALSE, 0);
+    {
+        char *advice = hde_distro_ram_advice();
+        char *ram = g_strdup_printf(
+            "HDE itself needs only what is shown above. %s Applications come on top: a web browser alone often takes "
+            "several hundred MB to a few GB depending on the tabs, so 4 GB or more is best for everyday browsing. Give "
+            "a virtual machine at least 2 GB.", advice);
+        gtk_box_pack_start(GTK_BOX(box), info_label(ram), FALSE, FALSE, 0);
+        g_free(ram);
+        g_free(advice);
+    }
 
     gtk_box_pack_start(GTK_BOX(box), section("Credits"), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), info_label(CREDITS), FALSE, FALSE, 0);

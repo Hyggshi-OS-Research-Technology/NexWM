@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=NexWM
+Comment=HDE with NexWM, its own window manager: light frames, workspaces and key bindings of its own (X11)
+Exec=@PREFIX@/bin/hde-start --wm nexwm
+TryExec=@PREFIX@/bin/hde-session
+Type=Application
+DesktopNames=HDE

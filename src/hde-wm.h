@@ -40,8 +40,10 @@ static const HdeWm hde_wms[] = {
       "Classic, very lightweight window manager." },
     { "fluxbox", "fluxbox", "Fluxbox", hde_wm_args_none, 0, 0,
       "Lightweight window manager with window tabs." },
-    { "nexwm", "nexwm", "NexWM", hde_wm_args_none, 0, 0,
-      "Hyggshi's experimental window manager." },
+    { "nexwm", "nexwm", "NexWM", hde_wm_args_replace, 0, 1,
+      "HDE's own window manager, written in this repository (nexwm/): frames, workspaces, key bindings and a "
+      "configuration file of its own. It takes over from the running window manager with --replace, so it can be "
+      "chosen in Settings without logging out." },
 };
 #define HDE_N_WMS (sizeof hde_wms / sizeof hde_wms[0])
 

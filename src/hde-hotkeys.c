@@ -39,6 +39,7 @@
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#include "hde-distro.h"
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
@@ -491,7 +492,11 @@ static void media(const char *what)
         snprintf(cmd, sizeof cmd, "playerctl %s", what);
         spawn_sh(cmd);
     } else {
-        notify("Media keys", "Install playerctl to control music players (sudo apt install playerctl).");
+        char *hint = hde_install_hint("playerctl");
+        char msg[256];
+        snprintf(msg, sizeof msg, "Install playerctl to control music players (%s).", hint);
+        notify("Media keys", msg);
+        free(hint);
     }
 }
 

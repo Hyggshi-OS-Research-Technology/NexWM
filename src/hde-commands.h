@@ -80,12 +80,18 @@
     "elif command -v xdg-screensaver >/dev/null 2>&1 && xdg-screensaver lock >/dev/null 2>&1; then :; " \
     "else loginctl lock-session; fi"
 
+/* Terminal and files: hde-choose asks which program to use when more than one on this machine can do it, and
+ * remembers the answer (settings.ini: choice_terminal, choice_files). What follows the question is the way out for a
+ * machine without hde-choose: the first of the list that is installed. Hyggshi Files is HDE's own, so it is first
+ * there too (hde-choose offers it as "HDE's own"). */
 #define HDE_SH_TERMINAL \
-    "for t in x-terminal-emulator gnome-terminal xfce4-terminal mate-terminal tilix konsole lxterminal " \
+    "if command -v hde-choose >/dev/null 2>&1; then exec hde-choose terminal; fi; " \
+    "for t in hde-cmd x-terminal-emulator gnome-terminal xfce4-terminal mate-terminal tilix konsole lxterminal " \
     "qterminal terminator alacritty kitty xterm; do " \
     "if command -v \"$t\" >/dev/null 2>&1; then exec \"$t\"; fi; done; exit 127"
 
 #define HDE_SH_FILES \
+    "if command -v hde-choose >/dev/null 2>&1; then exec hde-choose files; fi; " \
     "for f in hde-files thunar pcmanfm nautilus nemo caja dolphin pcmanfm-qt; do " \
     "if command -v \"$f\" >/dev/null 2>&1; then exec \"$f\" \"$HOME\"; fi; done; exec xdg-open \"$HOME\""
 

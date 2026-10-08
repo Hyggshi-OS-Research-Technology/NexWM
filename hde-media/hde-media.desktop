@@ -1,0 +1,27 @@
+[Desktop Entry]
+Name=Hyggshi Media
+GenericName=Pictures, Music and Video
+Comment=Look at your pictures, play your music and your video
+Exec=@PREFIX@/bin/hde-media %U
+Icon=image-x-generic
+Terminal=false
+Type=Application
+Categories=GTK;Graphics;2DGraphics;Viewer;Photography;AudioVideo;Audio;Video;Player;
+Keywords=picture;photo;image;viewer;zoom;rotate;slideshow;wallpaper;music;audio;video;movie;player;playlist;mp3;mp4;flac;ogg;
+MimeType=image/png;image/jpeg;image/gif;image/bmp;image/webp;image/tiff;image/x-portable-pixmap;image/x-xpixmap;image/x-icns;image/x-bmp;image/avif;image/heic;image/heif;image/jxl;image/vnd.microsoft.icon;audio/mpeg;audio/ogg;audio/opus;audio/flac;audio/x-flac;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/x-vorbis+ogg;video/mp4;video/x-matroska;video/webm;video/ogg;video/quicktime;video/x-msvideo;video/mpeg;video/x-flv;video/3gpp;
+StartupNotify=true
+StartupWMClass=hde-media
+Actions=Slideshow;FullScreen;Play;
+
+[Desktop Action Slideshow]
+Name=Slideshow
+Exec=@PREFIX@/bin/hde-media -s %U
+
+[Desktop Action FullScreen]
+Name=Full Screen
+Exec=@PREFIX@/bin/hde-media -f %U
+
+[Desktop Action Play]
+Name=Play
+Comment=Play the music and the video of this folder (or of this file)
+Exec=@PREFIX@/bin/hde-media --play %U

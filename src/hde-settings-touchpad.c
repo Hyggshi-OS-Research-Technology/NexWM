@@ -16,6 +16,7 @@
  * touchpad" (settings.ini treat_as_touchpad, also a check box in Settings > Input > Devices), and the window also
  * opens at the first login on a virtual machine or a laptop where only a mouse was found.
  */
+#include "hde-distro.h"
 #include "hde-settings.h"
 #include "hde-input.h"
 #include "hde-theme.h"
@@ -618,13 +619,13 @@ void touchpad_setup_show(GtkWindow *parent)
     gtk_box_pack_start(GTK_BOX(left), note, FALSE, FALSE, 0);
     int found = devices_found(NULL, 0);
     if (found != FOUND_TOUCHPAD) {
+        char *xi_note = hde_input_supported() ? NULL : hde_xi_missing_note();
         GtkWidget *w = gtk_label_new(found == FOUND_MOUSE
             ? "HDE found no touchpad here, only a mouse. Inside a virtual machine, or with a touchpad in mouse mode, the "
               "touchpad arrives as a mouse: scroll the test page with it and HDE asks whether it is your touchpad."
-            : !hde_input_supported()
-            ? "HDE was built without libxi-dev, so the touchpad cannot be changed. Install it (sudo apt install "
-              "libxi-dev) and rebuild HDE."
+            : xi_note ? xi_note
             : "No touchpad or mouse found that HDE can change (libinput, synaptics or evdev X driver).");
+        free(xi_note);
         gtk_label_set_xalign(GTK_LABEL(w), 0);
         gtk_label_set_line_wrap(GTK_LABEL(w), TRUE);
         gtk_label_set_max_width_chars(GTK_LABEL(w), 50);

@@ -30,6 +30,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
           build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev \
+          libxcb1-dev \
           xvfb xdotool x11-utils x11-xserver-utils xinput dbus-x11 metacity openbox imagemagick \
           pulseaudio pulseaudio-utils libnotify-bin libglib2.0-bin adwaita-icon-theme python3 python3-dbusmock librsvg2-common \
           gsettings-desktop-schemas xserver-xephyr yaru-theme-gtk
@@ -37,7 +38,11 @@ jobs:
     - name: Build (all targets)
       run: |
         set -o pipefail
-        make -j"$(nproc)" 2>&1 | tee build.log
+        make -j"$(nproc)" 2>&1 | tee build.log || {
+          echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
+          grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
+          exit 1
+        }
 
     - name: Compiler warnings
       if: always()
@@ -52,6 +57,17 @@ jobs:
     - name: Try it in a window (scripts/test-nexde --check, a nested HDE session in Xephyr)
       if: always()
       run: xvfb-run -a -s "-screen 0 1440x900x24" sh scripts/test-nexde --check --keep-logs 1280x720
+
+    - name: NexWM, HDE's own window manager, in a real X server (frames, keys, workspaces, panel struts, --replace)
+      # A test that hangs is a failure, never a job that sits in the queue for hours: timeout ends it after the 15
+      # minutes, with a SIGKILL 10 seconds later if it will not go. The test's own leash
+      # (tests/nexwm-watchdog.sh) writes what it was doing into results.txt, and the step after this one publishes
+      # those lines, so the job ends with something to read instead of nothing at all.
+      run: timeout -k 10 900 make check-nexwm
+
+    - name: Report the NexWM results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-nexwm results "NexWM (the window manager of HDE)"
 
     - name: Report results
       if: always()
@@ -177,6 +193,75 @@ jobs:
           /tmp/hde-display/*.txt
           /tmp/hde-display/shot-*.png
 
+  # Hyggshi Media, the picture viewer (the first part of HDE's multimedia) driven for real in Xvfb: a folder of
+  # solid-coloured pictures of known sizes, the arrow keys, the zoom keys and the mouse wheel, the rotation, the
+  # slideshow running by itself, full screen, the pixels of the picture on the screen, and a second hde-media handing
+  # its picture to the window that is already open. See tests/media-test.sh
+  media:
+    name: Hyggshi Media (the pictures and the player)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libgtk-3-dev xvfb xdotool metacity dbus-x11 imagemagick \
+          adwaita-icon-theme librsvg2-common python3 procps
+        pkg-config --modversion gtk+-3.0 | sed 's/^/::notice::GTK3 /'
+
+    - name: Build (hde-media and its unit tests, not the other targets of the session)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" build/hde-media build/media-test build/player-test 2>&1 | tee build.log || {
+          echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
+          grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
+          exit 1
+        }
+
+    - name: Unit tests (the pictures, and the player — tags, playlists, playback)
+      run: |
+        build/media-test
+        build/player-test
+
+    - name: Picture viewer test (arrows, zoom, rotation, slideshow, full screen, one window, one process)
+      run: sh tests/media-test.sh
+
+    - name: Player window test (the list, the transport, mpv over its socket, the end of a track)
+      run: sh tests/player-window-test.sh
+
+    - name: Report results
+      if: always()
+      run: |
+        python3 tests/ci-annotate.py /tmp/hde-media results "Hyggshi Media test"
+        python3 tests/ci-annotate.py /tmp/hde-player results "Hyggshi Media player test"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python3 tests/ci-annotate.py /tmp/hde-media checkruns
+        python3 tests/ci-annotate.py /tmp/hde-player checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-media-viewer
+        path: |
+          /tmp/hde-media/*.log
+          /tmp/hde-media/*.txt
+          /tmp/hde-media/shot-*.png
+          /tmp/hde-player/*.log
+          /tmp/hde-player/*.txt
+          /tmp/hde-player/shot-*.png
+
   # The "HDE (Wayland)" session for real, on Debian 13 (Hyggshi OS's base): labwc with its headless backend and the pixman
   # renderer (no screen or GPU needed), started by hde-start --wayland; grim takes the screenshots, wtype types keys.
   wayland:
@@ -195,18 +280,29 @@ jobs:
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
           build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev \
-          libwayland-dev labwc xwayland grim wtype dbus zenity libnotify-bin libglib2.0-bin imagemagick \
+          libxcb1-dev \
+          libwayland-dev wayland-protocols libwlroots-0.18-dev labwc xwayland grim wtype dbus zenity libnotify-bin libglib2.0-bin imagemagick \
           adwaita-icon-theme librsvg2-common fonts-dejavu-core procps python3 ca-certificates
         labwc --version; pkg-config --modversion gtk-layer-shell-0 wayland-client
 
     - name: Build (with the Wayland taskbar)
       run: |
         set -o pipefail
-        make -j"$(nproc)" 2>&1 | tee build.log
+        make -j"$(nproc)" 2>&1 | tee build.log || {
+          echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
+          grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
+          exit 1
+        }
         grep -q "HAVE_WAYLAND_TASKBAR" build.log || { echo "::error::hde-panel was built without the Wayland taskbar"; exit 1; }
 
     - name: Wayland session test (labwc, layer shell, Start menu, Super key, taskbar, PrtSc with grim, logout)
       run: sh tests/wayland-test.sh
+
+    - name: NexWM Wayland compositor (wlroots headless backend)
+      run: |
+        pkg-config --modversion wlroots-0.18
+        make build/nexwm-wayland-probe
+        timeout -k 5 60 sh tests/nexwm-wayland-test.sh
 
     - name: Report results
       if: always()
@@ -258,13 +354,23 @@ jobs:
     - name: The installed session
       run: |
         set -e
-        cat /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop
-        for p in hde-start hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files; do
+        cat /usr/share/xsessions/hde.desktop /usr/share/xsessions/nexwm.desktop \
+            /usr/share/wayland-sessions/hde-wayland.desktop /usr/share/wayland-sessions/nexwm-wayland.desktop
+        for p in hde-start hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm; do
           test -x "/usr/bin/$p" || { echo "::error::/usr/bin/$p is missing"; exit 1; }
         done
+        # the NexWM entry is the HDE session with HDE's own window manager (not the old NexDE one, which no longer exists)
+        grep -q "^Exec=/usr/bin/hde-start --wm nexwm" /usr/share/xsessions/nexwm.desktop ||
+          { echo "::error::the NexWM session entry does not start hde-start --wm nexwm"; exit 1; }
+        # "NexWM (Wayland)" is that session on HDE's own compositor; hde-session starts labwc instead on the machines
+        # where this nexwm has no compositor yet, so the entry comes up everywhere (labwc keeps "HDE (Wayland)")
+        grep -q "^Exec=/usr/bin/hde-start --wm nexwm --wayland" /usr/share/wayland-sessions/nexwm-wayland.desktop ||
+          { echo "::error::the NexWM (Wayland) entry is not hde-start --wm nexwm --wayland"; exit 1; }
         if command -v gcc; then echo "::error::the build tools were not removed"; exit 1; fi
         /usr/bin/hde-settings --version
         /usr/bin/hde-files --version
+        /usr/bin/hde-cmd --version
+        /usr/bin/hde-choose --version
         grep -q "^inode/directory=hde-files.desktop" /usr/share/applications/hde-mimeapps.list
         /usr/bin/hde-settings --power
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb xauth x11-utils fonts-dejavu-core
@@ -278,9 +384,211 @@ jobs:
         cat /tmp/hde-session.log | head -n 40
         grep -q "window id" /tmp/hde-run.txt || { echo "::error::the installed HDE session did not start its panel"; exit 1; }
 
+  # Fedora — the other half of HDE's world (and of its package names): dnf's toolchain, Fedora's headers and library
+  # versions, Fedora's package names in every message HDE prints, Fedora's os-release in About, Qt's SDDM greeter,
+  # labwc on Fedora. tests/fedora-test.sh --full is a real session in Xvfb plus what is Fedora about it.
+  #
+  # The dependencies come from packaging/fedora/deps.sh, the same file packaging/fedora/README.md documents:
+  # Fedora renames packages between releases (wlroots, the split up xorg-x11-* tools), so the script picks what this
+  # Fedora has.
+  fedora:
+    name: Fedora (dnf, full desktop)
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install the dependencies (packaging/fedora/deps.sh)
+      run: |
+        cat /etc/fedora-release
+        sh packaging/fedora/deps.sh install build runtime-minimal runtime-full test wayland-session
+        rpm -q gtk3-devel libwnck3-devel gtk-layer-shell-devel | sed 's/^/::notice::Fedora package: /'
+
+    - name: Build (all targets)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log || {
+          echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
+          grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
+          exit 1
+        }
+        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm; do
+          test -x "build/$p" || { echo "::error::build/$p was not built"; exit 1; }
+        done
+        grep -q "HAVE_WAYLAND_TASKBAR" build.log || echo "::warning::hde-panel was built without the Wayland taskbar"
+
+    - name: Compiler warnings
+      if: always()
+      run: |
+        n=$(grep -c "warning:" build.log || true)
+        echo "compiler warnings (Fedora $(gcc -dumpfullversion)): $n"
+        grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::fedora: /' || true
+
+    - name: Fedora test (the Fedora package names, a session in Xvfb, SDDM, labwc)
+      run: |
+        set -o pipefail
+        sh tests/fedora-test.sh --full 2>&1 | tee -a build.log
+
+    - name: NexWM in a real X server (Fedora, with XCB, the frames, the keys and --replace with Metacity)
+      # ... bounded for the same reason as the same step in the build job above (a hung test is a failure to read)
+      run: timeout -k 10 900 make check-nexwm
+
+    - name: Report the NexWM results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-nexwm results "NexWM on Fedora"
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-fedora results "HDE on Fedora"
+
+    - name: Publish screenshots
+      if: always() && (contains(github.event.head_commit.message, '[shots]') || github.event_name == 'workflow_dispatch')
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python3 tests/ci-annotate.py /tmp/hde-fedora checkruns
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-fedora
+        path: |
+          /tmp/hde-fedora/*.txt
+          /tmp/hde-fedora/*.log
+          /tmp/hde-fedora/shot-*.png
+          /tmp/hde-fedora/sddm/**
+          build.log
+
+  # Base Fedora: a Fedora with *nothing* but what compiles HDE (packaging/fedora/deps.sh list build) and Xvfb — no
+  # window manager, no icon theme, no NetworkManager, no labwc. HDE must build, the unit tests must pass and the
+  # session must come up and degrade gracefully (say what is missing, with dnf hints, and keep running). This is what
+  # a user gets who installs HDE on a minimal Fedora server install, so it is a test of its own.
+  fedora-base:
+    name: Fedora base (minimal, no desktop packages)
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install ONLY the build dependencies (plus Xvfb for the test itself)
+      run: |
+        cat /etc/fedora-release
+        sh packaging/fedora/deps.sh install build
+        # Xvfb, dbus-daemon (the package that has dbus-run-session on Fedora: the test runs the session inside one), python3, procps-ng, rpm, a font:
+        # the test harness, not HDE. No window manager, no icons, no NetworkManager.
+        dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb dbus-daemon python3 procps-ng rpm dejavu-sans-fonts ||
+          dnf install -y --setopt=install_weak_deps=False xorg-x11-server-Xvfb dbus-daemon python3 procps-ng rpm
+        for p in metacity openbox xfwm4 NetworkManager labwc; do
+          if rpm -q "$p" >/dev/null 2>&1; then echo "::warning::$p is installed: this is not a base Fedora any more"; fi
+        done
+
+    - name: Build (all targets)
+      run: |
+        set -o pipefail
+        make -j"$(nproc)" 2>&1 | tee build.log || {
+          echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
+          grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
+          exit 1
+        }
+
+    - name: Unit tests (no X server needed)
+      run: |
+        set -o pipefail
+        make check-unit 2>&1 | tee -a build.log
+
+    - name: Unit test results on the summary (the failures; the log above has the rest)
+      if: always()
+      run: |
+        mkdir -p /tmp/hde-fedora-units
+        grep -E "^(PASS:|FAIL:|PASS |FAIL |== )" build.log > /tmp/hde-fedora-units/results.txt || true
+        python3 tests/ci-annotate.py /tmp/hde-fedora-units results "HDE unit tests on a base Fedora"
+
+    - name: Fedora base test (a session without any desktop package)
+      if: always()
+      run: sh tests/fedora-test.sh --base
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-fedora results "HDE on a base Fedora"
+
+    - name: Upload test output
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-fedora-base
+        path: |
+          /tmp/hde-fedora/*.txt
+          /tmp/hde-fedora/*.log
+          /tmp/hde-fedora/shot-*.png
+          build.log
+
   # HDE mostly runs on Debian-based systems (Hyggshi OS defaults to Debian 13): build with their compilers too.
   # Debian 13 has GCC 14 (implicit declarations and pointer/int mix-ups are errors); testing has the newest GCC,
   # which compiles C23 by default (bool/true/false are keywords, "f()" means "f(void)").
+  # The HDE login screen (login/sddm/): its own job, because a login screen fails in its own ways. The theme is
+  # checked on its own first (the files SDDM needs, metadata.desktop, the QML, theme.conf, the installer — no display
+  # needed), then installed the way a user installs it (sudo sh login/sddm/install.sh), and then rendered for real in
+  # SDDM's greeter in Xvfb: the test reads the greeter's log for QML errors and looks at the pixels of the screen (the
+  # dark background, the card, the accent line on it). Ubuntu's SDDM is the Qt 5 greeter; the Fedora job above renders
+  # the same theme in the Qt 6 greeter, so both greeters this theme claims to support are tested for real.
+  sddm-theme:
+    name: SDDM login theme (Qt 5 greeter)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install SDDM, its greeter, Xvfb and a screenshot tool
+      run: |
+        sudo apt-get update
+        DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
+          sddm xvfb imagemagick x11-utils python3
+        dpkg -l sddm | tail -n 1
+        command -v sddm-greeter-qt6 || command -v sddm-greeter || echo "::warning::no SDDM greeter binary found"
+
+    - name: The theme, its configuration and its installer (no display needed)
+      run: sh tests/sddm-test.sh --no-render
+
+    - name: Install it the way a user does, and check what lands where
+      run: |
+        sudo sh login/sddm/install.sh --dry-run
+        sudo sh login/sddm/install.sh --default-session
+        echo "--- /etc/sddm.conf.d/50-hde-theme.conf"
+        cat /etc/sddm.conf.d/50-hde-theme.conf
+        test -f /usr/share/sddm/themes/hde/Main.qml
+        test -f /usr/share/sddm/themes/hde/components/HdePassword.qml
+        test -f /usr/share/sddm/themes/hde/assets/background.png
+        grep -E "^(QtVersion|Theme-Id|Type)=" /usr/share/sddm/themes/hde/metadata.desktop
+        du -sh /usr/share/sddm/themes/hde
+
+    - name: Render the theme in SDDM's greeter (Xvfb)
+      run: sh tests/sddm-test.sh
+
+    - name: Report results
+      if: always()
+      run: python3 tests/ci-annotate.py /tmp/hde-sddm results "HDE login screen"
+
+    - name: Upload the pictures of the login screen
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: hde-sddm-login
+        path: |
+          /tmp/hde-sddm/*.txt
+          /tmp/hde-sddm/*.log
+          /tmp/hde-sddm/shot-*.png
+
   build-debian:
     name: build (${{ matrix.image }})
     runs-on: ubuntu-24.04
@@ -301,16 +609,26 @@ jobs:
       run: |
         apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev
+          build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev libgtk-layer-shell-dev \
+          libxcb1-dev libvte-2.91-dev
         gcc --version | head -n1
+        pkg-config --modversion xcb
 
     - name: Build (all targets)
       run: |
         set -o pipefail
-        make -j"$(nproc)" 2>&1 | tee build.log
-        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files; do
+        make -j"$(nproc)" 2>&1 | tee build.log || {
+          echo "--- the lines that say what went wrong (the whole log is at the end of the job and in build.log):"
+          grep -nE "error:|Error [0-9]|undefined reference|No rule to make|fatal error" build.log | tail -n 15 | sed 's/^/::error title=build::/'
+          exit 1
+        }
+        for p in hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm; do
           test -x "build/$p" || { echo "::error::build/$p was not built"; exit 1; }
         done
+        build/hde-cmd --version | tee /tmp/hde-cmd-version.txt
+        grep -q "optional VTE backend: yes" /tmp/hde-cmd-version.txt || {
+          echo "::error::hde-cmd did not detect the VTE package installed for the optional-backend build"; exit 1;
+        }
 
     - name: Compiler warnings
       if: always()

@@ -2,6 +2,8 @@
  * (power-profiles-daemon), the battery saver and the low-battery warnings (both run by the panel, src/hde-powersave.c),
  * the screen timeout, and automatic suspend (left to a power manager).
  */
+#include "hde-distro.h"
+#include <stdlib.h>
 #include "hde-settings.h"
 #include "hde-power.h"
 #include "hde-profiles.h"
@@ -115,8 +117,11 @@ static void on_profiles(const char *active, const char *const *list, gpointer d)
     if (!pw.mode_combo) return;
     if (!active) {
         gtk_widget_set_sensitive(pw.mode_combo, FALSE);
-        gtk_label_set_text(GTK_LABEL(pw.mode_desc), "Needs power-profiles-daemon, which this system does not run: "
-                           "sudo apt install power-profiles-daemon");
+        char *hint = hde_install_hint("power-profiles-daemon");
+        char *msg = g_strdup_printf("Needs power-profiles-daemon, which this system does not run: %s", hint);
+        gtk_label_set_text(GTK_LABEL(pw.mode_desc), msg);
+        g_free(msg);
+        free(hint);
         return;
     }
     pw.mode_guard = TRUE;
@@ -351,9 +356,11 @@ GtkWidget *page_power_new(void)
         sdesc = g_strdup_printf("Set in %s, which suspends the computer after a while without use (and handles the lid "
                                 "and the power button).", pm);
     } else {
-        sdesc = g_strdup("HDE does not suspend the computer by itself after a while without use: install a power manager "
-                         "for that, e.g. sudo apt install xfce4-power-manager. Closing the lid and the power button work "
-                         "without one (systemd-logind), and the Power menu suspends at any time.");
+        char *hint = hde_install_hint("xfce4-power-manager");
+        sdesc = g_strdup_printf("HDE does not suspend the computer by itself after a while without use: install a power "
+                                "manager for that, e.g. %s. Closing the lid and the power button work without one "
+                                "(systemd-logind), and the Power menu suspends at any time.", hint);
+        free(hint);
     }
     gtk_box_pack_start(GTK_BOX(box), row_box("Automatic suspend", sdesc, pm_btn), FALSE, FALSE, 0);
     g_free(sdesc);

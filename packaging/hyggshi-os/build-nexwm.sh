@@ -20,8 +20,9 @@
 #   KEEP_BUILD_DEPS=true    keep the compiler and the -dev packages (smaller ISOs remove them: the default)
 #
 # The session files come from `make install` (Type=Application with absolute Exec/TryExec paths, which LightDM, SDDM
-# and GDM all accept): /usr/share/xsessions/hde.desktop and /usr/share/wayland-sessions/hde-wayland.desktop. The
-# nexwm.desktop / start-nexde of the old script are removed: they start programs that no longer exist.
+# and GDM all accept): /usr/share/xsessions/hde.desktop, /usr/share/xsessions/nexwm.desktop (HDE with NexWM, HDE's own
+# window manager, built from this repository) and /usr/share/wayland-sessions/hde-wayland.desktop. A nexwm.desktop or a
+# start-nexde left over from the old NexDE script is removed: those start programs that no longer exist.
 set -e
 [ "${DEBUG_MODE:-}" = "true" ] && set -x
 export DEBIAN_FRONTEND=noninteractive
@@ -39,7 +40,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 command -v apt-get >/dev/null 2>&1 || die "apt-get not found: this script is for Debian-based systems"
 
 BUILD_DEPS="git ca-certificates build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev
-            libgtk-layer-shell-dev libwayland-dev"
+            libgtk-layer-shell-dev libwayland-dev wayland-protocols libxcb1-dev"
 # what HDE needs to start: a GTK window manager (title bars follow the theme and Dark mode), D-Bus, X tools used by the
 # session (xset: screen blanking, xsetroot: the pointer), icons and SVG support
 RUNTIME_MIN="metacity dbus dbus-x11 x11-xserver-utils adwaita-icon-theme librsvg2-common libglib2.0-bin"
@@ -94,7 +95,7 @@ fi
 
 say "make"
 make -C "$SRC" -j"$(nproc)" all
-PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files"
+PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm"
 for p in $PROGRAMS; do
     [ -x "$SRC/build/$p" ] || die "build/$p was not built (see the make output above)"
 done
@@ -104,15 +105,22 @@ make -C "$SRC" install PREFIX="$PREFIX"
 for p in $PROGRAMS hde-start; do
     [ -x "$PREFIX/bin/$p" ] || die "$PREFIX/bin/$p is missing after make install"
 done
-for f in /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop; do
+for f in /usr/share/xsessions/hde.desktop /usr/share/xsessions/nexwm.desktop \
+         /usr/share/wayland-sessions/hde-wayland.desktop; do
     [ -f "$f" ] || die "$f is missing after make install"
     grep -q "^Exec=$PREFIX/bin/hde-start" "$f" || die "$f does not start $PREFIX/bin/hde-start"
 done
+[ -f /usr/share/applications/hde-cmd.desktop ] || die "/usr/share/applications/hde-cmd.desktop is missing after make install"
+grep -q "^Exec=$PREFIX/bin/hde-cmd$" /usr/share/applications/hde-cmd.desktop || die "hde-cmd.desktop does not start $PREFIX/bin/hde-cmd"
 
-# the session of the old NexDE script: its programs no longer exist, the login screen would offer a broken session
-for f in /usr/share/xsessions/nexwm.desktop "$PREFIX/bin/start-nexde"; do
-    if [ -e "$f" ]; then echo "removing $f (old NexDE session)"; rm -f "$f"; fi
-done
+# what the old NexDE script left: its programs no longer exist, so the login screen would offer a broken session. The
+# nexwm.desktop that `make install` just wrote is not one of them (it starts hde-start and a window manager built from
+# this repository) and stays.
+if [ -e /usr/share/xsessions/nexwm.desktop ] && ! grep -q "^Exec=$PREFIX/bin/hde-start" /usr/share/xsessions/nexwm.desktop; then
+    echo "removing /usr/share/xsessions/nexwm.desktop (the old NexDE session)"
+    rm -f /usr/share/xsessions/nexwm.desktop
+fi
+if [ -e "$PREFIX/bin/start-nexde" ]; then echo "removing $PREFIX/bin/start-nexde (old NexDE)"; rm -f "$PREFIX/bin/start-nexde"; fi
 
 if [ "${HDE_DEFAULT_SESSION:-}" = "true" ]; then
     say "HDE as the default session"
@@ -153,10 +161,13 @@ fi
 [ -z "${NEXWM_LOCAL_SRC:-}" ] && rm -rf "$SRC_DIR"
 
 say "check"
-missing=$(for b in "$PREFIX"/bin/hde-*; do ldd "$b" 2>/dev/null | grep "not found" | sed "s|^|$b: |"; done)
+missing=$(for b in "$PREFIX"/bin/hde-* "$PREFIX"/bin/nexwm; do ldd "$b" 2>/dev/null | grep "not found" | sed "s|^|$b: |"; done)
 [ -z "$missing" ] || die "libraries missing after the build tools were removed:
 $missing"
 "$PREFIX/bin/hde-settings" --version
+"$PREFIX/bin/hde-cmd" --version
+"$PREFIX/bin/hde-choose" --version
 echo "OK: HDE is installed in $PREFIX/bin; sessions: /usr/share/xsessions/hde.desktop (HDE)," \
+     "/usr/share/xsessions/nexwm.desktop (HDE with NexWM, its own window manager)," \
      "/usr/share/wayland-sessions/hde-wayland.desktop (HDE (Wayland), with labwc)"
 say "build-nexwm.sh done"

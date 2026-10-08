@@ -7,6 +7,7 @@
  * - Other devices (Ethernet, VPN, ...) and a button that opens nm-connection-editor for advanced settings.
  * Every command runs asynchronously, so the UI never freezes while scanning.
  */
+#include "hde-distro.h"
 #include "hde-settings.h"
 #include <string.h>
 #include <stdlib.h>
@@ -780,9 +781,12 @@ GtkWidget *page_network_new(void)
     if (!have_program("nmcli")) {
         gtk_box_pack_start(GTK_BOX(page), section("Wi-Fi"), FALSE, FALSE, 0);
         GtkWidget *card = card_new();
-        gtk_container_add(GTK_CONTAINER(card), card_placeholder(
-            "NetworkManager (nmcli) is not installed, so Wi-Fi networks cannot be listed.\n"
-            "Install it with: sudo apt install network-manager"));
+        char *hint = hde_install_hint("network-manager");
+        char *msg = g_strdup_printf("NetworkManager (nmcli) is not installed, so Wi-Fi networks cannot be listed.\n"
+                                    "Install it with: %s", hint);
+        gtk_container_add(GTK_CONTAINER(card), card_placeholder(msg));
+        g_free(msg);
+        free(hint);
         gtk_box_pack_start(GTK_BOX(page), card, FALSE, FALSE, 0);
         return page;
     }
