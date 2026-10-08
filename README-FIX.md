@@ -700,3 +700,54 @@ to the trash with its `.trashinfo`, the Trash view and Restore, `Alt+Left`, the 
 folder, Properties of a folder with its size, `Ctrl+F` finding files in subfolders, a double click into a folder and
 `Backspace`, tabs, `ShowItems` over D-Bus, `hde-files --select`, Dark mode, `--quit`, no GTK criticals, and a double
 click on a folder of the desktop opening Hyggshi Files.
+
+## HDE's own lock screen, on both sessions (fix 18)
+
+`Super+L` used to hand the session over to somebody else's locker (swaylock, gtklock, i3lock, slock, …) and, on a
+machine without one, to `loginctl lock-session`. HDE now locks its sessions itself: `hde-lock` (sources
+`src/hde-lock.c`, `src/hde-lock-core.c` for the clock, the date, the name and the password field, and
+`protocols/ext-session-lock-v1.xml` for the Wayland side) is the first thing `HDE_SH_LOCK` runs on both of HDE's
+sessions. The other lockers stay where hde-lock cannot lock at all — a build without PAM, a compositor without the
+session lock protocol — and `hde-lock --check` says which of the two this session is (exit 0 = hde-lock can lock it).
+
+### Added
+
+- **The X11 session: a window of its own.** The lock screen is an override-redirect window over the whole screen that
+  no window manager can move, decorate, draw over or take the keyboard from, with the keyboard and the mouse grabbed
+  and the pointer invisible; `TERM`, `INT`, `HUP`, `QUIT` and `USR1` do not unlock it, and `_HDE_LOCKED` on the root
+  window tells the rest of HDE (and the tests) that the screen is locked. The keyboard is what the lock screen insists
+  on — without it the keys would go to whatever window has the focus — while a program that holds the *pointer* for a
+  moment (a menu, a flyout, the window manager in the middle of a drag) only gets the mouse retried while the screen
+  is locked, instead of the lock failing. A click is received by the lock screen itself (`INFO: a click on the lock
+  screen: it went to the lock screen, not to the session behind it`), and the password is checked through PAM.
+- **The Wayland session: the compositor's session lock.** `ext-session-lock-v1` (labwc offers it): the compositor
+  itself stops showing and feeding input to every other program, one `wl_shm` buffer per output, the clock, the date
+  and the name drawn on it. A lock client that is killed from outside does *not* give the session back — only the
+  password does; that is what the protocol is for.
+- **`hde-lock` also takes the way out**: `--check` (0 = this session can be locked, 3 = it cannot, with the reason in
+  one line), `--version` (which backends this build got), `--x11` / `--wayland` to pick the session by hand — without
+  them it is `WAYLAND_DISPLAY` first, then `DISPLAY`. The password means `/etc/pam.d/hde-lock` when that file exists
+  and `login` otherwise, so a system can say there what locking means, and the file that ships the program does not
+  have to.
+
+### Fixed
+
+- **A cursor needs a real pixmap, not `None`.** The invisible pointer was made with
+  `xcb_create_cursor(conn, cursor, XCB_NONE, XCB_NONE, …)`. The X protocol's `CreateCursor` is
+  `source: PIXMAP, mask: PIXMAP or None`: only the *mask* may be `None`, so the X server refused the request
+  (`BadPixmap`), the cursor never existed, and everything built on it went with it — the lock window was refused
+  (`BadCursor`) and the pointer grab as well, which made the lock screen look like "another program is holding the
+  keyboard" and left the screen unlocked. The cursor is now made from a 1×1 depth-1 pixmap with every bit clear (a
+  cursor the screen shines through), and a refusal says what it was: the reason of a grab that did not work and the
+  name of the X error (`BadAccess`, `BadCursor`, …) are in the log.
+
+### Tests
+
+`make check` (the screens job) locks the session through `HDE_SH_LOCK` — the same thing `Super+L` and the Power menu's
+Lock button do — and checks the lock screen's own background on the screen, that the click goes to the lock screen,
+that `TERM` does not unlock it, that a password PAM turns down is refused and only `Enter` is checked, and that the
+password unlocks it: 15 assertions, `hde-lock --check` before them. The assertions of the locked state only run
+while the screen is really locked (an unlocked desktop used to pass some of them by itself). The Wayland job does the
+same on the compositor's session lock (`ext-session-lock-v1`) and checks that the compositor shows nothing but the
+lock screen, that `pam_deny` keeps it locked and that the password unlocks it. Fedora checks that `pam-devel`,
+`libxcb-devel`, `wayland-devel` and `libxkbcommon-devel` really built all three backends of `hde-lock` there.

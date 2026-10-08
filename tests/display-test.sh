@@ -525,49 +525,62 @@ else
     : > "$LOCKLOG"
     # the same thing Super+L and the Lock button of the Power menu do: HDE_SH_LOCK, which runs hde-lock first
     PATH="$B:$PATH" "$B/hde-hotkeys" --action lock > "$LOCKLOG" 2>&1
-    if wait_prop _HDE_LOCKED 1 100; then pass "the lock key of HDE locks the session (hde-lock, not somebody else's locker)"
-    else fail "the lock key of HDE locks the session (hde-lock, not somebody else's locker)"; fi
-    check "... the log says what it did" grep -q "the X11 session is locked" "$LOCKLOG"
-    check "... and hde-lock is the program that is running" pgrep -x hde-lock
-    sleep 1
-    shot 13-locked
-    after=$(pixel "$OUT/shot-13-locked.png" 5 5)
-    if [ "$after" = "22 26 33" ]; then pass "the whole screen is the lock screen (its own background 0x161a21 at the top left corner)"
-    else fail "the whole screen is the lock screen (top left corner is '$after', not '22 26 33')"; fi
-    if [ "$after" != "$before" ]; then pass "... where the desktop was ($before -> $after)"
-    else fail "... where the desktop was ($before -> $after)"; fi
-    colours=$(command -v convert >/dev/null 2>&1 && convert "$OUT/shot-13-locked.png" -format "%k" info: 2>/dev/null)
-    if [ "${colours:-0}" -gt 8 ] 2>/dev/null; then pass "the clock, the date and the user's name are drawn on it ($colours colours)"
-    else fail "the clock, the date and the user's name are drawn on it (${colours:-?} colours)"; fi
-    kill -TERM "$(pgrep -x hde-lock | head -n 1)" 2>/dev/null
-    sleep 1
-    if [ "$(root_prop _HDE_LOCKED)" = "1" ]; then pass "TERM does not unlock it: only the password does"
-    else fail "TERM does not unlock it: only the password does"; fi
+    locked=0
+    if wait_prop _HDE_LOCKED 1 100; then
+        locked=1
+        pass "the lock key of HDE locks the session (hde-lock, not somebody else's locker)"
+    else
+        why=$(grep -m1 -E "hde-lock: (FAIL|WARN)" "$LOCKLOG" 2>/dev/null)
+        fail "the lock key of HDE locks the session (hde-lock, not somebody else's locker): ${why:-nothing in $LOCKLOG}"
+    fi
+    # the rest is only worth checking while the screen is really locked: an unlocked desktop passes half of it by
+    # itself (a wallpaper has more than 8 colours, nothing checks a password nobody typed, no hde-lock is running)
+    if [ "$locked" = 1 ]; then
+        check "... the log says what it did" grep -q "the X11 session is locked" "$LOCKLOG"
+        check "... and hde-lock is the program that is running" pgrep -x hde-lock
+        sleep 1
+        shot 13-locked
+        after=$(pixel "$OUT/shot-13-locked.png" 5 5)
+        if [ "$after" = "22 26 33" ]; then pass "the whole screen is the lock screen (its own background 0x161a21 at the top left corner)"
+        else fail "the whole screen is the lock screen (top left corner is '$after', not '22 26 33')"; fi
+        if [ "$after" != "$before" ]; then pass "... where the desktop was ($before -> $after)"
+        else fail "... where the desktop was ($before -> $after)"; fi
+        colours=$(command -v convert >/dev/null 2>&1 && convert "$OUT/shot-13-locked.png" -format "%k" info: 2>/dev/null)
+        if [ "${colours:-0}" -gt 8 ] 2>/dev/null; then pass "the clock, the date and the user's name are drawn on it ($colours colours)"
+        else fail "the clock, the date and the user's name are drawn on it (${colours:-?} colours)"; fi
+        xdotool mousemove 640 400 click 1     # a click belongs to the lock screen, not to the session under it
+        if locklog "a click on the lock screen" 30; then pass "the mouse cannot click the session under it (the click arrived at the lock screen)"
+        else fail "the mouse cannot click the session under it (the click arrived at the lock screen)"; fi
+        kill -TERM "$(pgrep -x hde-lock | head -n 1)" 2>/dev/null
+        sleep 1
+        if [ "$(root_prop _HDE_LOCKED)" = "1" ]; then pass "TERM does not unlock it: only the password does"
+        else fail "TERM does not unlock it: only the password does"; fi
 
-    locker pam_deny.so
-    xdotool type --delay 20 "not the password"; xdotool key Return
-    if locklog "the password was not accepted" 50 && [ "$(root_prop _HDE_LOCKED)" = "1" ]; then
-        pass "a password PAM turns down is not accepted, and the screen stays locked"
-    else fail "a password PAM turns down is not accepted, and the screen stays locked"; fi
-    n0=$(lockcount "the password was not accepted")
-    xdotool type --delay 20 "still wrong"
-    sleep 1
-    if [ "$(lockcount "the password was not accepted")" -gt "$n0" ]; then
-        fail "typing alone does not check the password (only Enter does)"
-    else pass "typing alone does not check the password (only Enter does)"; fi
-    shot 13-wrong-password
+        locker pam_deny.so
+        xdotool type --delay 20 "not the password"; xdotool key Return
+        if locklog "the password was not accepted" 50 && [ "$(root_prop _HDE_LOCKED)" = "1" ]; then
+            pass "a password PAM turns down is not accepted, and the screen stays locked"
+        else fail "a password PAM turns down is not accepted, and the screen stays locked"; fi
+        n0=$(lockcount "the password was not accepted")
+        xdotool type --delay 20 "still wrong"
+        sleep 1
+        if [ "$(lockcount "the password was not accepted")" -gt "$n0" ]; then
+            fail "typing alone does not check the password (only Enter does)"
+        else pass "typing alone does not check the password (only Enter does)"; fi
+        shot 13-wrong-password
 
-    locker pam_permit.so
-    xdotool type --delay 20 "the password"; xdotool key Return
-    if wait_prop _HDE_LOCKED 0 100; then pass "the password unlocks it: the session comes back"
-    else fail "the password unlocks it: the session comes back"; fi
-    check "... the log says so" grep -q "the X11 session is unlocked" "$LOCKLOG"
-    check "... and hde-lock is done" sh -c '! pgrep -x hde-lock >/dev/null'
-    sleep 1
-    shot 13-unlocked
-    after2=$(pixel "$OUT/shot-13-unlocked.png" 5 5)
-    if [ "$after2" = "$before" ]; then pass "... and the screen is the desktop again ($after2)"
-    else fail "... and the screen is the desktop again ('$after2', was '$before')"; fi
+        locker pam_permit.so
+        xdotool type --delay 20 "the password"; xdotool key Return
+        if wait_prop _HDE_LOCKED 0 100; then pass "the password unlocks it: the session comes back"
+        else fail "the password unlocks it: the session comes back"; fi
+        check "... the log says so" grep -q "the X11 session is unlocked" "$LOCKLOG"
+        check "... and hde-lock is done" sh -c '! pgrep -x hde-lock >/dev/null'
+        sleep 1
+        shot 13-unlocked
+        after2=$(pixel "$OUT/shot-13-unlocked.png" 5 5)
+        if [ "$after2" = "$before" ]; then pass "... and the screen is the desktop again ($after2)"
+        else fail "... and the screen is the desktop again ('$after2', was '$before')"; fi
+    fi
     sed 's/^/INFO:   /' "$LOCKLOG" | tail -n 8 | tee -a "$OUT/results.txt"
     lock_cleanup
 fi

@@ -288,6 +288,7 @@ struct x11_lock {
     uint32_t *keysyms;                  /* the keyboard map, as the X server has it */
     int min_keycode, max_keycode, per_keycode;
     bool shift, caps;
+    bool click_seen;                    /* the first click that landed on the lock screen instead of the session */
     struct lockui ui;
 };
 
@@ -405,6 +406,55 @@ static void x11_key(struct x11_lock *x, uint32_t ks, bool *unlock)
     }
 }
 
+/* Why the X server said no to a grab: the words the log needs to be read without the header of xproto.h. */
+static const char *grab_status_why(uint8_t status)
+{
+    switch (status) {
+    case XCB_GRAB_STATUS_SUCCESS: return "it was taken";
+    case XCB_GRAB_STATUS_ALREADY_GRABBED: return "another client is holding it";
+    case XCB_GRAB_STATUS_FROZEN: return "another client is holding it, frozen";
+    case XCB_GRAB_STATUS_NOT_VIEWABLE: return "the lock window is not on screen";
+    case XCB_GRAB_STATUS_INVALID_TIME: return "the time it was asked with was not valid";
+    default: return "the X server refused it";
+    }
+}
+
+/* The X errors a lock screen runs into, by name (the numbers alone say little in a log). */
+static const char *x11_error_name(uint8_t code)
+{
+    switch (code) {
+    case XCB_REQUEST: return "BadRequest";
+    case XCB_VALUE: return "BadValue";
+    case XCB_WINDOW: return "BadWindow";
+    case XCB_PIXMAP: return "BadPixmap";
+    case XCB_ATOM: return "BadAtom";
+    case XCB_CURSOR: return "BadCursor";
+    case XCB_FONT: return "BadFont";
+    case XCB_MATCH: return "BadMatch";
+    case XCB_DRAWABLE: return "BadDrawable";
+    case XCB_ACCESS: return "BadAccess";
+    case XCB_ALLOC: return "BadAlloc";
+    case XCB_COLORMAP: return "BadColor";
+    case XCB_G_CONTEXT: return "BadGC";
+    case XCB_ID_CHOICE: return "BadIDChoice";
+    case XCB_NAME: return "BadName";
+    case XCB_LENGTH: return "BadLength";
+    case XCB_IMPLEMENTATION: return "BadImplementation";
+    default: return "an X error";
+    }
+}
+
+/* One line on a grab that did not work: the status the X server answered with, or the error it raised instead. */
+static void why_of_grab(char *out, size_t n, bool answered, uint8_t status, xcb_generic_error_t *err)
+{
+    if (err)
+        snprintf(out, n, "%s (X error %d)", x11_error_name(err->error_code), err->error_code);
+    else if (answered)
+        snprintf(out, n, "%s", grab_status_why(status));
+    else
+        snprintf(out, n, "no answer from the X server");
+}
+
 static int x11_lock_run(struct lockui *ui)
 {
     struct x11_lock x;
@@ -430,14 +480,36 @@ static int x11_lock_run(struct lockui *ui)
     x.min_keycode = xcb_get_setup(x.conn)->min_keycode;
     x.max_keycode = xcb_get_setup(x.conn)->max_keycode;
 
-    /* An invisible pointer: while the screen is locked nothing on it should follow the mouse. */
+    /* An invisible pointer: while the screen is locked nothing on it should follow the mouse. Both the source
+     * and the mask of a cursor are pixmaps (only the mask may be None), so a 1x1 pixmap is drawn for it with
+     * every bit clear: a cursor the screen shines through. */
+    xcb_pixmap_t empty = xcb_generate_id(x.conn);
+    xcb_gcontext_t fill = xcb_generate_id(x.conn);
     xcb_cursor_t blank = xcb_generate_id(x.conn);
-    xcb_create_cursor(x.conn, blank, XCB_NONE, XCB_NONE, 0, 0, 0, 0, 0, 0, 0, 0);
+    uint32_t zero = 0;
+    xcb_create_pixmap(x.conn, 1, empty, x.screen->root, 1, 1);
+    xcb_create_gc(x.conn, fill, empty, XCB_GC_FOREGROUND, &zero);
+    xcb_rectangle_t dot = { 0, 0, 1, 1 };
+    xcb_poly_fill_rectangle(x.conn, empty, fill, 1, &dot);
+    xcb_free_gc(x.conn, fill);
+    xcb_generic_error_t *cur_err =
+        xcb_request_check(x.conn, xcb_create_cursor_checked(x.conn, blank, empty, empty, 0, 0, 0, 0, 0, 0, 0, 0));
+    xcb_free_pixmap(x.conn, empty);
+    if (cur_err) {
+        /* Without the cursor the lock window cannot be created either (the X server refuses that too): say so
+         * here instead of looking, later on, like another program holding the keyboard. */
+        logline("FAIL", "the X server refused the invisible cursor (%s, X error %d): not locking the screen",
+                x11_error_name(cur_err->error_code), cur_err->error_code);
+        free(cur_err);
+        xcb_disconnect(x.conn);
+        return 3;
+    }
 
     uint32_t values[4];
     values[0] = x.screen->black_pixel;
     values[1] = 1;                                     /* override-redirect: no window manager touches this window */
-    values[2] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_KEY_RELEASE;
+    values[2] = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_KEY_RELEASE |
+                XCB_EVENT_MASK_BUTTON_PRESS;   /* a click is received here, so that it says so in the log */
                 /* MappingNotify needs no mask: the X server always sends it to every client */
     values[3] = blank;
     x.win = xcb_generate_id(x.conn);
@@ -455,33 +527,50 @@ static int x11_lock_run(struct lockui *ui)
     xcb_create_gc(x.conn, x.gc, x.win, 0, NULL);
     xcb_flush(x.conn);
 
-    /* The keyboard and the mouse, kept by this window until the password is right. A window manager (or a menu) may
-     * hold a grab for a moment while the lock is going up: try again for a few seconds instead of failing. */
-    bool grabbed = false;
-    for (int i = 0; i < 50 && !grabbed; i++) {
-        xcb_grab_keyboard_reply_t *k =
-            xcb_grab_keyboard_reply(x.conn, xcb_grab_keyboard(x.conn, 1, x.screen->root, XCB_CURRENT_TIME,
-                                                              XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC), NULL);
-        xcb_grab_pointer_reply_t *p =
-            xcb_grab_pointer_reply(x.conn, xcb_grab_pointer(x.conn, 1, x.screen->root, 0, XCB_GRAB_MODE_ASYNC,
-                                                            XCB_GRAB_MODE_ASYNC, XCB_NONE, blank, XCB_CURRENT_TIME),
-                                   NULL);
-        grabbed = k && p && k->status == XCB_GRAB_STATUS_SUCCESS && p->status == XCB_GRAB_STATUS_SUCCESS;
-        free(k);
-        free(p);
-        if (!grabbed) {
-            xcb_ungrab_keyboard(x.conn, XCB_CURRENT_TIME);
-            xcb_ungrab_pointer(x.conn, XCB_CURRENT_TIME);
-            usleep(100 * 1000);
+    /* The keyboard and the mouse, kept by this window until the password is right. The keyboard is the one that
+     * matters: without it the keys would go to whatever window has the focus. As long as this lock window is up
+     * nothing on the screen can be clicked, so a program that holds the pointer for a moment (a menu, a flyout,
+     * the window manager in the middle of a drag) must not stop the lock: the mouse is tried again below while
+     * the screen is locked. Either grab may be refused for a moment while the lock is going up: try for a few
+     * seconds, and say what said no if it stays refused. */
+    bool key_held = false, ptr_held = false;
+    char key_why[64] = "no answer from the X server", ptr_why[64] = "no answer from the X server";
+    for (int i = 0; i < 80 && !key_held; i++) {
+        if (!key_held) {
+            xcb_generic_error_t *err = NULL;
+            xcb_grab_keyboard_reply_t *k =
+                xcb_grab_keyboard_reply(x.conn, xcb_grab_keyboard(x.conn, 1, x.screen->root, XCB_CURRENT_TIME,
+                                                                  XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC), &err);
+            key_held = k && k->status == XCB_GRAB_STATUS_SUCCESS;
+            why_of_grab(key_why, sizeof key_why, k != NULL, k ? k->status : 0, err);
+            free(err);
+            free(k);
         }
+        if (!ptr_held) {
+            xcb_generic_error_t *err = NULL;
+            xcb_grab_pointer_reply_t *p =
+                xcb_grab_pointer_reply(x.conn,
+                                       xcb_grab_pointer(x.conn, 1, x.screen->root, XCB_EVENT_MASK_BUTTON_PRESS,
+                                                        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, blank,
+                                                        XCB_CURRENT_TIME),
+                                       &err);
+            ptr_held = p && p->status == XCB_GRAB_STATUS_SUCCESS;
+            why_of_grab(ptr_why, sizeof ptr_why, p != NULL, p ? p->status : 0, err);
+            free(err);
+            free(p);
+        }
+        if (key_held) break;
+        usleep(100 * 1000);
     }
-    if (!grabbed) {
-        logline("FAIL", "the keyboard could not be held (another program has it): not locking the screen");
+    if (!key_held) {
+        logline("FAIL", "the keyboard could not be held (%s): not locking the screen", key_why);
         xcb_destroy_window(x.conn, x.win);
         xcb_flush(x.conn);
         xcb_disconnect(x.conn);
         return 4;
     }
+    if (!ptr_held)
+        logline("WARN", "the mouse could not be held (%s): the lock screen keeps trying for it", ptr_why);
 
     x.pixels = calloc((size_t)x.w * (size_t)x.h, 4);
     if (!x.pixels) {
@@ -497,13 +586,26 @@ static int x11_lock_run(struct lockui *ui)
     /* Other HDE programs (and the tests) can see that the screen is locked. */
     x11_property(x.conn, x.screen->root, "_HDE_LOCKED", "CARDINAL", 1);
     xcb_flush(x.conn);
-    logline("INFO", "the X11 session is locked: %dx%d, the keyboard and the mouse are held ('%s')", x.w, x.h, x.ui.user);
+    logline("INFO", "the X11 session is locked: %dx%d, %s ('%s')", x.w, x.h,
+            ptr_held ? "the keyboard and the mouse are held" : "the keyboard is held", x.ui.user);
 
     int fd = xcb_get_file_descriptor(x.conn);
     bool unlock = false;
     while (!unlock) {
         struct pollfd pfd = { fd, POLLIN, 0 };
         if (poll(&pfd, 1, 500) < 0 && errno != EINTR) break;
+        if (!ptr_held) {   /* the program that had the mouse may have let go of it by now */
+            xcb_grab_pointer_reply_t *p =
+                xcb_grab_pointer_reply(x.conn,
+                                       xcb_grab_pointer(x.conn, 1, x.screen->root, XCB_EVENT_MASK_BUTTON_PRESS,
+                                                        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, blank,
+                                                        XCB_CURRENT_TIME),
+                                       NULL);
+            ptr_held = p && p->status == XCB_GRAB_STATUS_SUCCESS;
+            free(p);
+            if (ptr_held)
+                logline("INFO", "the mouse is held now: the pointer is hidden and cannot click anything");
+        }
         xcb_generic_event_t *ev;
         while ((ev = xcb_poll_for_event(x.conn))) {
             uint8_t type = ev->response_type & 0x7f;
@@ -516,6 +618,9 @@ static int x11_lock_run(struct lockui *ui)
             } else if (type == XCB_KEY_RELEASE) {
                 uint32_t ks = x11_keysym(&x, ((xcb_key_release_event_t *)ev)->detail);
                 if (ks == KS_Shift_L || ks == KS_Shift_R) x.shift = false;
+            } else if (type == XCB_BUTTON_PRESS && !x.click_seen) {
+                x.click_seen = true;
+                logline("INFO", "a click on the lock screen: it went to the lock screen, not to the session behind it");
             }
             free(ev);
         }
