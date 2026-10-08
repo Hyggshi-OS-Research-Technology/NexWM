@@ -34,6 +34,7 @@ libXcomposite-devel
 libXcursor-devel
 gtk-layer-shell-devel
 wayland-devel
+wayland-protocols-devel
 libxkbcommon-devel
 libxkbcommon-x11-devel
 libinput-devel

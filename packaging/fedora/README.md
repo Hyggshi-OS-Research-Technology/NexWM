@@ -36,6 +36,7 @@ The names in the README of this repository are Debian's. On Fedora they are:
 | `libgtk-3-dev`               | `gtk3-devel`                            |
 | `libwnck-3-dev`              | `libwnck3-devel`                        |
 | `libgtk-layer-shell-dev`     | `gtk-layer-shell-devel` + `wayland-devel` |
+| `wayland-protocols`          | `wayland-protocols-devel`                |
 | `libxi-dev`                  | `libXi-devel`                           |
 | `libxrandr-dev`              | `libXrandr-devel`                       |
 | `libxfixes-dev`              | `libXfixes-devel`                       |

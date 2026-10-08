@@ -148,8 +148,10 @@ sh tests/nexwm-wayland-test.sh    # compositor globals, --session and clean shut
 
 Build dependencies: `libxcb1-dev` (Debian/Ubuntu), `libxcb-devel` (Fedora/openSUSE), and wlroots 0.17+ development
 files for the Wayland side (`libwlroots-0.18-dev` on Debian trixie, `libwlroots-0.19-dev` on Debian sid, `libwlroots-dev`
-on Ubuntu/older Debian, or `wlroots-devel` on Fedora). The optional Wayland smoke test also needs `wayland-client` development files and
-a wlroots build with the headless backend and pixman renderer. The X11 shell test needs `xvfb xdotool x11-utils` (and
+on Ubuntu/older Debian, or `wlroots-devel` on Fedora). wlroots consumers must generate its XDG-shell protocol header with
+`wayland-scanner` from `wayland-protocols` (`wayland-protocols-devel` on Fedora); the Makefile does this when wlroots is
+available. The optional Wayland smoke test also needs `wayland-client` development files and a wlroots build with the
+headless backend and pixman renderer. The X11 shell test needs `xvfb xdotool x11-utils` (and
 `metacity` for its `--replace` part).
 
 XCB and wlroots are **optional at build time**. `nexwm --version` and `nexwm --help` report each backend as *yes* or

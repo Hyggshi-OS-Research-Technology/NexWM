@@ -40,7 +40,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 command -v apt-get >/dev/null 2>&1 || die "apt-get not found: this script is for Debian-based systems"
 
 BUILD_DEPS="git ca-certificates build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev
-            libgtk-layer-shell-dev libwayland-dev libxcb1-dev"
+            libgtk-layer-shell-dev libwayland-dev wayland-protocols libxcb1-dev"
 # what HDE needs to start: a GTK window manager (title bars follow the theme and Dark mode), D-Bus, X tools used by the
 # session (xset: screen blanking, xsetroot: the pointer), icons and SVG support
 RUNTIME_MIN="metacity dbus dbus-x11 x11-xserver-utils adwaita-icon-theme librsvg2-common libglib2.0-bin"
