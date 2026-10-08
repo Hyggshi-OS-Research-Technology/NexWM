@@ -793,3 +793,7 @@ offscreen, no display, no SDDM, no root) loads `Main.qml` with a greeter made in
 situations end to end — one user (tiles, keyboard in the password field), an empty user list and no user model at all
 (the name field appears, the keyboard goes into it, typing a name reaches `sddm.login()`): 27 checks, run by
 `sh tests/sddm-test.sh` and installed in the SDDM job of the CI. `pyside6-qmllint` on every QML file: no errors.
+
+The greeter runs on a pty in the test (`tests/ptylog.py`): SDDM's greeter only writes the theme's own output to stderr
+when it is on a terminal and sends it to journald otherwise (Fedora's SDDM, in a CI container without a journal: the
+log the test reads stays empty), which is what the Fedora job caught.

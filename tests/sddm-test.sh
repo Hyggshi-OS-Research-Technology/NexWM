@@ -7,7 +7,9 @@
 #      even SDDM's component module: the same theme has to run in the Qt 5 and the Qt 6 greeter).
 #   2. the install script: --dry-run says what it would do, a real install into a throw-away root puts the theme in
 #      usr/share/sddm/themes/hde and writes etc/sddm.conf.d/50-hde-theme.conf, --uninstall takes both away again.
-#   3. the login screen for real: SDDM's greeter renders the theme in an X server, and the test looks at the log (no
+#   3. the login screen for real: SDDM's greeter renders the theme in an X server (on a pty, tests/ptylog.py, so that
+#      the greeter writes the theme's output to stderr: without a terminal it sends it to journald, or to a log file of
+#      its own, and the log this test reads stays empty), and the test looks at the log (no
 #      QML error, and what the theme says it was given: the users, where the keyboard is) and at the screen (the card
 #      is there, with the accent colour on it). Then the same render with the greeter handing over no user at all
 #      ([Users] MinimumUid in /etc/sddm.conf.d hides every account), where the login screen has to offer a field to
@@ -322,8 +324,11 @@ else
             # SDDM 0.20 and newer: --test; older: --test-mode
             GOPID=""; GFLAG=""
             for flag in --test --test-mode; do
+                # tests/ptylog.py: on a terminal, and only there, SDDM's greeter writes the theme's own output to
+                # stderr. With its stderr redirected to a file it sends it to journald instead (Fedora's SDDM; in the
+                # CI container there is no journal and the log stays empty), so the greeter runs on a pty here.
                 QT_QUICK_BACKEND="${QT_QUICK_BACKEND:-software}" QT_LOGGING_RULES="*.debug=true" \
-                    "$GREETER" "$flag" --theme "$THEME" > "$OUT/greeter.log" 2>&1 &
+                    python3 "$HERE/ptylog.py" "$OUT/greeter.log" "$GREETER" "$flag" --theme "$THEME" &
                 gpid=$!
                 sleep 4
                 if kill -0 "$gpid" 2>/dev/null; then GOPID=$gpid; GFLAG=$flag; break; fi
@@ -431,7 +436,7 @@ else
                 if $SUDO sh -c "mkdir -p /etc/sddm.conf.d && cp '$OUT/sddm-no-users.conf' '$NOCONF'" 2>/dev/null; then
                     info "the user list is emptied for one greeter ($NOCONF: [Users] MinimumUid=60000)"
                     QT_QUICK_BACKEND="${QT_QUICK_BACKEND:-software}" QT_LOGGING_RULES="*.debug=true" \
-                        "$GREETER" "$GFLAG" --theme "$THEME" > "$OUT/greeter-no-users.log" 2>&1 &
+                        python3 "$HERE/ptylog.py" "$OUT/greeter-no-users.log" "$GREETER" "$GFLAG" --theme "$THEME" &
                     npid=$!
                     sleep 4
                     if kill -0 "$npid" 2>/dev/null; then
