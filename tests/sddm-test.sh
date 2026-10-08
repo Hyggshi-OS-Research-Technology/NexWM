@@ -361,12 +361,17 @@ else
                 # ... and the theme says in the greeter's log what the greeter gave it and where the keyboard is. This
                 # is how a login screen that shows a field to type a user name in (instead of the avatars) is told
                 # apart from one that simply lost its list, and how "typing does nothing" can be seen from the log.
-                listed=$(grep -o "hde-login: the greeter listed [0-9]* user(s)" "$OUT/greeter.log" 2>/dev/null | tail -n1)
-                if [ -n "$listed" ]; then pass "the theme says how many users the greeter gave it ($listed)"
-                else fail "the theme does not say what the greeter gave it: no 'hde-login: the greeter listed ...' in the greeter's log"; fi
+                # how many users the greeter handed over, or that it handed over none at all: on a machine with no
+                # user account for it to list (the Fedora CI container has root only, and root is below SDDM's
+                # [Users] MinimumUid) the theme offers a field to type a user name in, which is the case this test is
+                # about — the check is that the theme says which of the two it was, not that there are users
+                listed=$(grep -o "hde-login: the greeter listed [0-9][0-9]* user(s)" "$OUT/greeter.log" 2>/dev/null | tail -n1)
+                [ -n "$listed" ] || listed=$(grep -o "hde-login: the greeter listed no users" "$OUT/greeter.log" 2>/dev/null | tail -n1)
+                if [ -n "$listed" ]; then pass "the theme says what the greeter gave it ($listed)"
+                else fail "the theme does not say what the greeter gave it: no 'hde-login: the greeter listed ...' in the greeter's log ($(grep -c . "$OUT/greeter.log" 2>/dev/null | tr -d ' ') log lines, $(grep -c 'hde-login' "$OUT/greeter.log" 2>/dev/null | tr -d ' ') of them with hde-login)"; fi
                 where=$(grep -o "the keyboard goes into the [a-z ]*field" "$OUT/greeter.log" 2>/dev/null | tail -n1)
                 if [ -n "$where" ]; then pass "the theme puts the keyboard in a field of the card ($where)"
-                else fail "the theme never puts the keyboard in a field: typing on the login screen would do nothing"; fi
+                else fail "the theme never puts the keyboard in a field: typing on the login screen would do nothing ($(grep -c . "$OUT/greeter.log" 2>/dev/null | tr -d ' ') log lines, $(grep -c 'hde-lock\|hde-login' "$OUT/greeter.log" 2>/dev/null | tr -d ' ') about the login screen)"; fi
                 if reported=$(grep -o "the keyboard is in the [a-z ]*field" "$OUT/greeter.log" 2>/dev/null | tail -n1); then
                     pass "and it really is there ($reported)"
                 else
