@@ -436,7 +436,7 @@ About / Display.
   search as **layer-shell surfaces** (gtk-layer-shell), a **Wayland taskbar** (wlr-foreign-toplevel-management:
   click, middle-click to close, right-click Minimize / Maximize / Close; Show Desktop), the panel controlled over
   D-Bus, the keys as labwc key bindings that run `hde-hotkeys --action ...` (Super, Ctrl+Esc, F1–F3, F6–F8, media
-  keys, PrtSc through `grim` / `slurp`, Super+L with `swaylock`, ...). Changing a setting rewrites labwc's
+  keys, PrtSc through `grim` / `slurp`, Super+L with HDE's own `hde-lock`, ...). Changing a setting rewrites labwc's
   configuration and labwc reloads it; logging out stops labwc. Without `libgtk-layer-shell-dev` HDE builds for X11 only.
 
 ### Tests

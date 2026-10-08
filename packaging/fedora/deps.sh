@@ -77,7 +77,6 @@ xorg-x11-server-Xwayland
 labwc
 grim
 slurp
-swaylock|gtklock
 sddm
 "
 

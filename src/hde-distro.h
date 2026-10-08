@@ -194,6 +194,7 @@ static inline const char *hde_distro_pkg(const char *pkg)
         { "libcairo2-dev",           "cairo-devel",             "cairo",                "cairo-devel" },
         { "libvte-2.91-dev",         "vte291-devel",            "vte3",                 "vte-devel" },
         { "libwlroots-dev",          "wlroots-devel",           "wlroots",              "wlroots-devel" },
+        { "libxcb1-dev",             "libxcb-devel",            "libxcb",               "libxcb-devel" },
         { "libpam0g-dev",            "pam-devel",               "pam",                  "pam-devel" },
         { "qtbase5-dev",             "qt5-qtbase-devel",        "qt5-base",             "qt5-base-devel" },
         { "qtdeclarative5-dev",      "qt5-qtdeclarative-devel", "qt5-declarative",      "qt5-declarative-devel" },
@@ -259,10 +260,10 @@ static inline char *hde_deps_hint(const char *what)
 {
     static const char *const build_deb[] = { "build-essential", "pkg-config", "libgtk-3-dev", "libwnck-3-dev",
                                              "libxi-dev", "libxrandr-dev", "libx11-dev", "libgtk-layer-shell-dev",
-                                             "libwayland-dev", NULL };
+                                             "libwayland-dev", "libxcb1-dev", "libpam0g-dev", NULL };
     static const char *const runtime_deb[] = { "metacity", "network-manager", "bluez", "pulseaudio-utils",
                                                "policykit-1-gnome", "gnome-themes-extra", "libnotify-bin", "playerctl",
-                                               "labwc", "grim", "slurp", "swaylock", NULL };
+                                               "labwc", "grim", "slurp", NULL };
     static const char *const test_deb[] = { "xvfb", "xdotool", "dbus-x11", "python3", "imagemagick", "xsltproc", NULL };
     const char *const *list = NULL;
     if (!strcmp(what, "build")) list = build_deb;
