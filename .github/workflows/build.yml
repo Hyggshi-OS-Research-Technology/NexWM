@@ -59,10 +59,10 @@ jobs:
       run: xvfb-run -a -s "-screen 0 1440x900x24" sh scripts/test-nexde --check --keep-logs 1280x720
 
     - name: NexWM, HDE's own window manager, in a real X server (frames, keys, workspaces, panel struts, --replace)
-      # A test that hangs is a failure, never a job that sits in the queue for hours: timeout runs the whole step in a
-      # process group of its own and takes that group down (SIGKILL after 10 more seconds) when it goes over the 15
-      # minutes. The test's own watchdog writes what it was doing into results.txt, and the step after this one
-      # publishes those lines, so the job ends with something to read instead of nothing at all.
+      # A test that hangs is a failure, never a job that sits in the queue for hours: timeout ends it after the 15
+      # minutes, with a SIGKILL 10 seconds later if it will not go. The test's own leash
+      # (tests/nexwm-watchdog.sh) writes what it was doing into results.txt, and the step after this one publishes
+      # those lines, so the job ends with something to read instead of nothing at all.
       run: timeout -k 10 900 make check-nexwm
 
     - name: Report the NexWM results

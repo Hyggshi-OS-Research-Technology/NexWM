@@ -56,9 +56,11 @@ static void test_defaults(void)
           b && b->command ? b->command : "nothing");
     CHECK(b && b->keysym == 0xff0d && b->mods == NEXWM_MOD_SUPER, "and it is Super and the Return key");
     b = binding(&cfg, "Super+Q");
-    CHECK(b && b->action == NEXWM_ACTION_CLOSE, "Super+Q closes the focused window");
+    CHECK(b && b->action == NEXWM_ACTION_CLOSE && b->keysym == 0x71 && b->mods == NEXWM_MOD_SUPER,
+          "Super+Q closes with the unshifted q key (letter case is not an implicit modifier)");
     b = binding(&cfg, "Super+Shift+Q");
-    CHECK(b && b->action == NEXWM_ACTION_QUIT, "Super+Shift+Q leaves");
+    CHECK(b && b->action == NEXWM_ACTION_QUIT && b->keysym == 0x71 &&
+          b->mods == (NEXWM_MOD_SUPER | NEXWM_MOD_SHIFT), "Super+Shift+Q leaves using the explicit Shift modifier");
     b = binding(&cfg, "Super+1");
     CHECK(b && b->action == NEXWM_ACTION_WORKSPACE && b->arg == 0, "Super+1 goes to the first workspace");
     b = binding(&cfg, "Super+Shift+4");
@@ -70,7 +72,8 @@ static void test_defaults(void)
     b = binding(&cfg, "Super+Down");
     CHECK(b && b->action == NEXWM_ACTION_UNMAXIMIZE, "Super+Down comes back");
     b = binding(&cfg, "Super+F");
-    CHECK(b && b->action == NEXWM_ACTION_FULLSCREEN, "Super+F is full screen");
+    CHECK(b && b->action == NEXWM_ACTION_FULLSCREEN && b->keysym == 0x66 && b->mods == NEXWM_MOD_SUPER,
+          "Super+F is full screen on the unshifted f key");
     CHECK(binding(&cfg, "Super+Tab") && binding(&cfg, "Super+Tab")->action == NEXWM_ACTION_NEXT,
           "Super+Tab is the next window");
     CHECK(binding(&cfg, "Super+Shift+Tab") && binding(&cfg, "Super+Shift+Tab")->action == NEXWM_ACTION_PREV,
@@ -179,6 +182,22 @@ static void test_parse(void)
         CHECK(cfg.desktops == 4 && cfg.n_keys > 20, "a file with one line keeps the rest of the defaults");
     else
         CHECK(0, "a one-line file is read (%s)", err);
+    nexwm_config_free(&cfg);
+
+    /* Capitalization is for readability: a later spelling of the same chord replaces the default, not shadows it. */
+    nexwm_config_defaults(&cfg);
+    size_t n_defaults = cfg.n_keys;
+    if (parse(&cfg, "key super+q kill\n", err, sizeof err) == 0) {
+        CHECK(cfg.n_keys == n_defaults, "Super+q replaces Super+Q instead of adding a duplicate binding");
+        b = binding(&cfg, "super+q");
+        CHECK(b && b->action == NEXWM_ACTION_KILL && b->keysym == 0x71 && b->mods == NEXWM_MOD_SUPER,
+              "the replacement uses the base q key without Shift");
+        b = binding(&cfg, "Super+Shift+Q");
+        CHECK(b && b->action == NEXWM_ACTION_QUIT && b->mods == (NEXWM_MOD_SUPER | NEXWM_MOD_SHIFT),
+              "an explicit Shift binding remains distinct");
+    } else {
+        CHECK(0, "a lower-case spelling of the same binding is valid (%s)", err);
+    }
     nexwm_config_free(&cfg);
 }
 

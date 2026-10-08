@@ -195,14 +195,22 @@ static HdeNexwmBinding *binding_new(HdeNexwmConfig *cfg)
     return b;
 }
 
-/* what a binding is: the combination written down the way the backends need it. The argument keeps the workspace
- * 0-based (the way both backends count desktops), the file gives it 1-based. */
+/* What a binding is: the combination written down the way the backends need it. A letter's case is ignored here;
+ * Shift comes from the modifier list, not from a capital in the key name. The argument keeps the workspace 0-based
+ * (the way both backends count desktops), while the file gives it 1-based. */
+static unsigned binding_keysym(const char *key)
+{
+    unsigned keysym = nexwm_keysym_of(key);
+    if (keysym >= 'A' && keysym <= 'Z') keysym += (unsigned)('a' - 'A');
+    return keysym;
+}
+
 static int binding_fill(HdeNexwmBinding *b, const char *combo, HdeNexwmAction action, int arg, const char *command)
 {
     unsigned mods = 0;
     const char *key = NULL;
     if (combo_parse(combo, &mods, &key) != 0 || !key || !*key) return -1;
-    unsigned keysym = nexwm_keysym_of(key);
+    unsigned keysym = binding_keysym(key);
     if (!keysym) return -1;
 
     free(b->command);
@@ -217,13 +225,18 @@ static int binding_fill(HdeNexwmBinding *b, const char *combo, HdeNexwmAction ac
     return 0;
 }
 
-/* Add a binding — or replace the one that has the same combination: the later line is the one that counts, so a
- * configuration file that says `key Super+Q kill` really changes what Super+Q does instead of leaving two answers for
- * one key press. */
+/* Add a binding — or replace one with the same effective chord. Letter case and modifier order do not make a new
+ * key: a later `key super+q kill` really changes the default `Super+Q` instead of leaving two answers for one press. */
 static int binding_add(HdeNexwmConfig *cfg, const char *combo, HdeNexwmAction action, int arg, const char *command)
 {
+    unsigned mods = 0;
+    const char *key = NULL;
+    if (combo_parse(combo, &mods, &key) != 0 || !key || !*key) return -1;
+    unsigned keysym = binding_keysym(key);
+    if (!keysym) return -1;
     for (size_t i = 0; i < cfg->n_keys; i++)
-        if (!strcmp(cfg->keys[i].combo, combo)) return binding_fill(&cfg->keys[i], combo, action, arg, command);
+        if (cfg->keys[i].mods == mods && cfg->keys[i].keysym == keysym)
+            return binding_fill(&cfg->keys[i], combo, action, arg, command);
 
     HdeNexwmBinding *b = binding_new(cfg);
     if (!b) return -1;

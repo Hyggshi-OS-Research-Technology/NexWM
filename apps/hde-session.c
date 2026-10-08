@@ -49,6 +49,7 @@ static volatile sig_atomic_t g_stop = 0;
 static volatile sig_atomic_t g_restart = 0;     /* SIGUSR1: restart desktop + panel */
 static volatile sig_atomic_t g_switch_wm = 0;   /* SIGUSR2: switch WM according to settings.ini */
 static char g_bindir[4096];
+static char g_wm_arg[64];                       /* --wm NAME: the window manager this session was started with */
 static int g_wayland;                           /* --wayland-inner: running inside the labwc compositor */
 static char g_labwc_dir[4096];
 
@@ -401,7 +402,6 @@ static const HdeWm *wm_cands[HDE_N_WMS + 1];
 static int wm_ncands, wm_idx;
 static HdeWm wm_custom;                 /* HDE_WM / wm= names a program that is not in the table */
 static char wm_custom_name[256];
-static char g_wm_arg[64];               /* --wm NAME: the window manager this session was started with */
 static pid_t g_wm = -1, g_wm_old = -1;
 static const HdeWm *wm_cur;
 static time_t wm_started, wm_old_deadline, wm_restart_at, wm_fail_window;

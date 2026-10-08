@@ -52,7 +52,7 @@ typedef struct {
     char    combo[64];        /* "Super+Shift+1", as written (for the log) */
     unsigned mods;            /* NEXWM_MOD_* */
     char     key[24];         /* the key name, as written: "Return", "q", "1", "F5" */
-    unsigned keysym;          /* what the name means (0 = unknown, the line is an error) */
+    unsigned keysym;          /* base key (ASCII letters are case-insensitive; Shift is a modifier); 0 = unknown */
     HdeNexwmAction action;
     int      arg;             /* workspace (0-based), snap edge, ... */
     char    *command;         /* SPAWN: the command line, malloc'ed */

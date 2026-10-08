@@ -60,8 +60,9 @@ The actions of a `key` line:
 | `snap left/right/up/down` | half of the work area on that side |
 | `quit` | leaves the window manager (the session then sees a clean exit and does not restart it) |
 
-A key may be named the X11 way: `a` … `z`, `0` … `9`, the punctuation on the keyboard (`key Super++ spawn …` for the
-`+` key), `Return`, `Tab`, `BackSpace`, `Escape`, `space`, `Insert`, `Delete`, `Home`, `End`, `Page_Up`, `Page_Down`,
+A key may be named the X11 way: `a` … `z` (letter case is ignored; write `Shift` explicitly when it is part of the
+shortcut), `0` … `9`, the punctuation on the keyboard (`key Super++ spawn …` for the `+` key), `Return`, `Tab`,
+`BackSpace`, `Escape`, `space`, `Insert`, `Delete`, `Home`, `End`, `Page_Up`, `Page_Down`,
 `Left`, `Right`, `Up`, `Down`, `F1` … `F12`, and the multimedia keys (`XF86AudioMute`, `XF86AudioRaiseVolume`,
 `XF86AudioLowerVolume`, `XF86AudioPlay`, `XF86AudioNext`, `XF86AudioPrev`, `XF86AudioStop`, `XF86MonBrightnessUp/Down`,
 `XF86Display`, `XF86Sleep`, `Print`, `Menu`). A key name nobody knows is refused by name, with the line number.

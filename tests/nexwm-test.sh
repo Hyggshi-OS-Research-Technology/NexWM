@@ -435,10 +435,10 @@ EOF
                 at "the place before the maximize (the snapped one)" "$ALPHA" "0 0 512 768"
                 hasnt "and the maximized state is gone" "_NET_WM_STATE_MAXIMIZED_VERT" "$(wval "$ALPHA" _NET_WM_STATE)"
 
-                pressed "Super+F makes it full screen" "super+F" "full screen 0x${ALPHA#0x}"
+                pressed "Super+F makes it full screen" "super+f" "full screen 0x${ALPHA#0x}"
                 at "the whole screen" "$ALPHA" "0 0 1024 768"
                 has "and _NET_WM_STATE says full screen" "_NET_WM_STATE_FULLSCREEN" "$(wval "$ALPHA" _NET_WM_STATE)"
-                pressed "Super+F again takes it back" "super+F" "back from full screen"
+                pressed "Super+F again takes it back" "super+f" "back from full screen"
                 at "the place it had before" "$ALPHA" "0 0 512 768"
                 hasnt "and the full screen state is gone" "_NET_WM_STATE_FULLSCREEN" "$(wval "$ALPHA" _NET_WM_STATE)"
 
@@ -527,7 +527,7 @@ EOF
                         "cannot run '/not/there/nothing': not there"
 
                 # ---- close: WM_DELETE_WINDOW, not a kill ---------------------------------------------------
-                pressed "Super+Q asks the focused window to close" "super+Q" "asked 0x${ALPHA#0x} 'nexwm-alpha' to close"
+                pressed "Super+Q asks the focused window to close" "super+q" "asked 0x${ALPHA#0x} 'nexwm-alpha' to close"
                 if wait_log_in "$OUT/alpha.out" "the window manager asked me to close" 20; then
                     pass "the window itself was asked to close (it says so), it was not killed"
                 else

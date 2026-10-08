@@ -954,7 +954,7 @@ static void keys_grab(Nexwm *w)
         for (int k = 0; k < 248 && !code; k++) {
             for (int s = 0; s < per; s++) {
                 if (syms[k * per + s] != bind->keysym) continue;
-                /* the same key with Shift is another keysym (a and A): both spellings are grabbed */
+                /* bindings store letters as their base keysym; Shift is matched separately in bind->x11_mods */
                 code = (xcb_keycode_t)(8 + k);
                 break;
             }
