@@ -195,7 +195,7 @@ $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD
 # engine.c). What has nothing to do with a window is built and run without a display by `make check-unit`;
 # tests/media-test.sh drives the picture window for real.
 $(BUILD)/hde-media: $(MEDIA_SRC) hde-media/src/media.h hde-media/src/viewer.h hde-media/src/player.h hde-media/src/playlist.h \
-                    hde-media/src/engine.h src/hde-theme.h $(VERSION_H) | $(BUILD)
+                    hde-media/src/engine.h hde-media/src/mpris.h src/hde-theme.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-media/src -Isrc -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \

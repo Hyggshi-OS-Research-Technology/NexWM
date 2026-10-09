@@ -212,7 +212,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
           build-essential pkg-config libgtk-3-dev xvfb xdotool metacity dbus-x11 imagemagick \
-          adwaita-icon-theme librsvg2-common python3 procps
+          adwaita-icon-theme librsvg2-common python3 procps playerctl
         pkg-config --modversion gtk+-3.0 | sed 's/^/::notice::GTK3 /'
 
     - name: Build (hde-media and its unit tests, not the other targets of the session)

@@ -11,7 +11,7 @@ GTK_LIBS := $(shell pkg-config --libs gtk+-3.0)
 # hde-theme.c: Light / Dark and the accent colour of HDE's Settings
 SRC = $(wildcard src/*.c) ../src/hde-theme.c
 
-hde-media: $(SRC) src/media.h src/viewer.h src/player.h src/playlist.h src/engine.h ../src/hde-theme.h
+hde-media: $(SRC) src/media.h src/viewer.h src/player.h src/playlist.h src/engine.h src/mpris.h ../src/hde-theme.h
 	$(CC) $(CFLAGS) -Isrc -I../src $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 
 # The menu entry and the default viewer for pictures in HDE sessions. hde-mimeapps.list (the list of HDE's default

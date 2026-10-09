@@ -15,8 +15,8 @@
 # next to it: that they are found and named in the log, that "v" hides and shows them again over mpv's socket, and that
 # a video with nothing next to it says so.
 #
-# Needs: Xvfb, xdotool, Metacity, python3 (tests/fake-mpv.py), dbus-run-session.
-#   sudo apt install xvfb xdotool metacity python3 dbus-x11
+# Needs: Xvfb, xdotool, Metacity, python3 (tests/fake-mpv.py), dbus-run-session, playerctl.
+#   sudo apt install xvfb xdotool metacity python3 dbus-x11 playerctl
 #   make && sh tests/player-window-test.sh
 # Output: $HDE_TEST_OUT (default /tmp/hde-player): results.txt, player.log, engine.log, shot-*.png
 set -u
@@ -42,7 +42,7 @@ if [ -z "${HDE_PLAYER_INNER:-}" ]; then
     mkdir -p "$MUSIC/sub" "$MUSIC2" "$FILMS" "$HOME_DIR/.config/hde" "$OUT/run" "$OUT/empty" "$FAKEBIN"
     chmod 700 "$OUT/run"
     : > "$OUT/results.txt"
-    for t in Xvfb xdotool metacity dbus-run-session python3; do
+    for t in Xvfb xdotool metacity dbus-run-session python3 playerctl; do
         command -v $t >/dev/null 2>&1 || { echo "FAIL: missing $t" | tee -a "$OUT/results.txt"; exit 2; }
     done
     # The songs: the stand-in for mpv plays nothing, so the bytes do not matter — the names do, and the extension,
@@ -191,6 +191,35 @@ if wait_new "$m0" "mpv is listening" 5; then pass "the window connects to mpv's 
 else fail "the window connects to mpv's socket"; fi
 if grep -q '"get_property","duration"' "$ENGINE_LOG"; then pass "it asks mpv how long the track is (the tags have nothing here)"
 else fail "it asks mpv for the duration"; fi
+
+# ---------- MPRIS: playerctl and desktop media controls ----------
+if playerctl --list-all 2>/dev/null | grep -Fxq "hde-media"; then
+    pass "the player is listed on MPRIS as hde-media"
+else fail "the player is listed on MPRIS as hde-media"; fi
+status=$(playerctl --player=hde-media status 2>/dev/null)
+[ "$status" = "Playing" ] && pass "MPRIS reports the active track as Playing" \
+    || fail "MPRIS reports Playing (got '${status:-nothing}')"
+title=$(playerctl --player=hde-media metadata xesam:title 2>/dev/null)
+case "$title" in *song1.mp3*) pass "MPRIS publishes the current track title ($title)" ;;
+*) fail "MPRIS publishes song1.mp3 as the title (got '${title:-nothing}')" ;; esac
+m=$(mark)
+if playerctl --player=hde-media pause >/dev/null 2>&1 && wait_new "$m" "paused" 5 && grep -q '"pause",true' "$ENGINE_LOG"; then
+    pass "playerctl pause reaches mpv over MPRIS"
+else fail "playerctl pause reaches mpv over MPRIS"; fi
+status=$(playerctl --player=hde-media status 2>/dev/null)
+[ "$status" = "Paused" ] && pass "MPRIS reports the paused state" || fail "MPRIS reports Paused (got '${status:-nothing}')"
+m=$(mark)
+if playerctl --player=hde-media play >/dev/null 2>&1 && wait_new "$m" "playing on" 5; then
+    pass "playerctl play resumes the track over MPRIS"
+else fail "playerctl play resumes the track over MPRIS"; fi
+m=$(mark)
+if playerctl --player=hde-media next >/dev/null 2>&1 && wait_new "$m" "playing 2/3: song2.mp3" 5; then
+    pass "playerctl next changes the current track"
+else fail "playerctl next changes the current track"; fi
+m=$(mark)
+if playerctl --player=hde-media previous >/dev/null 2>&1 && wait_new "$m" "playing 1/3: song1.mp3" 5; then
+    pass "playerctl previous changes back to the first track"
+else fail "playerctl previous changes back to the first track"; fi
 
 # ---------- 2. the transport ----------
 m1=$(mark); player_key Right
