@@ -26,6 +26,7 @@
 
 #include "nexwm.h"
 #include "frame.h"
+#include "notify.h"
 
 #ifdef NEXWM_HAVE_XCB
 #include <xcb/xcb.h>
@@ -33,6 +34,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -43,6 +45,9 @@
 #include <unistd.h>
 
 #ifdef NEXWM_HAVE_XCB
+
+#define NEXWM_PING_INTERVAL_MS 2000u
+#define NEXWM_PING_TIMEOUT_MS  5000u
 
 /* ---------------------------------------------------------------- saying what happens */
 
@@ -71,6 +76,9 @@ typedef struct {
     int mapped;                   /* the frame is mapped (a window on another workspace is not) */
     int hidden;                   /* minimized by us */
     int maximized, fullscreen;
+    int ping_pending, unresponsive;
+    uint64_t ping_sent_ms, ping_last_sent_ms;
+    uint32_t ping_timestamp;
     int above, below;             /* _NET_WM_STATE_ABOVE / _NET_WM_STATE_BELOW (the panel's "Always on top") */
     int min_w, min_h;             /* WM_NORMAL_HINTS: how small a program lets its window get (0: no limit) */
     uint32_t *icon;               /* the _NET_WM_ICON picture of the program (the pixels of the one that was picked) */
@@ -289,6 +297,54 @@ static int window_supports(Nexwm *w, xcb_window_t win, HdeNexwmAtom protocol)
     return found;
 }
 
+static uint64_t monotonic_ms(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+static void client_ping_start(NexwmClient *c, uint64_t now)
+{
+    xcb_client_message_event_t event;
+    memset(&event, 0, sizeof event);
+    event.response_type = XCB_CLIENT_MESSAGE;
+    event.window = c->id;
+    event.type = wm.atoms[NEXWM_ATOM_WM_PROTOCOLS];
+    event.format = 32;
+    c->ping_timestamp = XCB_CURRENT_TIME;
+    event.data.data32[0] = wm.atoms[NEXWM_ATOM_NET_WM_PING];
+    event.data.data32[1] = c->ping_timestamp;
+    event.data.data32[2] = c->id;
+    c->ping_pending = 1;
+    c->ping_sent_ms = now;
+    c->ping_last_sent_ms = now;
+    xcb_send_event(wm.conn, 0, c->id, XCB_EVENT_MASK_NO_EVENT, (const char *)&event);
+    xcb_flush(wm.conn);
+}
+
+static void clients_check_responsive(void)
+{
+    uint64_t now = monotonic_ms();
+    for (size_t i = 0; i < wm.n; i++) {
+        NexwmClient *c = wm.clients[i];
+        if (!c->mapped || c->dock) continue;
+        if (c->ping_pending) {
+            if (!c->unresponsive && now >= c->ping_sent_ms &&
+                now - c->ping_sent_ms >= NEXWM_PING_TIMEOUT_MS) {
+                c->unresponsive = 1;
+                wm_log("warning: 0x%x '%s' is not responding to WM_PROTOCOLS _NET_WM_PING",
+                       (unsigned)c->id, c->title);
+                nexwm_notify_app_unresponsive(c->title);
+            }
+            continue;
+        }
+        if (now < c->ping_last_sent_ms || now - c->ping_last_sent_ms < NEXWM_PING_INTERVAL_MS) continue;
+        c->ping_last_sent_ms = now;
+        if (window_supports(&wm, c->id, NEXWM_ATOM_NET_WM_PING)) client_ping_start(c, now);
+    }
+}
+
 /* ---------------------------------------------------------------- the clients */
 
 static NexwmClient *client_of_window(xcb_window_t win)
@@ -465,6 +521,7 @@ static void ewmh_update_supported(Nexwm *w)
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_ALLOWED_ACTIONS];
     list[n++] = w->atoms[NEXWM_ATOM_NET_FRAME_EXTENTS];
     list[n++] = w->atoms[NEXWM_ATOM_NET_WM_MOVERESIZE];
+    list[n++] = w->atoms[NEXWM_ATOM_NET_WM_PING];
     prop_set_atoms(w, w->root, w->atoms[NEXWM_ATOM_NET_SUPPORTED], list, n);
 }
 
@@ -931,6 +988,8 @@ static void client_mapped_set(NexwmClient *c, int want)
         c->mapped = 1;
     } else {
         c->mapped = 0;                             /* before the requests: the UnmapNotify they cause is ours */
+        c->ping_pending = 0;
+        c->unresponsive = 0;
         xcb_unmap_window(wm.conn, c->id);
         xcb_unmap_window(wm.conn, c->frame);
     }
@@ -2104,6 +2163,22 @@ static void handle_property_notify(xcb_property_notify_event_t *ev)
 
 static void handle_client_message(xcb_client_message_event_t *ev)
 {
+    if (ev->type == wm.atoms[NEXWM_ATOM_WM_PROTOCOLS] &&
+        ev->data.data32[0] == wm.atoms[NEXWM_ATOM_NET_WM_PING]) {
+        xcb_window_t id = (xcb_window_t)ev->data.data32[2];
+        NexwmClient *pinged = client_of_window(id);
+        if (pinged && pinged->id == id && pinged->ping_pending &&
+            pinged->ping_timestamp == ev->data.data32[1] &&
+            (ev->window == id || ev->window == wm.root)) {
+            pinged->ping_pending = 0;
+            pinged->ping_last_sent_ms = monotonic_ms();
+            if (pinged->unresponsive) {
+                pinged->unresponsive = 0;
+                wm_log("0x%x '%s' is responding again", (unsigned)id, pinged->title);
+            }
+        }
+        return;
+    }
     NexwmClient *c = client_of_window(ev->window);
     if (ev->type == wm.atoms[NEXWM_ATOM_NET_CURRENT_DESKTOP]) {
         action_workspace((int)ev->data.data32[0]);
@@ -2497,6 +2572,7 @@ int nexwm_x11_run(const char *config_path, int replace)
             wm_log("asked to leave (a signal)");
             break;
         }
+        clients_check_responsive();
         if (had) xcb_flush(wm.conn);
         else {
             struct pollfd pfd = { fd, POLLIN, 0 };

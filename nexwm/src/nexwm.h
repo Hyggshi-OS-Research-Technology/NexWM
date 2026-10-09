@@ -109,6 +109,8 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
 int nexwm_config_load(HdeNexwmConfig *cfg, const char *path, char *err, size_t err_n);
 /* ~/.config/hde/nexwm.conf — or $HDE_NEXWM_CONF, which is what the tests use. malloc'ed. */
 char *nexwm_config_path(void);
+/* Wayland's HDE media-key fallback, or NULL: unmodified F4 runs play/pause while settings.ini fkeys_sound is on. */
+const char *nexwm_hde_media_command(unsigned keysym, unsigned mods);
 
 const char *nexwm_action_name(HdeNexwmAction a);      /* "spawn", "close", "workspace", ... */
 const char *nexwm_mods_name(unsigned mods);           /* "Super+Shift" (a static buffer) */
@@ -146,6 +148,7 @@ typedef enum {
     NEXWM_ATOM_NET_CLOSE_WINDOW,
     NEXWM_ATOM_NET_WM_MOVERESIZE,
     NEXWM_ATOM_NET_WM_ICON,
+    NEXWM_ATOM_NET_WM_PING,
     NEXWM_ATOM_NET_CURRENT_DESKTOP,
     NEXWM_ATOM_NET_NUMBER_OF_DESKTOPS,
     NEXWM_ATOM_NET_DESKTOP_NAMES,

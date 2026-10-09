@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int fails, passes;
@@ -61,6 +62,8 @@ static void test_defaults(void)
           cfg.buttons[2] == NEXWM_BUTTON_CLOSE,
           "the three buttons every desktop has are there: minimize, maximize, close");
     CHECK(!strcmp(cfg.font, "fixed"), "and the title is drawn with the core font 'fixed' (%s)", cfg.font);
+
+    CHECK(binding(&cfg, "F4") == NULL, "the WM defaults leave F4 to HDE instead of defeating the sound-key switch");
 
     HdeNexwmBinding *b = binding(&cfg, "Super+Return");
     CHECK(b && b->action == NEXWM_ACTION_SPAWN && b->command && !strcmp(b->command, "hde-choose terminal"),
@@ -144,6 +147,7 @@ static void test_parse(void)
         "key Mod4+Shift+2 move-to 2\n"
         "key Super+1 workspace 3\n"
         "key XF86AudioPlay spawn hde-media --play\n"
+        "key F4 spawn playerctl next\n"
         "key Super+Escape fullscreen\n"
         "key Super+M minimize\n"
         "key Super+I iconify\n"
@@ -193,6 +197,9 @@ static void test_parse(void)
     b = binding(&cfg, "XF86AudioPlay");
     CHECK(b && b->action == NEXWM_ACTION_SPAWN && b->command && !strcmp(b->command, "hde-media --play"),
           "a multimedia key is a key like any other");
+    b = binding(&cfg, "F4");
+    CHECK(b && b->mods == 0 && b->action == NEXWM_ACTION_SPAWN && b->command &&
+          !strcmp(b->command, "playerctl next"), "an explicit F4 media binding remains configurable");
     b = binding(&cfg, "   key   Alt+F4   close");
     CHECK(b == NULL, "the parser does not make up a binding out of the spacing");
     b = binding(&cfg, "key   Alt+F4   close");
@@ -324,6 +331,75 @@ static void test_load(void)
     unsetenv("XDG_CONFIG_HOME");
 }
 
+static int write_settings_fixture(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) return 0;
+    int ok = fputs(text, f) != EOF;
+    if (fclose(f) != 0) ok = 0;
+    return ok;
+}
+
+static void test_hde_sound_keys(void)
+{
+    char root[] = "/tmp/hde-nexwm-fkeys-XXXXXX";
+    if (!mkdtemp(root)) { CHECK(0, "cannot create a temporary HDE settings directory"); return; }
+    char dir[256], path[256], home_config[256], home_dir[256], home_path[256];
+    snprintf(dir, sizeof dir, "%s/hde", root);
+    snprintf(path, sizeof path, "%s/hde/settings.ini", root);
+    snprintf(home_config, sizeof home_config, "%s/.config", root);
+    snprintf(home_dir, sizeof home_dir, "%s/.config/hde", root);
+    snprintf(home_path, sizeof home_path, "%s/.config/hde/settings.ini", root);
+    if (mkdir(dir, 0700) || mkdir(home_config, 0700) || mkdir(home_dir, 0700)) {
+        CHECK(0, "cannot create the HDE settings fixture");
+        rmdir(home_dir); rmdir(home_config); rmdir(dir); rmdir(root);
+        return;
+    }
+    char *old_xdg = getenv("XDG_CONFIG_HOME") ? strdup(getenv("XDG_CONFIG_HOME")) : NULL;
+    char *old_home = getenv("HOME") ? strdup(getenv("HOME")) : NULL;
+    setenv("XDG_CONFIG_HOME", root, 1);
+    setenv("HOME", root, 1);
+    unsigned f4 = nexwm_keysym_of("F4");
+    const char *command = nexwm_hde_media_command(f4, 0);
+    CHECK(command && !strcmp(command, "hde-hotkeys --action play"),
+          "the Wayland F4 fallback uses the play/pause action when settings.ini is absent");
+    CHECK(!nexwm_hde_media_command(f4, NEXWM_MOD_ALT), "Alt+F4 is not a media key");
+    CHECK(!nexwm_hde_media_command(f4, NEXWM_MOD_SHIFT), "Shift+F4 is not a media key");
+    CHECK(!nexwm_hde_media_command(f4, NEXWM_MOD_CTRL), "Ctrl+F4 is not a media key");
+    CHECK(!nexwm_hde_media_command(f4, NEXWM_MOD_SUPER), "Super+F4 is not a media key");
+    CHECK(!nexwm_hde_media_command(nexwm_keysym_of("F5"), 0), "unmodified F5 stays available to apps");
+    static const struct { const char *text; int enabled; const char *desc; } cases[] = {
+        { "[settings]\n", 1, "a missing sound-key setting defaults to on" },
+        { "[settings]\nfkeys_sound=false\n", 0, "fkeys_sound=false disables the F4 fallback" },
+        { "\t fkeys_sound = OFF\r\n", 0, "spaces, CRLF and uppercase OFF are accepted" },
+        { "fkeys_sound=No\n", 0, "no also disables the fallback" },
+        { "fkeys_sound=0\n", 0, "zero also disables the fallback" },
+        { "# fkeys_sound=false\nfkeys_sound_extra=false\n", 1, "comments and other keys do not disable F4" },
+        { "fkeys_sound false\n", 1, "a line without an equals sign is ignored" },
+        { "fkeys_sound=true\nfkeys_sound=no\n", 0, "the last sound-key value wins" },
+        { "media_keys=false\nfkeys_sound=false\nfkeys_sound=true\n", 1,
+          "F4 follows the sound-key switch, independently of the hardware media keys" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        if (!write_settings_fixture(path, cases[i].text)) { CHECK(0, "cannot write the HDE settings fixture"); break; }
+        CHECK((nexwm_hde_media_command(f4, 0) != NULL) == cases[i].enabled, "%s", cases[i].desc);
+    }
+    if (write_settings_fixture(home_path, "[settings]\nfkeys_sound=false\n") &&
+        write_settings_fixture(path, "[settings]\nfkeys_sound=true\n")) {
+        CHECK((nexwm_hde_media_command(f4, 0) != NULL), "XDG_CONFIG_HOME takes precedence over HOME for the F4 switch");
+        unsetenv("XDG_CONFIG_HOME");
+        CHECK(!(nexwm_hde_media_command(f4, 0) != NULL), "the F4 switch falls back to HOME/.config/hde/settings.ini");
+        setenv("XDG_CONFIG_HOME", "", 1);
+        CHECK(!(nexwm_hde_media_command(f4, 0) != NULL), "an empty XDG_CONFIG_HOME also uses HOME");
+    } else {
+        CHECK(0, "cannot write the HOME/XDG F4 settings fixtures");
+    }
+    if (old_xdg) { setenv("XDG_CONFIG_HOME", old_xdg, 1); free(old_xdg); } else unsetenv("XDG_CONFIG_HOME");
+    if (old_home) { setenv("HOME", old_home, 1); free(old_home); } else unsetenv("HOME");
+    unlink(path); unlink(home_path);
+    rmdir(home_dir); rmdir(home_config); rmdir(dir); rmdir(root);
+}
+
 static void test_atoms(void)
 {
     int n = 0;
@@ -349,6 +425,8 @@ static void test_atoms(void)
           "a program asks to be moved or resized with _NET_WM_MOVERESIZE");
     CHECK(!strcmp(nexwm_atom_names[NEXWM_ATOM_NET_WM_ICON], "_NET_WM_ICON"),
           "and shows its picture in the title bar with _NET_WM_ICON");
+    CHECK(!strcmp(nexwm_atom_names[NEXWM_ATOM_NET_WM_PING], "_NET_WM_PING"),
+          "checks whether a client is still processing events with _NET_WM_PING");
     CHECK(!strcmp(nexwm_atom_names[NEXWM_ATOM_WM_TAKE_FOCUS], "WM_TAKE_FOCUS"),
           "ICCCM's WM_TAKE_FOCUS is what a program that takes the focus itself asks for");
 
@@ -634,6 +712,7 @@ int main(void)
     test_parse();
     test_errors();
     test_load();
+    test_hde_sound_keys();
     test_atoms();
     test_frame_geometry();
     test_frame_buttons();

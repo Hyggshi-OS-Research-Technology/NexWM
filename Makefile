@@ -322,7 +322,7 @@ check-arch:
 # Hyggshi Media in a real X server (Xvfb + Metacity): the picture viewer (the keys, the pixels, full screen, a second
 # hde-media handing its picture to the window that is open — tests/media-test.sh) and then the player (the list, the
 # transport, mpv over its socket, the end of a track — tests/player-window-test.sh, with a stand-in for mpv)
-check-media: $(BUILD)/hde-media
+check-media: $(BUILD)/hde-media $(BUILD)/hde-hotkeys
 	sh tests/media-test.sh
 	sh tests/player-window-test.sh
 

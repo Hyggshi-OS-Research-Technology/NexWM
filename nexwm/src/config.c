@@ -146,6 +146,7 @@ const char *const nexwm_atom_names[] = {
     [NEXWM_ATOM_NET_CLOSE_WINDOW]               = "_NET_CLOSE_WINDOW",
     [NEXWM_ATOM_NET_WM_MOVERESIZE]              = "_NET_WM_MOVERESIZE",
     [NEXWM_ATOM_NET_WM_ICON]                    = "_NET_WM_ICON",
+    [NEXWM_ATOM_NET_WM_PING]                    = "_NET_WM_PING",
     [NEXWM_ATOM_NET_CURRENT_DESKTOP]            = "_NET_CURRENT_DESKTOP",
     [NEXWM_ATOM_NET_NUMBER_OF_DESKTOPS]         = "_NET_NUMBER_OF_DESKTOPS",
     [NEXWM_ATOM_NET_DESKTOP_NAMES]              = "_NET_DESKTOP_NAMES",
@@ -385,6 +386,41 @@ static char *trim(char *s)
     size_t n = strlen(s);
     while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = '\0';
     return s;
+}
+
+/* The HDE sound-key switch also controls the compositor's F4 fallback. Read it on demand so Settings changes
+ * take effect without restarting Wayland. Match hde-hotkeys' boolean values and last-value-wins behaviour. */
+static int hde_sound_keys_enabled(void)
+{
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    char path[4096];
+    int n;
+    if (xdg && *xdg) n = snprintf(path, sizeof path, "%s/hde/settings.ini", xdg);
+    else n = snprintf(path, sizeof path, "%s/.config/hde/settings.ini", home && *home ? home : "/tmp");
+    if (n < 0 || (size_t)n >= sizeof path) return 1;
+    FILE *f = fopen(path, "r");
+    if (!f) return 1;
+    char line[1024];
+    int enabled = 1;
+    while (fgets(line, sizeof line, f)) {
+        char *key = trim(line);
+        char *value = strchr(key, '=');
+        if (!value) continue;
+        *value++ = '\0';
+        if (strcmp(trim(key), "fkeys_sound")) continue;
+        value = trim(value);
+        enabled = !(strncasecmp(value, "false", 5) == 0 || strncasecmp(value, "no", 2) == 0 ||
+                    strncasecmp(value, "off", 3) == 0 || *value == '0');
+    }
+    fclose(f);
+    return enabled;
+}
+
+const char *nexwm_hde_media_command(unsigned keysym, unsigned mods)
+{
+    if (keysym != nexwm_keysym_of("F4") || mods != 0) return NULL;
+    return hde_sound_keys_enabled() ? "hde-hotkeys --action play" : NULL;
 }
 
 /* two colours, the way `colors` takes them: the first for the focused window, the second for the others */

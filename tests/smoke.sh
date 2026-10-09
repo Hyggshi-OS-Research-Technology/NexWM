@@ -1170,11 +1170,15 @@ check "... and the desktop icons follow" grep -q "hde-desktop: panel now takes 0
 echo "fkeys_sound=false" >> "$SETTINGS_INI"
 "$B/hde-settings" --wayland-config "$OUT/labwc-config" > "$OUT/labwc-config.log" 2>&1
 RCX="$OUT/labwc-config/rc.xml"
-if grep -q "hde-panel --menu" "$RCX" && grep -q 'key="Print".*hde-hotkeys --action screenshot' "$RCX" && ! grep -q 'key="F3"' "$RCX" &&
+if grep -q "hde-panel --menu" "$RCX" && grep -q 'key="Print".*hde-hotkeys --action screenshot' "$RCX" &&
+   ! grep -Eq 'key="F[1-4]"' "$RCX" && grep -q 'key="A-F4".*name="Close"' "$RCX" &&
    grep -q '<naturalScroll>yes</naturalScroll>' "$RCX" && [ -s "$OUT/labwc-config/themerc-override" ]; then
-    pass "hde-settings --wayland-config writes labwc's rc.xml from settings.ini (Super, PrtSc; fkeys_sound=false: no F1-F3)"
+    pass "hde-settings --wayland-config writes labwc's rc.xml from settings.ini (Super, PrtSc; fkeys_sound=false: no F1-F4; Alt+F4 still closes)"
 else fail "hde-settings --wayland-config writes labwc's rc.xml from settings.ini ($(cat "$OUT/labwc-config.log"))"; fi
 sed -i '/^fkeys_sound=/d' "$SETTINGS_INI"
+"$B/hde-settings" --wayland-config "$OUT/labwc-config" >> "$OUT/labwc-config.log" 2>&1
+check "labwc's F4 binding runs the play/pause action when sound keys are enabled" \
+    grep -q 'key="F4".*hde-hotkeys --action play' "$RCX"
 
 # ---------- 6d. About: the logo of the system and of its base (os-release), the About window ----------
 l=$(grep "hde-settings: about: .*logo from" "$OUT/settings.log" | head -n 1)

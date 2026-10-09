@@ -139,7 +139,7 @@ xprop -root _NEXWM_KEYS        # "Super+Q close\0Super+9 workspace 3\0…", one 
   `_NET_WM_MOVERESIZE` (what a program without NexWM's decorations asks a move or a resize with), `_NET_WM_ICON`,
   `_NET_ACTIVE_WINDOW` (a request, as the panel's taskbar sends it), `WM_CHANGE_STATE`,
   `WM_PROTOCOLS`/`WM_DELETE_WINDOW`/`WM_TAKE_FOCUS` (a program that wants the keyboard the ICCCM way is given it
-  without a click), `WM_STATE`.
+  without a click)/`_NET_WM_PING` (for applications that advertise it), `WM_STATE`.
 * **Frames**: the whole frame is drawn by NexWM — the `border` pixels of it in the colour of the focus, and above the
   window a title bar with the program's icon (`_NET_WM_ICON`), its title (Latin-1, in the X core font of
   `titlebar-font`) and the buttons of `titlebar-buttons`. The programs are told what the frame took
@@ -174,6 +174,19 @@ The compositor publishes `wl_compositor`, `xdg_wm_base`, `zwlr_layer_shell_v1` a
 `zwlr_foreign_toplevel_manager_v1`; it displays XDG toplevels/popups and layer-shell surfaces, handles pointer and
 keyboard input, and reports windows to HDE's Wayland taskbar. X11 clients are not provided by this compositor (there is
 no Xwayland integration yet). The X11 backend remains a separate session and continues to use XCB directly.
+
+Unmodified **F4** runs `hde-hotkeys --action play`, which uses `playerctl play-pause` to control MPRIS players.
+This fallback respects HDE's `settings.ini` **fkeys_sound** switch (default on), reads changes without a compositor
+restart, and leaves modified F4 combinations alone. An explicit `key F4 ...` in `nexwm.conf` takes precedence.
+On X11, HDE's separate hotkeys daemon owns F4; it is not added to the WM's default grab table, so disabling HDE's
+sound and media keys really returns F4 to applications there too.
+
+On X11, NexWM checks mapped clients that advertise `_NET_WM_PING`; on Wayland, it pings visible XDG toplevels. A
+missed response produces one Freedesktop “Application not responding” notification; an X11 ping reply or a later
+Wayland surface commit clears the internal warning state. If a Wayland scene commit fails, NexWM logs it and schedules
+a retry. Moving or resizing a view also explicitly schedules output frames. Software rendering is permitted as a
+renderer-initialization fallback unless the user explicitly sets `WLR_RENDERER_ALLOW_SOFTWARE`. The GPU is not assumed
+to be the cause of a rendering failure.
 
 The additive **NexWM (Wayland)** login entry runs `nexwm --wayland --session ...`, so HDE starts on NexWM's compositor.
 The existing **HDE (Wayland)** entry and labwc fallback remain intact. A Wayland compositor cannot use `--replace`:

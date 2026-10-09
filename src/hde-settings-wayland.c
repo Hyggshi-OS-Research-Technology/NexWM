@@ -2,7 +2,7 @@
  * session, written from ~/.config/hde/settings.ini (default DIR: ~/.config/hde/labwc, run by hde-session before it
  * starts labwc and whenever settings.ini changes; --reload then tells the running labwc, like labwc --reconfigure).
  *
- *   rc.xml           window behaviour, HDE's key bindings (Super opens the Start menu, F1-F3 / F6-F8 / media keys,
+ *   rc.xml           window behaviour, HDE's key bindings (Super opens the Start menu, F1-F4 / F6-F8 / media keys,
  *                    PrtSc, Super+L/E/D/R/S/P, Ctrl+Alt+T/Delete — the same as hde-hotkeys on X11, with the same
  *                    switches in Settings > Keyboard), touchpad and mouse (Settings > Input), key repeat
  *   menu.xml         the window menu (Alt+Space, right-click on a title bar)
@@ -114,6 +114,7 @@ static char *rc_xml(void)
         BIND("F1", "%s --action volume-mute", hot);
         BIND("F2", "%s --action volume-down", hot);
         BIND("F3", "%s --action volume-up", hot);
+        BIND("F4", "%s --action play", hot);
     }
     if (cfg_get_bool("fkeys_display", TRUE)) {
         BIND("F6", "%s --action brightness-down", hot);

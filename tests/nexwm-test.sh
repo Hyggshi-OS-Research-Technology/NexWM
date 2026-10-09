@@ -13,6 +13,7 @@
 #      left/right, maximize and unmaximize, full screen, spawn, minimize, and close (WM_DELETE_WINDOW, not a kill);
 #   3b. the mouse: dragging the title bar moves the window, dragging an edge resizes it, the three buttons of the bar
 #      minimize, maximize and close it, and the drawing of the bar and of a button is read back pixel by pixel;
+#   3c. an X11 client that ignores _NET_WM_PING is reported and produces an HDE notification;
 #   4. what HDE's panel asks of it: the struts of a dock window shrink the work area, and a maximized window stays clear
 #      of the panel (tests/nexwm-client.c --dock is that panel);
 #   5. the way out: `quit` gives every window back (no frame, no _NET_FRAME_EXTENTS, back to the root) and leaves the
@@ -52,6 +53,14 @@ if [ ! -x "$NEXWM" ]; then echo "tests/nexwm-test.sh: $NEXWM is not built (make 
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
 : > "$OUT/results.txt"
+export NEXWM_NOTIFY_LOG="$OUT/notifications.log"
+cat > "$OUT/bin/notify-send" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${NEXWM_NOTIFY_LOG:?}"
+EOF
+chmod +x "$OUT/bin/notify-send"
+PATH="$OUT/bin:$PATH"
+export PATH
 
 # A watchdog for the whole test. A CI job that hangs tells nobody anything: if this is still running after
 # HDE_TEST_WATCHDOG seconds (300 by default), the last line of results.txt is the evidence of where it got stuck, and
@@ -59,7 +68,7 @@ mkdir -p "$OUT/bin"
 MAIN_PID=$$
 # Every process this test starts is named here from the beginning, so the cleanup below can put all of them away even
 # when the test ends in the middle of a section.
-XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; CLOSE_PID=""; METACITY_PID=""
+XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; CLOSE_PID=""; HANG_PID=""; METACITY_PID=""
 
 # The watchdog is tests/nexwm-watchdog.sh, a separate program with its own reasons written down at the top of it: it
 # says where a hanging test got stuck, asks it to leave, and kills what is left of it when the signal cannot be acted
@@ -69,14 +78,14 @@ WATCHDOG_PID=$!
 
 # Every process this test starts is named here from the beginning, so the cleanup below can put all of them away even
 # when the test ends in the middle of a section.
-XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; CLOSE_PID=""; METACITY_PID=""
+XVFB_PID=""; WM_PID=""; WM2_PID=""; ALPHA_PID=""; BETA_PID=""; DOCK_PID=""; CLOSE_PID=""; HANG_PID=""; METACITY_PID=""
 
 # What the test started is put away by the test, whatever way it ends: the X server, the window manager(s), the windows
 # and the tools that may be waiting for the X server. A test that leaves a process behind leaves a CI step that never
 # finishes (the step is over only when the last holder of its stdout is gone), which is a hang nobody can read.
 cleanup() {
     kill -TERM "$WATCHDOG_PID" 2>/dev/null
-    for p in ${WM_PID:-} ${WM2_PID:-} ${METACITY_PID:-} ${ALPHA_PID:-} ${BETA_PID:-} ${DOCK_PID:-} ${CLOSE_PID:-} \
+    for p in ${WM_PID:-} ${WM2_PID:-} ${METACITY_PID:-} ${ALPHA_PID:-} ${BETA_PID:-} ${DOCK_PID:-} ${CLOSE_PID:-} ${HANG_PID:-} \
              ${XVFB_PID:-}; do
         [ -n "$p" ] && kill -TERM "$p" 2>/dev/null
     done
@@ -429,9 +438,35 @@ EOF
                 "$(rval _NET_SUPPORTED)"
             has "_NET_SUPPORTED offers the struts HDE's panel reserves room with" "_NET_WM_STRUT_PARTIAL" \
                 "$(rval _NET_SUPPORTED)"
+            has "_NET_SUPPORTED advertises the unresponsive-client ping protocol" "_NET_WM_PING" \
+                "$(rval _NET_SUPPORTED)"
             has "the key bindings are published for Settings (and for xprop)" "Super+Q close" "$(rval _NEXWM_KEYS)"
             has "the key the configuration file added is published too, with its workspace" "Super+9 workspace 3" \
                 "$(rval _NEXWM_KEYS)"
+
+            # A client that advertises _NET_WM_PING but does not answer it stands in for a frozen application. It is
+            # killed after this check so it cannot change the windows or focus used by the rest of the test.
+            "$CLIENT" --title nexwm-unresponsive-probe --ignore-ping --timeout 20 > "$OUT/hang.out" 2>&1 &
+            HANG_PID=$!
+            if wait_log "is not responding to WM_PROTOCOLS _NET_WM_PING" 40; then
+                pass "an X11 client that ignores _NET_WM_PING is detected as unresponsive"
+            else
+                fail "an X11 client that ignores _NET_WM_PING was not detected (log: $(tail -n 8 "$LOG" | tr '\n' '|'))"
+            fi
+            if wait_log_in "$NEXWM_NOTIFY_LOG" "Application not responding" 20; then
+                pass "a Freedesktop notification is sent for the unresponsive X11 client"
+            else
+                fail "no Freedesktop notification was sent for the unresponsive X11 client"
+            fi
+            if grep -q -- "nexwm-unresponsive-probe is not responding" "$NEXWM_NOTIFY_LOG" 2>/dev/null; then
+                pass "the unresponsive-application notification includes the window title"
+            else
+                fail "the unresponsive-application notification does not name its window"
+            fi
+            kill -TERM "$HANG_PID" 2>/dev/null || true
+            wait_gone "$HANG_PID" "the unresponsive-client test window" 20 || fail "the unresponsive-client test window did not stop"
+            wait "$HANG_PID" 2>/dev/null || true
+            HANG_PID=""
 
             # a window, and what the window manager does with it
             # --timeout 0: this window is driven by the whole test (which is longer than the client's 60 s default,

@@ -123,8 +123,8 @@ GtkWidget *page_keyboard_new(void)
     gtk_box_pack_start(GTK_BOX(box), section("Start menu, sound and display keys"), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), row_box("Super key opens the Start menu",
         "Press and release the Super (Windows) key on its own to open or close the menu.", toggle("super_menu", TRUE)), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Use F1, F2 and F3 as sound keys",
-        "F1 mute · F2 volume down · F3 volume up. Turn off to give these keys back to applications "
+    gtk_box_pack_start(GTK_BOX(box), row_box("Use F1–F4 as sound and media keys",
+        "F1 mute · F2 volume down · F3 volume up · F4 play/pause. Turn off to give these keys back to applications "
         "(for example F1 = Help, F2 = Rename).", toggle("fkeys_sound", TRUE)), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), row_box("Use F6, F7 and F8 as display keys",
         "F6 darker · F7 brighter · F8 Project: PC screen only, Duplicate, Extend or Second screen only, for a projector "
@@ -149,6 +149,7 @@ GtkWidget *page_keyboard_new(void)
         { "Ctrl + Alt + T", "Open a terminal" },
         { "Ctrl + Alt + Delete", "Session / Power dialog" },
         { "F1  ·  F2  ·  F3", "Mute  ·  Volume down  ·  Volume up" },
+        { "F4", "Play / pause media (playerctl)" },
         { "F6  ·  F7", "Screen darker  ·  brighter" },
         { "F8  ·  Super + P", "Project: PC screen only, Duplicate, Extend, Second screen only (press again: next)" },
         { "Print  ·  Shift+Print  ·  Alt+Print", "Screenshot: screen · area · window" },

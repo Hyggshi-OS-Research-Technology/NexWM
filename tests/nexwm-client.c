@@ -12,6 +12,7 @@
  *                                    themselves, the window manager frames them where they are)
  *   nexwm-client --dock 24           a dock instead: _NET_WM_WINDOW_TYPE_DOCK with a strut of 24 pixels at the top
  *                                    (what HDE's panel is to the window manager: room reserved on the screen)
+ *   nexwm-client --ignore-ping       ignore _NET_WM_PING (the test's unresponsive application)
  *   nexwm-client --timeout 60        leave by itself after N seconds (the test never hangs because of this window)
  *
  * It prints one line per thing that happens, and the first one is what the test reads:
@@ -38,7 +39,7 @@
 
 static xcb_connection_t *conn;
 static xcb_window_t win;
-static xcb_atom_t a_delete_window, a_wm_protocols;
+static xcb_atom_t a_delete_window, a_wm_protocols, a_net_wm_ping;
 static volatile sig_atomic_t leaving;
 
 static void on_signal(int sig)
@@ -88,10 +89,12 @@ int main(int argc, char **argv)
     const char *title = "nexwm-client";
     const char *class_name = "nexwm-client";
     int w = 600, h = 400, dock = 0, timeout = 60;
+    int ignore_ping = 0;
     int x = 60, y = 60;              /* not the top left corner: "it moved" has to be visible */
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
+        if (!strcmp(a, "--ignore-ping")) { ignore_ping = 1; continue; }
         if (!strcmp(a, "--title") && i + 1 < argc) { title = argv[++i]; continue; }
         if (!strcmp(a, "--class") && i + 1 < argc) { class_name = argv[++i]; continue; }
         if (!strcmp(a, "--dock") && i + 1 < argc) { dock = atoi(argv[++i]); continue; }
@@ -111,7 +114,7 @@ int main(int argc, char **argv)
             continue;
         }
         if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-            printf("Usage: nexwm-client [--title T] [--class C] [--size WxH] [--pos X,Y] [--dock N] [--timeout N]\n");
+            printf("Usage: nexwm-client [--title T] [--class C] [--size WxH] [--pos X,Y] [--dock N] [--ignore-ping] [--timeout N]\n");
             return 0;
         }
         fprintf(stderr, "nexwm-client: unknown option '%s'\n", a);
@@ -155,7 +158,9 @@ int main(int argc, char **argv)
     /* WM_DELETE_WINDOW: without this the window manager is right to kill the window instead of asking it to close */
     a_wm_protocols = atom("WM_PROTOCOLS");
     a_delete_window = atom("WM_DELETE_WINDOW");
-    set_atoms(a_wm_protocols, XCB_ATOM_ATOM, &a_delete_window, 1);
+    a_net_wm_ping = atom("_NET_WM_PING");
+    xcb_atom_t protocols[] = { a_delete_window, a_net_wm_ping };
+    set_atoms(a_wm_protocols, XCB_ATOM_ATOM, protocols, (int)(sizeof protocols / sizeof protocols[0]));
 
     if (dock) {
         xcb_atom_t type = atom("_NET_WM_WINDOW_TYPE_DOCK");
@@ -196,7 +201,16 @@ int main(int argc, char **argv)
             }
             case XCB_CLIENT_MESSAGE: {
                 xcb_client_message_event_t *m = (xcb_client_message_event_t *)ev;
-                if (m->type == a_wm_protocols && m->data.data32[0] == a_delete_window) {
+                if (m->type == a_wm_protocols && m->data.data32[0] == a_net_wm_ping) {
+                    if (!ignore_ping) {
+                        xcb_client_message_event_t reply = *m;
+                        reply.window = screen->root;
+                        xcb_send_event(conn, 0, screen->root,
+                                       XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
+                                       (const char *)&reply);
+                        xcb_flush(conn);
+                    }
+                } else if (m->type == a_wm_protocols && m->data.data32[0] == a_delete_window) {
                     printf("the window manager asked me to close\n");
                     fflush(stdout);
                     xcb_disconnect(conn);

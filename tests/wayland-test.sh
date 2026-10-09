@@ -148,6 +148,8 @@ if grep -q 'key="Super_L" onRelease="yes"' "$RC"; then pass "rc.xml: the Super k
 elif grep -q 'key="W-space"' "$RC"; then pass "rc.xml: Super+Space opens the Start menu (labwc before 0.7.3 cannot bind Super alone)"
 else fail "rc.xml binds a key to the Start menu"; fi
 check "rc.xml: F1-F3 / media keys / PrtSc run hde-hotkeys --action" sh -c "grep -q 'key=\"F3\".*hde-hotkeys --action volume-up' '$RC' && grep -q 'key=\"Print\".*--action screenshot' '$RC'"
+check "rc.xml: F4 runs hde-hotkeys --action play (playerctl play-pause)" grep -q 'key="F4".*hde-hotkeys --action play' "$RC"
+check "rc.xml: Alt+F4 still closes the focused window" grep -q 'key="A-F4".*name="Close"' "$RC"
 check "rc.xml: the touchpad settings (natural scrolling, tap to click)" sh -c "grep -q '<naturalScroll>yes</naturalScroll>' '$RC' && grep -q '<tap>yes</tap>' '$RC'"
 check "the panel is a layer-shell surface at the bottom" grep -q "hde-panel: started: panel at the bottom, 34px high (Wayland layer shell" "$LOG"
 check "the taskbar uses wlr-foreign-toplevel-management" grep -q "hde-panel: taskbar: Wayland (wlr-foreign-toplevel-management v[0-9])" "$LOG"
