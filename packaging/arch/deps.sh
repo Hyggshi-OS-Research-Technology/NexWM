@@ -46,7 +46,7 @@ cairo
 pam
 libxcb
 xcb-util-wm
-wlroots
+wlroots|wlroots0.18|wlroots0.17
 vte3
 "
 

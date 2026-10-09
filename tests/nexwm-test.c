@@ -458,6 +458,9 @@ static NexwmFrameStyle test_style(void)
     st.titlebar = 20;
     st.buttons = buttons;
     st.n_buttons = 3;
+    st.button_size = 0;
+    st.title_align = 0;
+    st.resize_grip = 0;
     return st;
 }
 
@@ -478,13 +481,13 @@ static void test_frame_geometry(void)
     NexwmRect back = nexwm_frame_content(&st, frame);
     CHECK(rect_is(back, 60, 60, 600, 400), "and the window inside that frame is the window itself again");
 
-    NexwmFrameStyle plain = { 2, 0, NULL, 0 };            /* the classic thin frame: no title bar */
+    NexwmFrameStyle plain = { 2, 0, NULL, 0, 0, 0, 0 };            /* the classic thin frame: no title bar */
     frame = nexwm_frame_around(&plain, client);
     CHECK(rect_is(frame, 58, 58, 604, 404), "without a title bar the frame is the window plus a 2 px border");
     nexwm_frame_extents(&plain, &l, &r, &t, &b);
     CHECK(t == 2, "and then _NET_FRAME_EXTENTS is the border on all four sides (the top is %d)", t);
 
-    NexwmFrameStyle bare = { 0, 0, NULL, 0 };
+    NexwmFrameStyle bare = { 0, 0, NULL, 0, 0, 0, 0 };
     frame = nexwm_frame_around(&bare, client);
     CHECK(rect_is(frame, 60, 60, 600, 400), "a frame of no pixels is the window itself");
 }
@@ -505,21 +508,21 @@ static void test_frame_buttons(void)
     CHECK(b[0].rect.y == st.border + 5, "the buttons stand in the bar, below the top border of the frame");
 
     /* a thin bar: no room for the padding, so the buttons are the whole height of it */
-    NexwmFrameStyle thin = { 2, 8, test_style().buttons, 3 };
+    NexwmFrameStyle thin = { 2, 8, test_style().buttons, 3, 0, 0, 0 };
     n = nexwm_frame_buttons(&thin, 100, b, 8);
     CHECK(n == 3 && rect_is(b[2].rect, 95 - 8, 2, 8, 8), "a thin bar keeps the buttons inside it (%d,%d %dx%d)",
           b[2].rect.x, b[2].rect.y, b[2].rect.w, b[2].rect.h);
 
-    NexwmFrameStyle none = { 6, 20, NULL, 0 };
+    NexwmFrameStyle none = { 6, 20, NULL, 0, 0, 0, 0 };
     CHECK(nexwm_frame_buttons(&none, 612, b, 8) == 0, "a style without buttons has none");
-    NexwmFrameStyle notitle = { 6, 0, test_style().buttons, 3 };
+    NexwmFrameStyle notitle = { 6, 0, test_style().buttons, 3, 0, 0, 0 };
     CHECK(nexwm_frame_buttons(&notitle, 612, b, 8) == 0, "and a window without a title bar has nowhere to put them");
 
     /* more buttons than the title bar can hold is not a crash: the style is used as it comes (the parser keeps a
      * handful of them) */
     static const int many[] = { NEXWM_BUTTON_CLOSE, NEXWM_BUTTON_CLOSE, NEXWM_BUTTON_CLOSE, NEXWM_BUTTON_CLOSE,
                                 NEXWM_BUTTON_CLOSE, NEXWM_BUTTON_CLOSE, NEXWM_BUTTON_CLOSE, NEXWM_BUTTON_CLOSE };
-    NexwmFrameStyle eight = { 6, 20, many, 8 };
+    NexwmFrameStyle eight = { 6, 20, many, 8, 0, 0, 0 };
     CHECK(nexwm_frame_buttons(&eight, 612, b, 8) == 8, "eight buttons fit in the eight places the style has");
 }
 
@@ -534,7 +537,7 @@ static void test_frame_title_place(void)
     CHECK(with_icon == 246, "an icon at the left end pushes it right (%d)", with_icon);
     int wide = nexwm_frame_title_x(&st, 612, 600, 16);
     CHECK(wide == 6, "a title wider than that space is centred in the whole bar, and the drawing clips it (%d)", wide);
-    NexwmFrameStyle bare = { 0, 0, NULL, 0 };
+    NexwmFrameStyle bare = { 0, 0, NULL, 0, 0, 0, 0 };
     CHECK(nexwm_frame_title_x(&bare, 100, 20, 0) == 40, "without buttons it is the middle of the bar (%d)",
           nexwm_frame_title_x(&bare, 100, 20, 0));
 }
@@ -586,14 +589,14 @@ static void test_frame_hit(void)
           "to the right of the buttons the end of the bar resizes");
 
     /* a window with a thin frame and no title bar: the four sides and nothing else */
-    NexwmFrameStyle plain = { 2, 0, NULL, 0 };
+    NexwmFrameStyle plain = { 2, 0, NULL, 0, 0, 0, 0 };
     CHECK(nexwm_frame_hit(&plain, 604, 404, 300, 1, &button, &sides) == NEXWM_HIT_EDGE && sides == NEXWM_SIDE_TOP,
           "without a title bar the top border is still the top edge");
     CHECK(nexwm_frame_hit(&plain, 604, 404, 300, 3, &button, &sides) == NEXWM_HIT_CLIENT,
           "and just below it the window begins");
     CHECK(nexwm_frame_hit(&plain, 604, 404, 300, 200, &button, &sides) == NEXWM_HIT_CLIENT,
           "and everything inside the border is the window's own");
-    NexwmFrameStyle bare = { 0, 0, NULL, 0 };
+    NexwmFrameStyle bare = { 0, 0, NULL, 0, 0, 0, 0 };
     CHECK(nexwm_frame_hit(&bare, 600, 400, 0, 0, &button, &sides) == NEXWM_HIT_CLIENT,
           "a window without a frame at all has nothing to grab");
 }

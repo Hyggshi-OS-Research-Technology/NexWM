@@ -565,7 +565,7 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
             }
             cfg->border_color = c1;
             cfg->focus_color = c2;
-        } else if (!strcmp(word, "titlebar")) {
+        } else if (!strcmp(word, "titlebar") || !strcmp(word, "titlebar-height")) {
             char *end = NULL;
             long v = strtol(rest, &end, 10);
             if (!*rest || (end && *trim(end)) || v < 0 || v > 64) {
@@ -582,7 +582,7 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
             if (colors_pair(rest, &cfg->titlebar_text, &cfg->titlebar_text_unfocused, "titlebar-text",
                             line, err, err_n) != 0)
                 return -1;
-        } else if (!strcmp(word, "titlebar-buttons")) {
+        } else if (!strcmp(word, "titlebar-buttons") || !strcmp(word, "buttons")) {
             if (buttons_parse(rest, cfg, line, err, err_n) != 0) return -1;
         } else if (!strcmp(word, "titlebar-font")) {
             if (!*rest || strlen(rest) >= sizeof cfg->font) {

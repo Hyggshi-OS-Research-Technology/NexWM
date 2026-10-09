@@ -45,7 +45,7 @@ if [ -x "$DEPS" ] || [ -f "$DEPS" ]; then
     else fail "the Arch build list has a Debian/Fedora name:$bad"; fi
     # the three that carry a feature of HDE's own and are easy to leave out
     for p in libxcb pam wlroots; do
-        if printf '%s\n' "$build" | grep -qx "$p"; then pass "the build list has $p (NexWM's X11 side / hde-lock / the Wayland compositor)"
+        if printf '%s\n' "$build" | grep -qE "(^|\|)$p(\||$)"; then pass "the build list has $p (NexWM's X11 side / hde-lock / the Wayland compositor)"
         else fail "the build list is missing $p"; fi
     done
     for g in runtime-minimal runtime-full test wayland-session; do
