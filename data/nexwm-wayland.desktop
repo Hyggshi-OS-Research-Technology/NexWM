@@ -1,7 +1,8 @@
 [Desktop Entry]
 Name=NexWM (Wayland)
-Comment=HDE on Wayland with NexWM, HDE's own compositor (labwc is used where this NexWM has no compositor yet)
+Comment=HDE on Wayland with NexWM — HDE's own compositor (labwc is used where this NexWM has no compositor yet)
 Exec=@PREFIX@/bin/hde-start --wm nexwm --wayland
 TryExec=@PREFIX@/bin/nexwm
 Type=Application
 DesktopNames=HDE
+NoDisplay=true
