@@ -34,6 +34,11 @@ static GFileMonitor *desktop_config_monitor;
 static guint wallpaper_sync_source;
 static gboolean loading;
 
+/* Forward declarations */
+static char *wallpaper_current_path(void);
+static char *base_theme(void);
+static void apply_style(HdeStyle style, const char *base);
+
 /* ---------------------------------------------------------------- wallpaper brightness */
 
 /* Compute the average luminance [0..1] of a wallpaper image by sampling up to 64×64 pixels.
@@ -90,7 +95,6 @@ static gboolean wallpaper_auto_enabled(void)
 
 static void on_accent_toggled(GtkToggleButton *button, gpointer data);
 static void on_wallpaper_toggled(GtkToggleButton *button, gpointer data);
-static char *wallpaper_current_path(void);   /* defined later; used by apply_style_from_wallpaper */
 
 static gboolean current_is_dark(void)
 {
