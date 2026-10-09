@@ -76,6 +76,34 @@ WLTASK_SRC=src/hde-wltaskbar.c $(BUILD)/$(FTM)-protocol.c
 WLTASK_DEPS=$(BUILD)/$(FTM)-client-protocol.h
 endif
 
+# hde-lock (src/hde-lock.c): HDE's own lock screen, on both of HDE's sessions — the "HDE" (X11) session with a
+# full-screen window the window manager cannot touch (libxcb; no libX11, no toolkit needed) and the "HDE (Wayland)"
+# session with the compositor's session lock (ext-session-lock-v1, which labwc and NexWM offer; the protocol is
+# generated from protocols/ext-session-lock-v1.xml, byte-identical to wayland-protocols', the same way the panel's
+# taskbar protocol is). The picture is drawn with cairo (the GTK programs already bring it in) and the password is
+# checked through PAM (libpam0g-dev / pam-devel). A build without PAM still makes a hde-lock that says so and refuses
+# to lock, so HDE_SH_LOCK (src/hde-commands.h) can fall back to the lockers the machine does have.
+LOCKXML=ext-session-lock-v1
+LOCK_CAIRO:=$(shell pkg-config --exists cairo 2>/dev/null && echo yes)
+# PAM is asked for the way a compiler asks for it: the header and -lpam (libpam0g-dev on Debian/Ubuntu, pam-devel on
+# Fedora). Not through pkg-config -- pam.pc is not in every one of those packages.
+LOCK_PAM:=$(shell printf '#include <security/pam_appl.h>\nint main(void){return 0;}\n' | $(CC) -x c - -o /dev/null -lpam >/dev/null 2>&1 && echo yes)
+LOCK_XCB:=$(shell pkg-config --exists xcb 2>/dev/null && echo yes)
+LOCK_WL:=$(shell [ -n "$(WAYLAND_SCANNER)" ] && pkg-config --exists wayland-client xkbcommon 2>/dev/null && echo yes)
+HDE_LOCK:=$(shell [ -n "$(LOCK_CAIRO)" ] && { [ -n "$(LOCK_XCB)" ] || [ -n "$(LOCK_WL)" ]; } && echo yes)
+ifeq ($(HDE_LOCK),yes)
+HDE_LOCK_TARGET=$(BUILD)/hde-lock
+HDE_LOCK_CFLAGS=$(shell pkg-config --cflags cairo) $(if $(LOCK_XCB),-DHDE_LOCK_HAVE_XCB $(shell pkg-config --cflags xcb)) \
+                 $(if $(LOCK_PAM),-DHDE_LOCK_HAVE_PAM)
+HDE_LOCK_LIBS=$(shell pkg-config --libs cairo) $(if $(LOCK_XCB),$(shell pkg-config --libs xcb)) \
+               $(if $(LOCK_PAM),-lpam) -lm
+ifeq ($(LOCK_WL),yes)
+HDE_LOCK_CFLAGS+=-DHDE_LOCK_HAVE_WAYLAND -I$(BUILD) $(shell pkg-config --cflags wayland-client xkbcommon)
+HDE_LOCK_LIBS+=$(shell pkg-config --libs wayland-client xkbcommon)
+HDE_LOCK_DEPS=$(BUILD)/$(LOCKXML)-client-protocol.h $(BUILD)/$(LOCKXML)-protocol.c
+endif
+endif
+
 # Flags for the GTK programs in src/
 GUI_CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE -DHDE_DATADIR=\"$(PREFIX)/share/hde\"
@@ -111,14 +139,15 @@ NEXWM_SRC=$(wildcard nexwm/src/*.c)
 NEXWM_HEADERS=$(wildcard nexwm/src/*.h)
 
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media \
-         hde-choose hde-cmd nexwm
+         hde-choose hde-cmd nexwm hde-lock
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
 # The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd $(BUILD)/nexwm
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd $(BUILD)/nexwm \
+            $(HDE_LOCK_TARGET)
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -130,6 +159,10 @@ $(BUILD)/hde-panel: $(PANEL_SRC) $(HDE_HEADERS) $(WLTASK_DEPS) | $(BUILD)
 $(BUILD)/$(FTM)-client-protocol.h: protocols/$(FTM).xml | $(BUILD)
 	$(WAYLAND_SCANNER) client-header $< $@
 $(BUILD)/$(FTM)-protocol.c: protocols/$(FTM).xml | $(BUILD)
+	$(WAYLAND_SCANNER) private-code $< $@
+$(BUILD)/$(LOCKXML)-client-protocol.h: protocols/$(LOCKXML).xml | $(BUILD)
+	$(WAYLAND_SCANNER) client-header $< $@
+$(BUILD)/$(LOCKXML)-protocol.c: protocols/$(LOCKXML).xml | $(BUILD)
 	$(WAYLAND_SCANNER) private-code $< $@
 $(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) $(VERSION_H) | $(BUILD)
 	@[ -n "$(XRANDR_CFLAGS)" ] || echo "WARNING: libxrandr-dev (pkg-config xrandr) not found: no F8 screen layouts, no software brightness"
@@ -162,7 +195,7 @@ $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD
 # engine.c). What has nothing to do with a window is built and run without a display by `make check-unit`;
 # tests/media-test.sh drives the picture window for real.
 $(BUILD)/hde-media: $(MEDIA_SRC) hde-media/src/media.h hde-media/src/viewer.h hde-media/src/player.h hde-media/src/playlist.h \
-                    hde-media/src/engine.h src/hde-theme.h $(VERSION_H) | $(BUILD)
+                    hde-media/src/engine.h hde-media/src/mpris.h src/hde-theme.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-media/src -Isrc -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \
@@ -210,6 +243,20 @@ $(BUILD)/choose-test: tests/choose-test.c src/hde-choose.c src/hde-choose.h | $(
 $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(XRANDR_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(XRANDR_LIBS) \
 	    $(X11_LIBS) -lm
+# HDE's lock screen (src/hde-lock.c, src/hde-lock-core.c): the "HDE" (X11) session gets a full-screen window the window
+# manager cannot touch (libxcb; no libX11, no toolkit) and the "HDE (Wayland)" session the compositor's own session lock
+# (ext-session-lock-v1, which labwc and NexWM offer; protocols/ext-session-lock-v1.xml is byte-identical to
+# wayland-protocols'). It is the first locker HDE_SH_LOCK (src/hde-commands.h) tries; where it cannot lock (no cairo, no
+# session lock, no PAM to check the password) its say-so in the log sends HDE on to the lockers the machine does have.
+# `hde-lock --check` says 0 when this build can lock the session in front of it. Not built unless the libraries are
+# there: $(HDE_LOCK) above says whether they are.
+$(BUILD)/hde-lock: src/hde-lock.c src/hde-lock-core.c src/hde-lock-core.h $(HDE_HEADERS) $(HDE_LOCK_DEPS) $(VERSION_H) | $(BUILD)
+	@[ -n "$(LOCK_PAM)" ] || echo "NOTE: libpam0g-dev / pam-devel (security/pam_appl.h and -lpam) not found: hde-lock cannot check a password and will refuse to lock"
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) -std=c11 $(HDE_LOCK_CFLAGS) -o $@ src/hde-lock.c src/hde-lock-core.c $(if $(LOCK_WL),$(BUILD)/$(LOCKXML)-protocol.c) $(HDE_LOCK_LIBS)
+# What hde-lock does with the typing, the clock and the English it shows (tests/lock-core-test.c): no display, no PAM
+# and no session to lock, so `make check-unit` runs it everywhere
+$(BUILD)/lock-core-test: tests/lock-core-test.c src/hde-lock-core.c src/hde-lock-core.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/lock-core-test.c src/hde-lock-core.c
 # NexWM (nexwm/): the window manager of HDE, built into build/nexwm — the X11 side (nexwm/src/x11.c: a real window
 # manager, EWMH/ICCCM, XCB alone) and the Wayland side (nexwm/src/wayland.c: the compositor, wlroots), told apart by
 # --x11 and --wayland. Neither library is required to build it: a build without libxcb has no window manager inside, a
@@ -220,8 +267,9 @@ $(BUILD)/nexwm: $(NEXWM_SRC) $(NEXWM_HEADERS) $(VERSION_H) $(NEXWM_WLR_PROTOCOL_
 	@[ -n "$(WLR_PC)" ] || echo "NOTE: libwlroots-dev (pkg-config wlroots) not found: this nexwm has no Wayland compositor"
 	$(CC) $(GUI_CFLAGS) -std=c11 $(XCB_CFLAGS) $(WLR_CFLAGS) -Inexwm/src -Isrc -I$(BUILD) -o $@ $(filter %.c,$^) \
 	    $(XCB_LIBS) $(WLR_LIBS) -lm
-# NexWM's configuration file and key bindings (nexwm/src/config.c): no display, no X server, no window manager
-$(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/nexwm.h | $(BUILD)
+# NexWM's configuration file (nexwm/src/config.c) and the arithmetic of its frames (nexwm/src/frame.c: the title bar,
+# its buttons, the mouse): no display, no X server, no window manager, so `make check-unit` runs them anywhere
+$(BUILD)/nexwm-test: tests/nexwm-test.c nexwm/src/config.c nexwm/src/frame.c nexwm/src/frame.h nexwm/src/nexwm.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Inexwm/src -o $@ $(filter %.c,$^)
 ifeq ($(NEXWM_WAYLAND_PROBE),yes)
 $(BUILD)/nexwm-wayland-probe: tests/nexwm-wayland-probe.c | $(BUILD)
@@ -250,9 +298,9 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # The unit tests: no X server, no window manager, no session — the screen layouts, the distribution logos, the
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
-UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test \
+UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/lock-core-test \
             $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test $(BUILD)/cmd-vt-test \
-            tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh
+            tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh tests/arch-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
 check-unit: $(UNIT_TESTS) $(BUILD)/hde-choose-stub
@@ -265,10 +313,16 @@ check-unit: $(UNIT_TESTS) $(BUILD)/hde-choose-stub
 check-login:
 	sh tests/sddm-test.sh
 
+# HDE on Arch (packaging/arch/deps.sh, pacman, Arch's package names). `make check-unit` runs it everywhere — off an
+# Arch it checks the list in the repository and skips the machine-specific half; this target is the same test on a
+# machine where the whole thing runs. See tests/arch-test.sh
+check-arch:
+	sh tests/arch-test.sh
+
 # Hyggshi Media in a real X server (Xvfb + Metacity): the picture viewer (the keys, the pixels, full screen, a second
 # hde-media handing its picture to the window that is open — tests/media-test.sh) and then the player (the list, the
 # transport, mpv over its socket, the end of a track — tests/player-window-test.sh, with a stand-in for mpv)
-check-media: $(BUILD)/hde-media
+check-media: $(BUILD)/hde-media $(BUILD)/hde-hotkeys
 	sh tests/media-test.sh
 	sh tests/player-window-test.sh
 
@@ -307,6 +361,8 @@ install: all
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
+	@if [ -x $(BUILD)/hde-lock ]; then install -m755 $(BUILD)/hde-lock $(DESTDIR)$(PREFIX)/bin/hde-lock; \
+	 else echo "NOTE: hde-lock was not built (needs pkg-config cairo and libxcb1-dev, or wayland-client + xkbcommon, and libpam0g-dev for the password check)"; fi
 	install -m755 $(BUILD)/nexwm $(DESTDIR)$(PREFIX)/bin/nexwm
 	install -d $(DESTDIR)$(PREFIX)/share/hde/logos $(DESTDIR)$(WLSESSIONS) $(DESTDIR)$(PORTALS_DIR)
 	install -m644 data/logos/*.svg data/logos/LICENSES.md $(DESTDIR)$(PREFIX)/share/hde/logos/
@@ -367,4 +423,4 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop \
 	    $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-.PHONY: all clean install uninstall components dev reload check check-unit check-login check-media check-nexwm FORCE
+.PHONY: all clean install uninstall components dev reload check check-unit check-login check-arch check-media check-nexwm FORCE

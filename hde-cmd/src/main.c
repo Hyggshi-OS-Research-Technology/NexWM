@@ -9,19 +9,27 @@
 static void usage(FILE *out)
 {
     fprintf(out,
-            "Usage: hde-cmd [OPTIONS] [-- COMMAND [ARG...]]\n"
-            "       hde-cmd -e COMMAND [ARG...]\n"
+            "Usage: hde-cmd [OPTIONS] [--] [COMMAND [ARG...]]\n"
+            "       hde-cmd [OPTIONS] -e COMMAND [ARG...]\n"
             "\n"
             "Options:\n"
-            "  -d, --working-directory DIR  start in DIR\n"
+            "  -d, -C, --directory DIR      start in DIR (also --cwd, --working-directory)\n"
             "  -t, --title TITLE            set the initial window title\n"
-            "  -e, --execute COMMAND        run COMMAND instead of the user's shell\n"
+            "  -e, --execute COMMAND        run COMMAND instead of the user's shell (also --command)\n"
             "      --vte                    use the optional VTE backend (when built with VTE)\n"
             "  -h, --help                   show this help\n"
             "      --version                show the version and available backends\n"
             "\n"
-            "The built-in VT engine is the default. VTE is an optional, explicit backend; a build without VTE still has\n"
-            "a working terminal. Ctrl+Shift+C/V copy and paste; Shift+PageUp/PageDown scroll the output.\n");
+            "Examples:\n"
+            "  hde-cmd\n"
+            "  hde-cmd --directory ~/Projects\n"
+            "  hde-cmd -C ~/Projects -- make check\n"
+            "  hde-cmd -e git status\n"
+            "\n"
+            "In the window: right-click for Copy/Paste and terminal actions; Ctrl+Shift+T opens a new terminal,\n"
+            "Ctrl+Shift+O opens a folder in a new terminal, and Ctrl+Shift+W closes this window. Ctrl+Shift+C/V\n"
+            "copy and paste, Ctrl+Plus/Minus/0 changes font size, Shift+PageUp/PageDown scrolls, and F11 toggles\n"
+            "full screen. The built-in VT engine is the default; VTE is an optional backend.\n");
 }
 
 static int fail(const char *message, const char *value)
@@ -58,9 +66,22 @@ int main(int argc, char **argv)
 #endif
             continue;
         }
-        if (!strcmp(arg, "-d") || !strcmp(arg, "--working-directory")) {
+        if (!strcmp(arg, "-d") || !strcmp(arg, "-C") || !strcmp(arg, "--working-directory") ||
+            !strcmp(arg, "--directory") || !strcmp(arg, "--cwd")) {
             if (++i >= argc) return fail("missing directory after", arg);
             options.working_directory = argv[i];
+            continue;
+        }
+        if (!strncmp(arg, "--working-directory=", 20)) {
+            options.working_directory = arg + 20;
+            continue;
+        }
+        if (!strncmp(arg, "--directory=", 12)) {
+            options.working_directory = arg + 12;
+            continue;
+        }
+        if (!strncmp(arg, "--cwd=", 6)) {
+            options.working_directory = arg + 6;
             continue;
         }
         if (!strcmp(arg, "-t") || !strcmp(arg, "--title")) {
@@ -68,7 +89,11 @@ int main(int argc, char **argv)
             options.title = argv[i];
             continue;
         }
-        if (!strcmp(arg, "-e") || !strcmp(arg, "--execute")) {
+        if (!strncmp(arg, "--title=", 8)) {
+            options.title = arg + 8;
+            continue;
+        }
+        if (!strcmp(arg, "-e") || !strcmp(arg, "--execute") || !strcmp(arg, "--command")) {
             if (++i >= argc) return fail("missing command after", arg);
             options.command = &argv[i];
             break;

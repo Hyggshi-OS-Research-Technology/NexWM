@@ -40,6 +40,7 @@ libxkbcommon-x11-devel
 libinput-devel
 pixman-devel
 cairo-devel
+pam-devel
 libxcb-devel
 xcb-util-wm-devel
 wlroots-devel|wlroots0.21-devel|wlroots0.20-devel|wlroots0.19-devel|wlroots0.18-devel|wlroots0.17-devel
@@ -76,7 +77,6 @@ xorg-x11-server-Xwayland
 labwc
 grim
 slurp
-swaylock|gtklock
 sddm
 "
 

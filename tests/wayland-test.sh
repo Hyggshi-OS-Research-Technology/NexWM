@@ -148,6 +148,8 @@ if grep -q 'key="Super_L" onRelease="yes"' "$RC"; then pass "rc.xml: the Super k
 elif grep -q 'key="W-space"' "$RC"; then pass "rc.xml: Super+Space opens the Start menu (labwc before 0.7.3 cannot bind Super alone)"
 else fail "rc.xml binds a key to the Start menu"; fi
 check "rc.xml: F1-F3 / media keys / PrtSc run hde-hotkeys --action" sh -c "grep -q 'key=\"F3\".*hde-hotkeys --action volume-up' '$RC' && grep -q 'key=\"Print\".*--action screenshot' '$RC'"
+check "rc.xml: F4 runs hde-hotkeys --action play (playerctl play-pause)" grep -q 'key="F4".*hde-hotkeys --action play' "$RC"
+check "rc.xml: Alt+F4 still closes the focused window" grep -q 'key="A-F4".*name="Close"' "$RC"
 check "rc.xml: the touchpad settings (natural scrolling, tap to click)" sh -c "grep -q '<naturalScroll>yes</naturalScroll>' '$RC' && grep -q '<tap>yes</tap>' '$RC'"
 check "the panel is a layer-shell surface at the bottom" grep -q "hde-panel: started: panel at the bottom, 34px high (Wayland layer shell" "$LOG"
 check "the taskbar uses wlr-foreign-toplevel-management" grep -q "hde-panel: taskbar: Wayland (wlr-foreign-toplevel-management v[0-9])" "$LOG"
@@ -264,9 +266,13 @@ h0=$(nlog "battery: hidden"); wtype -s 400 -k Escape
 if wait_more "battery: hidden" "$h0" 30; then pass "Esc closes the battery panel"; else fail "Esc closes the battery panel"; fi
 
 # ---------- 6. settings follow live: panel at the top, labwc reloads its configuration ----------
-printf '[settings]\npanel_position=top\n' > "$INI"
+printf '[settings]\npanel_position=top\npanel_floating=true\npanel_inset=24\npanel_spacing=9\npanel_shadow=true\npanel_rounded=true\npanel_hover=false\n' > "$INI"
 if wait_log "hde-panel: settings changed: panel at the top, 34px high (Wayland layer shell" 50; then pass "panel_position=top moves the panel to the top"
 else fail "panel_position=top moves the panel to the top"; fi
+check "floating style, spacing and effect switches apply on Wayland" \
+    grep -q "hde-panel: visual: floating, inset 24px, spacing 9px, effects: shadow rounded hover-off" "$LOG"
+if grep -q "^hde-panel: CSS:" "$LOG"; then fail "panel appearance CSS loads without errors"
+else pass "panel appearance CSS loads without errors"; fi
 sleep 1; shot 12-panel-top
 # a panel made higher, then lower again, is as high as set again (on X11 it kept the bigger height and sank below
 # the screen; a GTK window does not shrink by itself)
@@ -288,7 +294,75 @@ if wait_more "reloads it" "$r0" 50 && grep -q '<naturalScroll>no</naturalScroll>
 else fail "a changed setting rewrites rc.xml and labwc reloads it"; fi
 printf '[settings]\n' > "$INI"; sleep 2
 
-# ---------- 7. logout ----------
+# ---------- 7. the lock screen: hde-lock and the compositor's session lock ----------
+# HDE's lock screen (src/hde-lock.c) takes the session lock of the compositor on the "HDE (Wayland)" session
+# (ext-session-lock-v1, which labwc offers), so what covers the screen is the compositor itself and no client of the
+# session can draw over it or be typed at. hde-lock asks PAM for the password; what that means is /etc/pam.d/hde-lock
+# when that file exists ("login" otherwise), so a CI container that is root writes a service file of its own: first
+# pam_permit and pam_deny check the accept/reject paths, then a small test PAM module accepts only a known test
+# password. A session lock is not a window: the compositor keeps the screen hidden unless the lock screen *unlocks* it
+# (labwc keeps the session locked when a lock client dies, which is the whole point of the protocol), so the test uses
+# a temporary PAM service and must unlock the session before it restores the machine's original PAM file.
+LOCKLOG="$OUT/lock.log"
+if [ ! -x "$B/hde-lock" ]; then
+    info "no hde-lock in $B: the lock screen is not tested (it needs pkg-config cairo and xcb or wayland-client + xkbcommon, and PAM)"
+elif [ ! -w /etc/pam.d ] && ! sudo -n true 2>/dev/null; then
+    info "no way to write /etc/pam.d/hde-lock: the lock screen is not tested (run the test as root, or with sudo)"
+else
+    if ! ${CC:-cc} -fPIC -shared -o "$OUT/pam-lock-check.so" "$HERE/pam-lock-check.c" -lpam; then
+        fail "the test PAM module builds; the Wayland lock test was not started"
+    else
+        HADPAM=0
+        if sudo -n test -f /etc/pam.d/hde-lock 2>/dev/null || [ -f /etc/pam.d/hde-lock ]; then
+            HADPAM=1; sudo -n cp /etc/pam.d/hde-lock "$OUT/pam.d-hde-lock.had" 2>/dev/null || cp /etc/pam.d/hde-lock "$OUT/pam.d-hde-lock.had"
+        fi
+        locker() { printf 'auth required %s\n' "$1" | { sudo -n tee /etc/pam.d/hde-lock >/dev/null 2>&1 || tee /etc/pam.d/hde-lock >/dev/null; }; }
+        locklog() { i=0; while [ "$i" -lt "${2:-100}" ]; do grep -q "$1" "$LOCKLOG" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+        locker pam_permit.so
+        if "$B/hde-lock" --check; then pass "hde-lock --check: this Wayland session can be locked by HDE's own lock screen"
+        else fail "hde-lock --check: this Wayland session can be locked by HDE's own lock screen"; fi
+
+        shot 07-before-lock
+        before=$(pixel "$OUT/shot-wl-07-before-lock.png" 5 5)
+        : > "$LOCKLOG"
+        PATH="$B:$PATH" "$B/hde-hotkeys" --action lock > "$LOCKLOG" 2>&1
+        if locklog "the Wayland session is locked"; then pass "the lock key of HDE locks the session with HDE's own hde-lock (ext-session-lock-v1)"
+        else fail "the lock key of HDE locks the session with HDE's own hde-lock (ext-session-lock-v1)"; fi
+        check "... and hde-lock is the program that is running" pgrep -x hde-lock
+        sleep 1
+        shot 07-locked
+        after=$(pixel "$OUT/shot-wl-07-locked.png" 5 5)
+        if [ "$after" = "22 26 33" ]; then pass "the compositor shows the lock screen and nothing else (its background 0x161a21 where the panel was)"
+        else fail "the compositor shows the lock screen and nothing else (the panel's corner reads '$after', not '22 26 33')"; fi
+        colours=$(command -v convert >/dev/null 2>&1 && convert "$OUT/shot-wl-07-locked.png" -format "%k" info: 2>/dev/null)
+        if [ "${colours:-0}" -gt 8 ] 2>/dev/null; then pass "the clock, the date and the user's name are drawn on it ($colours colours)"
+        else fail "the clock, the date and the user's name are drawn on it (${colours:-?} colours)"; fi
+
+        locker pam_deny.so
+        wtype -d 20 "not the password"; wtype -k Return
+        if locklog "the password was not accepted" 50 && pgrep -x hde-lock >/dev/null; then
+            pass "a password PAM turns down is not accepted, and the session stays locked"
+        else fail "a password PAM turns down is not accepted, and the session stays locked"; fi
+        sleep 0.5; shot 07-wrong-password
+
+        locker "$OUT/pam-lock-check.so"
+        wtype -d 20 "hde-lock-test-pass-42"; wtype -k Return
+        if locklog "the Wayland session is unlocked" && ! pgrep -x hde-lock >/dev/null; then
+            pass "PAM accepts the typed correct test password, and the session comes back"
+        else fail "PAM accepts the typed correct test password, and the session comes back"; fi
+        check "... the log says what it did" grep -q "the password of" "$LOCKLOG"
+        sleep 1
+        shot 07-unlocked
+        after2=$(pixel "$OUT/shot-wl-07-unlocked.png" 5 5)
+        if [ "$after2" != "22 26 33" ]; then pass "... and the panel is on the screen again (${after2:-?}, was $before before locking)"
+        else fail "... and the panel is on the screen again (still '$after2')"; fi
+        sed 's/^/INFO:   /' "$LOCKLOG" | tail -n 6 | tee -a "$OUT/results.txt"
+        sudo -n rm -f /etc/pam.d/hde-lock 2>/dev/null || rm -f /etc/pam.d/hde-lock 2>/dev/null
+        [ "$HADPAM" = 1 ] && { sudo -n cp "$OUT/pam.d-hde-lock.had" /etc/pam.d/hde-lock 2>/dev/null || cp "$OUT/pam.d-hde-lock.had" /etc/pam.d/hde-lock; }
+        fi
+fi
+
+# ---------- 8. logout ----------
 # The pid of *this* session's hde-session, asked of the panel (see session_pid): the environment of the test itself is
 # no use here. $START is the process hde-start turned into labwc, which is a child of the session — signalling it would
 # take the compositor down and leave the session to notice and end itself ("the Wayland compositor is gone"), without

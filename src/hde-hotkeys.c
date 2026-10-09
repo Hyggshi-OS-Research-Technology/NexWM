@@ -1,7 +1,7 @@
 /* hde-hotkeys — HDE system shortcuts (Xlib + XInput2), runs independently of GTK.
  *
  *  Super (tapped alone)          open / close the Start menu (command sent to hde-panel, see hde-ipc.h)
- *  F1 / F2 / F3                  mute / volume down / volume up   (settings.ini: fkeys_sound=true)
+ *  F1 / F2 / F3 / F4             mute / volume down / volume up / play-pause (settings.ini: fkeys_sound=true)
  *  F6 / F7                       screen brightness down / up      (settings.ini: fkeys_display=true)
  *  F8, Super+P, the display key  "Project": PC screen only / Duplicate / Extend / Second screen only, like
  *                                Windows + P (the hde-settings --project window; pressing it again moves on)
@@ -345,6 +345,7 @@ static const Binding bindings[] = {
     { XK_F1, 0, A_VOL_MUTE, G_FKEYS, "F1" },
     { XK_F2, 0, A_VOL_DOWN, G_FKEYS, "F2" },
     { XK_F3, 0, A_VOL_UP, G_FKEYS, "F3" },
+    { XK_F4, 0, A_PLAY, G_FKEYS, "F4" },
     { XK_F6, 0, A_BRIGHT_DOWN, G_FKEYS_DISPLAY, "F6" },
     { XK_F7, 0, A_BRIGHT_UP, G_FKEYS_DISPLAY, "F7" },
     { XK_F8, 0, A_PROJECT, G_FKEYS_DISPLAY, "F8" },

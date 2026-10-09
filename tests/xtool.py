@@ -174,6 +174,21 @@ def maximize(win):
     x.XSync(d, 0)
 
 
+def activate(win):
+    """Ask the window manager for a window the way HDE's panel does: _NET_ACTIVE_WINDOW (EWMH), which is what the
+    taskbar of the panel sends on a click — a minimized window comes back, one of another workspace is switched to."""
+    ev = (ctypes.c_long * 24)()
+    ev[0] = 33                           # ClientMessage
+    ev[4] = win
+    ev[5] = x.XInternAtom(d, b"_NET_ACTIVE_WINDOW", 0)
+    ev[6] = 32
+    ev[7] = 2                            # source: a pager (the panel)
+    ev[8] = 0                            # no timestamp: take the event when it comes
+    ev[9] = 0                            # the window that asked (none: this is the panel)
+    x.XSendEvent(d, root, 0, (1 << 19) | (1 << 20), ev)     # SubstructureNotify | SubstructureRedirect
+    x.XSync(d, 0)
+
+
 def popups():
     r, p, kids, nk = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.POINTER(ctypes.c_ulong)(), ctypes.c_uint()
     x.XQueryTree(d, root, ctypes.byref(r), ctypes.byref(p), ctypes.byref(kids), ctypes.byref(nk))
@@ -350,6 +365,8 @@ if __name__ == "__main__":
         print("%d %d %d %d" % g)
     elif cmd == "maximize":
         maximize(int(sys.argv[2], 0))
+    elif cmd == "activate":
+        activate(int(sys.argv[2], 0))
     elif cmd == "wm-state":
         raw, fmt = get_prop(int(sys.argv[2], 0), "_NET_WM_STATE")
         print(" ".join(atom_name(a) for a in raw) if raw and fmt == 32 else "")

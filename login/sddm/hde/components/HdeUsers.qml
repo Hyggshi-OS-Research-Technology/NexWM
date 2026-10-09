@@ -11,7 +11,10 @@ Item {
     property color accent: "#3584e4"
     property string fontFamily: ""
     property int currentIndex: 0
-    readonly property int count: userModel ? userModel.count : 0
+    // `userModel` is always there in SDDM's greeter, but a theme has to survive being loaded without it (typeof: a
+    // plain `userModel ? ...` throws a ReferenceError when the name does not exist at all)
+    readonly property bool haveModel: (typeof userModel !== "undefined") && userModel !== null
+    readonly property int count: haveModel ? userModel.count : 0
     readonly property string currentName: (count > 0 && tileRepeater.itemAt(currentIndex))
                                            ? tileRepeater.itemAt(currentIndex).userName : ""
     signal selected(string name)
@@ -35,7 +38,7 @@ Item {
 
         Repeater {
             id: tileRepeater
-            model: userModel
+            model: root.haveModel ? userModel : []
 
             delegate: Item {
                 id: tile
@@ -121,7 +124,7 @@ Item {
     }
     Component.onCompleted: {
         // the user who logged in last, when the model knows it
-        if (userModel && userModel.lastIndex >= 0 && userModel.lastIndex < root.count)
+        if (root.haveModel && userModel.lastIndex >= 0 && userModel.lastIndex < root.count)
             root.currentIndex = userModel.lastIndex;
         if (root.count > 0) root.selected(root.currentName);
     }

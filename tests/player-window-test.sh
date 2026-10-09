@@ -15,8 +15,8 @@
 # next to it: that they are found and named in the log, that "v" hides and shows them again over mpv's socket, and that
 # a video with nothing next to it says so.
 #
-# Needs: Xvfb, xdotool, Metacity, python3 (tests/fake-mpv.py), dbus-run-session.
-#   sudo apt install xvfb xdotool metacity python3 dbus-x11
+# Needs: Xvfb, xdotool, Metacity, python3 (tests/fake-mpv.py), dbus-run-session, playerctl.
+#   sudo apt install xvfb xdotool metacity python3 dbus-x11 playerctl
 #   make && sh tests/player-window-test.sh
 # Output: $HDE_TEST_OUT (default /tmp/hde-player): results.txt, player.log, engine.log, shot-*.png
 set -u
@@ -42,7 +42,7 @@ if [ -z "${HDE_PLAYER_INNER:-}" ]; then
     mkdir -p "$MUSIC/sub" "$MUSIC2" "$FILMS" "$HOME_DIR/.config/hde" "$OUT/run" "$OUT/empty" "$FAKEBIN"
     chmod 700 "$OUT/run"
     : > "$OUT/results.txt"
-    for t in Xvfb xdotool metacity dbus-run-session python3; do
+    for t in Xvfb xdotool metacity dbus-run-session python3 playerctl; do
         command -v $t >/dev/null 2>&1 || { echo "FAIL: missing $t" | tee -a "$OUT/results.txt"; exit 2; }
     done
     # The songs: the stand-in for mpv plays nothing, so the bytes do not matter — the names do, and the extension,
@@ -97,6 +97,16 @@ shot() { command -v import >/dev/null 2>&1 && import -display "$DISPLAY" -window
 : > "$ENGINE_LOG"
 PLAYER_PID=
 PLAYER_WINDOW=
+HOTKEYS_PID=
+stop_hotkeys() {
+    if [ -n "$HOTKEYS_PID" ]; then
+        kill -TERM "$HOTKEYS_PID" 2>/dev/null || :
+        wait "$HOTKEYS_PID" 2>/dev/null || :
+        HOTKEYS_PID=
+    fi
+}
+trap stop_hotkeys 0
+trap 'exit 143' 1 2 15
 
 since() { sed -n "$(($1 + 1)),\$p" "$PLAYER_LOG"; }
 mark() { wc -l < "$PLAYER_LOG" | tr -d ' '; }
@@ -191,6 +201,79 @@ if wait_new "$m0" "mpv is listening" 5; then pass "the window connects to mpv's 
 else fail "the window connects to mpv's socket"; fi
 if grep -q '"get_property","duration"' "$ENGINE_LOG"; then pass "it asks mpv how long the track is (the tags have nothing here)"
 else fail "it asks mpv for the duration"; fi
+
+# ---------- MPRIS: playerctl and desktop media controls ----------
+if playerctl --list-all 2>/dev/null | grep -Fxq "hde-media"; then
+    pass "the player is listed on MPRIS as hde-media"
+else fail "the player is listed on MPRIS as hde-media"; fi
+status=$(playerctl --player=hde-media status 2>/dev/null)
+[ "$status" = "Playing" ] && pass "MPRIS reports the active track as Playing" \
+    || fail "MPRIS reports Playing (got '${status:-nothing}')"
+title=$(playerctl --player=hde-media metadata xesam:title 2>/dev/null)
+case "$title" in *song1.mp3*) pass "MPRIS publishes the current track title ($title)" ;;
+*) fail "MPRIS publishes song1.mp3 as the title (got '${title:-nothing}')" ;; esac
+m=$(mark)
+if playerctl --player=hde-media pause >/dev/null 2>&1 && wait_new "$m" "paused" 5 && grep -q '"pause",true' "$ENGINE_LOG"; then
+    pass "playerctl pause reaches mpv over MPRIS"
+else fail "playerctl pause reaches mpv over MPRIS"; fi
+status=$(playerctl --player=hde-media status 2>/dev/null)
+[ "$status" = "Paused" ] && pass "MPRIS reports the paused state" || fail "MPRIS reports Paused (got '${status:-nothing}')"
+m=$(mark)
+if playerctl --player=hde-media play >/dev/null 2>&1 && wait_new "$m" "playing on" 5; then
+    pass "playerctl play resumes the track over MPRIS"
+else fail "playerctl play resumes the track over MPRIS"; fi
+m=$(mark)
+if playerctl --player=hde-media next >/dev/null 2>&1 && wait_new "$m" "playing 2/3: song2.mp3" 5; then
+    pass "playerctl next changes the current track"
+else fail "playerctl next changes the current track"; fi
+m=$(mark)
+if playerctl --player=hde-media previous >/dev/null 2>&1 && wait_new "$m" "playing 1/3: song1.mp3" 5; then
+    pass "playerctl previous changes back to the first track"
+else fail "playerctl previous changes back to the first track"; fi
+
+# F4 is HDE's unmodified play/pause key; it uses the same MPRIS command as the hardware media key.
+if [ -x "$B/hde-hotkeys" ]; then
+    HDE_DEBUG=1 "$B/hde-hotkeys" > "$OUT/hotkeys.log" 2>&1 &
+    HOTKEYS_PID=$!
+    for i in $(seq 1 30); do
+        grep -q 'fkeys_sound=1' "$OUT/hotkeys.log" && break
+        kill -0 "$HOTKEYS_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    m=$(mark); player_key F4
+    if wait_new "$m" "paused" 5 && [ "$(playerctl --player=hde-media status 2>/dev/null)" = Paused ]; then
+        pass "F4 pauses the player through playerctl"
+    else fail "F4 pauses the player through playerctl"; fi
+    m=$(mark); player_key F4
+    if wait_new "$m" "playing on" 5 && [ "$(playerctl --player=hde-media status 2>/dev/null)" = Playing ]; then
+        pass "F4 again resumes the player through playerctl"
+    else fail "F4 again resumes the player through playerctl"; fi
+
+    echo 'fkeys_sound=false' >> "$XDG_CONFIG_HOME/hde/settings.ini"
+    kill -HUP "$HOTKEYS_PID" 2>/dev/null || :
+    for i in $(seq 1 30); do
+        grep -q 'fkeys_sound=0' "$OUT/hotkeys.log" && break
+        kill -0 "$HOTKEYS_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    m=$(mark); player_key F4
+    if grep -q 'fkeys_sound=0' "$OUT/hotkeys.log" && ! since "$m" | grep -q 'paused' &&
+       [ "$(playerctl --player=hde-media status 2>/dev/null)" = Playing ]; then
+        pass "fkeys_sound=false releases F4 without pausing the player"
+    else fail "fkeys_sound=false releases F4 without pausing the player"; fi
+    sed -i '/^fkeys_sound=/d' "$XDG_CONFIG_HOME/hde/settings.ini"
+    stop_hotkeys
+
+    # The labwc F4 binding runs this one-shot action; MPRIS needs no Wayland connection or X display.
+    m=$(mark); WAYLAND_DISPLAY=media-action-test "$B/hde-hotkeys" --action play
+    if wait_new "$m" "paused" 5; then pass "the Wayland F4 action pauses through playerctl"
+    else fail "the Wayland F4 action pauses through playerctl"; fi
+    m=$(mark); WAYLAND_DISPLAY=media-action-test "$B/hde-hotkeys" --action play
+    if wait_new "$m" "playing on" 5; then pass "the Wayland F4 action resumes through playerctl"
+    else fail "the Wayland F4 action resumes through playerctl"; fi
+else
+    skip "hde-hotkeys is not built: F4 media binding checks"
+fi
 
 # ---------- 2. the transport ----------
 m1=$(mark); player_key Right

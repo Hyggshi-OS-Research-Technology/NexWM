@@ -6,6 +6,7 @@ Column {
     id: root
     property alias text: input.text
     readonly property string passwordText: input.text
+    readonly property bool editing: input.activeFocus   // the keyboard is in this field
     property string hint: ""
     property color accent: "#3584e4"
     property string fontFamily: ""
@@ -15,8 +16,11 @@ Column {
     signal accepted()
     spacing: 5
 
-    function focusField() { input.focus = true; }
-    function clear() { input.text = ""; root.revealed = false; input.focus = true; }
+    // forceActiveFocus, not focus = true: the greeter shows its window after the theme has loaded and takes the
+    // keyboard for itself on the way, which leaves a field that only asked politely without it (typing then goes
+    // nowhere, and Enter is answered by the card instead of by the field: exactly what a login screen must not do).
+    function focusField() { input.forceActiveFocus(); }
+    function clear() { input.text = ""; root.revealed = false; input.forceActiveFocus(); }
     // SDDM >= 0.19 has a `keyboard` object in the theme; with an older one this is simply false
     function capsLockOn() {
         return (typeof keyboard !== "undefined") && keyboard && keyboard.capsLock === true;

@@ -12,35 +12,34 @@
  */
 #include "hde-settings.h"
 #include "hde-theme.h"
+#include <gio/gio.h>
+#include <glib/gstdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* Accent: item 0 = Automatic (the selection colour of the GTK theme: orange with Yaru, blue with Adwaita — HDE then
- * matches the switches and sliders the theme draws), then the fixed colours (also given to the theme's widgets). */
-static const char *const accent_names[] = { "Blue", "Purple", "Green", "Orange", "Pink", "Red", "Teal", "Slate" };
-static const char *const accent_values[] = { "#3584e4", "#9141ac", "#2ec27e", "#ff7800", "#d56199", "#e01b24",
-                                             "#2190a4", "#6f8396" };
-enum { ACC_SWATCH, ACC_LABEL, ACC_VALUE, ACC_N };
+/* The first accent swatch follows the active GTK theme; the remaining colors are fixed choices. */
+#define ACCENT_COUNT 9
+static const char *const accent_names[ACCENT_COUNT] = {
+    "Blue", "Teal", "Green", "Gold", "Orange", "Red", "Pink", "Purple", "Slate"
+};
+static const char *const accent_values[ACCENT_COUNT] = {
+    "#3584e4", "#2190a4", "#2ec27e", "#e5a50a", "#ff7800", "#e01b24", "#d56199", "#9141ac", "#6f8396"
+};
 
-static GtkWidget *light_card, *dark_card, *theme_combo, *icon_combo, *accent_combo, *style_note;
+static GtkWidget *light_card, *dark_card, *theme_combo, *icon_combo, *style_note;
+static GtkWidget *accent_buttons[ACCENT_COUNT + 1], *accent_palette, *accent_custom_button;
+static GtkWidget *wallpaper_flow, *wallpaper_group;
+static GtkCssProvider *appearance_css;
+static GFileMonitor *desktop_config_monitor;
+static guint wallpaper_sync_source;
 static gboolean loading;
+
+static void on_accent_toggled(GtkToggleButton *button, gpointer data);
+static void on_wallpaper_toggled(GtkToggleButton *button, gpointer data);
 
 static gboolean current_is_dark(void)
 {
-    int idx = cfg_get_int("theme_index", 0);
-    if (idx == 1) return FALSE;
-    if (idx == 2) return TRUE;
-    char *cur = hde_theme_current_gtk3();
-    gboolean d = hde_theme_name_is_dark(cur);
-    g_free(cur);
-    if (!d) {
-        char *path = g_build_filename(g_get_user_config_dir(), "gtk-3.0", "settings.ini", NULL);
-        GKeyFile *kf = g_key_file_new();
-        if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL))
-            d = g_key_file_get_boolean(kf, "Settings", "gtk-application-prefer-dark-theme", NULL);
-        g_key_file_free(kf);
-        g_free(path);
-    }
-    return d;
+    return cfg_get_int("theme_index", 0) == HDE_STYLE_DARK;
 }
 
 static char *base_theme(void)
@@ -52,6 +51,18 @@ static char *base_theme(void)
     char *light = hde_theme_resolve_name(HDE_STYLE_LIGHT, cur);   /* strip the -dark suffix if present */
     g_free(cur);
     return light;
+}
+
+static void style_note_update(void)
+{
+    if (!style_note) return;
+    char *theme = base_theme();
+    char *text = g_strdup_printf("Using “%s” with the %s appearance. Running GTK apps switch immediately; a few apps "
+                                 "(Qt, Electron, Firefox) may need a restart.",
+                                 theme, current_is_dark() ? "dark" : "default");
+    gtk_label_set_text(GTK_LABEL(style_note), text);
+    g_free(text);
+    g_free(theme);
 }
 
 /* Apply style + base theme system-wide. */
@@ -69,13 +80,8 @@ static void apply_style(HdeStyle style, const char *base)
     hde_theme_write_system(&info);
     hde_theme_info_clear(&info);
     hde_theme_apply_process();
-    settings_status("%s mode applied (GTK theme: %s)", style == HDE_STYLE_DARK ? "Dark" : "Light", eff);
-    if (style_note) {
-        char *t = g_strdup_printf("Using GTK theme “%s”. Running GTK apps switch immediately; a few apps "
-                                  "(Qt, Electron, Firefox) may need a restart.", eff);
-        gtk_label_set_text(GTK_LABEL(style_note), t);
-        g_free(t);
-    }
+    settings_status("%s style applied (GTK theme: %s)", style == HDE_STYLE_DARK ? "Dark" : "Default", eff);
+    style_note_update();
     g_free(eff);
 }
 
@@ -113,75 +119,146 @@ static void write_system_now(void)
     hde_theme_apply_process();
 }
 
-/* a round swatch of the colour for the combo box */
+/* Render a clean circular swatch for the accent palette. */
 static GdkPixbuf *accent_swatch(const char *color)
 {
-    const int sc = 1, sz = 16;
-    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, sz, sz);
-    cairo_t *cr = cairo_create(surf);
-    GdkRGBA c;
-    if (!gdk_rgba_parse(&c, color)) gdk_rgba_parse(&c, "#3584e4");
-    cairo_arc(cr, sz / 2.0, sz / 2.0, sz / 2.0 - sc, 0, 2 * G_PI);
-    gdk_cairo_set_source_rgba(cr, &c);
+    const int size = 28;
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+    cairo_t *cr = cairo_create(surface);
+    GdkRGBA rgba;
+    if (!gdk_rgba_parse(&rgba, color)) gdk_rgba_parse(&rgba, "#3584e4");
+    cairo_arc(cr, size / 2.0, size / 2.0, size / 2.0 - 1.5, 0, 2 * G_PI);
+    gdk_cairo_set_source_rgba(cr, &rgba);
     cairo_fill_preserve(cr);
-    cairo_set_source_rgba(cr, 0, 0, 0, 0.25);
-    cairo_set_line_width(cr, sc);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.18);
+    cairo_set_line_width(cr, 1.5);
     cairo_stroke(cr);
     cairo_destroy(cr);
-    GdkPixbuf *pb = gdk_pixbuf_get_from_surface(surf, 0, 0, sz, sz);
-    cairo_surface_destroy(surf);
-    return pb;
+    GdkPixbuf *pixbuf = gdk_pixbuf_get_from_surface(surface, 0, 0, size, size);
+    cairo_surface_destroy(surface);
+    return pixbuf;
 }
 
-/* the item of the colour in settings.ini: 0 = Automatic (missing / "auto"), a fixed colour, else the last (custom) */
+/* 0 = Automatic, 1..ACCENT_COUNT = fixed colors, final item = a custom color from settings.ini. */
 static int accent_item_now(void)
 {
-    char *v = cfg_get_string("accent", "");
+    char *value = cfg_get_string("accent", "auto");
     int item = 0;
-    if (v[0] == '#') {
-        item = -1;
-        for (guint i = 0; i < G_N_ELEMENTS(accent_values); i++)
-            if (!g_ascii_strcasecmp(v, accent_values[i])) item = (int)i + 1;
-        if (item < 0) item = (int)G_N_ELEMENTS(accent_values) + 1;          /* "Custom", written by hand */
+    if (value[0] == '#') {
+        item = ACCENT_COUNT + 1;
+        for (guint i = 0; i < G_N_ELEMENTS(accent_values); i++) {
+            if (!g_ascii_strcasecmp(value, accent_values[i])) {
+                item = (int)i + 1;
+                break;
+            }
+        }
     }
-    g_free(v);
+    g_free(value);
     return item;
 }
 
-/* the swatch of Automatic shows the colour of the GTK theme in use */
-static void accent_refresh_auto(void)
+static GtkWidget *accent_button_new(const char *label, const char *color, const char *value, GtkWidget *group)
 {
-    if (!accent_combo) return;
-    GtkTreeModel *m = gtk_combo_box_get_model(GTK_COMBO_BOX(accent_combo));
-    GtkTreeIter it;
-    if (!gtk_tree_model_get_iter_first(m, &it)) return;
-    char *auto_color = hde_theme_accent_from_gtk();
-    GdkPixbuf *pb = accent_swatch(auto_color ? auto_color : "#3584e4");
-    gtk_list_store_set(GTK_LIST_STORE(m), &it, ACC_SWATCH, pb, -1);
-    g_object_unref(pb);
-    g_free(auto_color);
+    GtkWidget *button = group ? gtk_radio_button_new_from_widget(GTK_RADIO_BUTTON(group)) : gtk_radio_button_new(NULL);
+    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(button), FALSE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(button), "appearance-accent-swatch");
+    gtk_widget_set_size_request(button, 42, 42);
+    GdkPixbuf *pixbuf = accent_swatch(color);
+    GtkWidget *image = gtk_image_new_from_pixbuf(pixbuf);
+    g_object_unref(pixbuf);
+    gtk_button_set_image(GTK_BUTTON(button), image);
+    gtk_button_set_always_show_image(GTK_BUTTON(button), TRUE);
+    gtk_widget_set_tooltip_text(button, label);
+    g_object_set_data_full(G_OBJECT(button), "accent-value", g_strdup(value), g_free);
+    g_object_set_data_full(G_OBJECT(button), "accent-label", g_strdup(label), g_free);
+    g_signal_connect(button, "toggled", G_CALLBACK(on_accent_toggled), NULL);
+    return button;
 }
 
-static void on_accent(GtkComboBox *c, gpointer d)
+static void appearance_css_apply(void)
 {
-    (void)d;
-    if (loading) return;
-    GtkTreeIter it;
-    if (!gtk_combo_box_get_active_iter(c, &it)) return;
-    char *label = NULL, *value = NULL;
-    gtk_tree_model_get(gtk_combo_box_get_model(c), &it, ACC_LABEL, &label, ACC_VALUE, &value, -1);
+    HdeThemeInfo info;
+    hde_theme_info_load(&info);
+    const char *accent = info.accent ? info.accent : "#3584e4";
+    char *css = g_strdup_printf(
+        ".appearance-surface { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.10); border-radius: 13px; padding: 10px; }"
+        ".appearance-style { padding: 8px; border-radius: 13px; background-image: none; }"
+        ".appearance-style:checked { box-shadow: inset 0 0 0 2px %s; background-color: alpha(%s, 0.08); }"
+        ".appearance-accent-swatch { padding: 2px; border: 2px solid transparent; border-radius: 23px; background-image: none; }"
+        ".appearance-accent-swatch:checked { border-color: %s; background-color: alpha(%s, 0.10); }"
+        ".appearance-wallpaper-card { padding: 4px; border: 2px solid transparent; border-radius: 12px; background-image: none; }"
+        ".appearance-wallpaper-card:checked { border-color: %s; background-color: alpha(%s, 0.08); }"
+        ".appearance-wallpaper-preview { border-radius: 8px; }"
+        ".appearance-wallpaper-name { font-size: 11px; opacity: 0.78; }"
+        ".appearance-add-picture { min-width: 132px; padding: 6px 12px; background-image: none; }",
+        accent, accent, accent, accent, accent, accent);
+    if (!appearance_css) {
+        appearance_css = gtk_css_provider_new();
+        GdkScreen *screen = gdk_screen_get_default();
+        if (screen)
+            gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(appearance_css),
+                                                      GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    }
+    gtk_css_provider_load_from_data(appearance_css, css, -1, NULL);
+    g_free(css);
+    hde_theme_info_clear(&info);
+}
+
+static void accent_palette_sync(void)
+{
+    if (!accent_palette || !accent_buttons[0]) return;
+    char *auto_color = hde_theme_accent_from_gtk();
+    GdkPixbuf *auto_pixbuf = accent_swatch(auto_color ? auto_color : "#3584e4");
+    GtkWidget *auto_image = gtk_image_new_from_pixbuf(auto_pixbuf);
+    g_object_unref(auto_pixbuf);
+    gtk_button_set_image(GTK_BUTTON(accent_buttons[0]), auto_image);
+    g_free(auto_color);
+    char *current = cfg_get_string("accent", "auto");
+    int item = accent_item_now();
+    if (item <= ACCENT_COUNT) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(accent_buttons[item]), TRUE);
+    } else {
+        if (!accent_custom_button) {
+            accent_custom_button = accent_button_new("Custom accent", current, current, accent_buttons[0]);
+            gtk_box_pack_start(GTK_BOX(accent_palette), accent_custom_button, FALSE, FALSE, 0);
+            debug_geometry_watch(accent_custom_button, "appearance-accent-custom");
+        } else {
+            const char *old_value = g_object_get_data(G_OBJECT(accent_custom_button), "accent-value");
+            if (g_strcmp0(old_value, current)) {
+                GdkPixbuf *pixbuf = accent_swatch(current);
+                GtkWidget *image = gtk_image_new_from_pixbuf(pixbuf);
+                g_object_unref(pixbuf);
+                gtk_button_set_image(GTK_BUTTON(accent_custom_button), image);
+                g_object_set_data_full(G_OBJECT(accent_custom_button), "accent-value", g_strdup(current), g_free);
+                g_object_set_data_full(G_OBJECT(accent_custom_button), "accent-label",
+                                       g_strdup_printf("Custom (%s)", current), g_free);
+                gtk_widget_set_tooltip_text(accent_custom_button, "Custom accent");
+            }
+        }
+        gtk_widget_show_all(accent_custom_button);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(accent_custom_button), TRUE);
+    }
+    g_free(current);
+}
+
+static void on_accent_toggled(GtkToggleButton *button, gpointer data)
+{
+    (void)data;
+    if (loading || !gtk_toggle_button_get_active(button)) return;
+    const char *value = g_object_get_data(G_OBJECT(button), "accent-value");
+    const char *label = g_object_get_data(G_OBJECT(button), "accent-label");
     GKeyFile *kf = cfg_begin();
-    g_key_file_remove_key(kf, CONFIG_GROUP, "accent_index", NULL);     /* older versions: the index of the colour */
+    g_key_file_remove_key(kf, CONFIG_GROUP, "accent_index", NULL);
     g_key_file_set_string(kf, CONFIG_GROUP, "accent", value && *value ? value : "auto");
     cfg_commit(kf);
-    if (value && *value) settings_status("Accent color: %s", label);
+    appearance_css_apply();
+    if (value && g_ascii_strcasecmp(value, "auto"))
+        settings_status("Accent color: %s", label ? label : value);
     else {
         char *auto_color = hde_theme_accent_from_gtk();
         settings_status("Accent color: automatic, %s like the GTK theme", auto_color ? auto_color : "#3584e4");
         g_free(auto_color);
     }
-    g_free(label);
-    g_free(value);
 }
 
 static void on_icons(GtkComboBox *c, gpointer d)
@@ -208,9 +285,14 @@ static void on_font(GtkFontButton *b, gpointer d)
 }
 
 /* hde-desktop reads the wallpaper from ~/.config/hde/config.ini [desktop] and reloads it when the file changes. */
+static char *desktop_config_path(void)
+{
+    return g_build_filename(g_get_user_config_dir(), "hde", "config.ini", NULL);
+}
+
 static void desktop_config_set(const char *key, const char *str, int num)
 {
-    char *path = g_build_filename(g_get_user_config_dir(), "hde", "config.ini", NULL);
+    char *path = desktop_config_path();
     char *dir = g_path_get_dirname(path);
     g_mkdir_with_parents(dir, 0755);
     GKeyFile *kf = g_key_file_new();
@@ -223,28 +305,263 @@ static void desktop_config_set(const char *key, const char *str, int num)
     g_free(path);
 }
 
+static char *wallpaper_current_path(void)
+{
+    char *path = desktop_config_path();
+    GKeyFile *kf = g_key_file_new();
+    char *wallpaper = NULL;
+    if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL))
+        wallpaper = g_key_file_get_string(kf, "desktop", "wallpaper", NULL);
+    g_key_file_free(kf);
+    g_free(path);
+    if (!wallpaper || !*wallpaper) {
+        g_free(wallpaper);
+        wallpaper = cfg_get_string("wallpaper", "");
+    }
+    return wallpaper;
+}
+
+static gboolean wallpaper_is_image(const char *name)
+{
+    static const char *const extensions[] = { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", NULL };
+    for (guint i = 0; extensions[i]; i++)
+        if (g_str_has_suffix(name, extensions[i]) ||
+            (strlen(name) > strlen(extensions[i]) &&
+             !g_ascii_strcasecmp(name + strlen(name) - strlen(extensions[i]), extensions[i])))
+            return TRUE;
+    return FALSE;
+}
+
+#define WALLPAPER_GALLERY_LIMIT 40
+static void wallpaper_collect_dir(const char *directory, int depth, GPtrArray *files, GHashTable *seen)
+{
+    if (!directory || !*directory || files->len >= WALLPAPER_GALLERY_LIMIT ||
+        !g_file_test(directory, G_FILE_TEST_IS_DIR)) return;
+    GError *error = NULL;
+    GDir *dir = g_dir_open(directory, 0, &error);
+    if (!dir) {
+        g_clear_error(&error);
+        return;
+    }
+    const char *name;
+    while ((name = g_dir_read_name(dir)) && files->len < WALLPAPER_GALLERY_LIMIT) {
+        char *path = g_build_filename(directory, name, NULL);
+        if (g_file_test(path, G_FILE_TEST_IS_REGULAR) && wallpaper_is_image(name)) {
+            char *canonical = g_canonicalize_filename(path, NULL);
+            if (!g_hash_table_contains(seen, canonical)) {
+                g_hash_table_add(seen, g_strdup(canonical));
+                g_ptr_array_add(files, canonical);
+            } else {
+                g_free(canonical);
+            }
+        } else if (depth > 0 && g_file_test(path, G_FILE_TEST_IS_DIR)) {
+            wallpaper_collect_dir(path, depth - 1, files, seen);
+        }
+        g_free(path);
+    }
+    g_dir_close(dir);
+}
+
+static gint wallpaper_compare(gconstpointer a, gconstpointer b)
+{
+    return g_ascii_strcasecmp(*(char *const *)a, *(char *const *)b);
+}
+
+static gboolean wallpaper_add_card(const char *path, const char *current)
+{
+    GError *error = NULL;
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file_at_scale(path, 144, 78, TRUE, &error);
+    if (!pixbuf) {
+        g_clear_error(&error);
+        return FALSE;
+    }
+    GtkWidget *button = wallpaper_group
+        ? gtk_radio_button_new_from_widget(GTK_RADIO_BUTTON(wallpaper_group)) : gtk_radio_button_new(NULL);
+    gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(button), FALSE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(button), "appearance-wallpaper-card");
+    GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    GtkWidget *image = gtk_image_new_from_pixbuf(pixbuf);
+    g_object_unref(pixbuf);
+    gtk_widget_set_halign(image, GTK_ALIGN_CENTER);
+    gtk_style_context_add_class(gtk_widget_get_style_context(image), "appearance-wallpaper-preview");
+    gtk_box_pack_start(GTK_BOX(content), image, FALSE, FALSE, 0);
+    char *basename = g_path_get_basename(path);
+    GtkWidget *label = gtk_label_new(basename);
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
+    gtk_widget_set_size_request(label, 128, -1);
+    gtk_style_context_add_class(gtk_widget_get_style_context(label), "appearance-wallpaper-name");
+    gtk_box_pack_start(GTK_BOX(content), label, FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(button), content);
+    gtk_widget_set_tooltip_text(button, path);
+    g_object_set_data_full(G_OBJECT(button), "wallpaper-path", g_strdup(path), g_free);
+    g_signal_connect(button, "toggled", G_CALLBACK(on_wallpaper_toggled), NULL);
+    gtk_flow_box_insert(GTK_FLOW_BOX(wallpaper_flow), button, -1);
+    if (!wallpaper_group) wallpaper_group = button;
+    if (current && !g_strcmp0(path, current))
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(button), TRUE);
+    g_free(basename);
+    return TRUE;
+}
+
+static void wallpaper_gallery_refresh(void)
+{
+    if (!wallpaper_flow) return;
+    gboolean previous_loading = loading;
+    loading = TRUE;
+    GList *children = gtk_container_get_children(GTK_CONTAINER(wallpaper_flow));
+    for (GList *item = children; item; item = item->next) gtk_widget_destroy(GTK_WIDGET(item->data));
+    g_list_free(children);
+    wallpaper_group = NULL;
+
+    char *current = wallpaper_current_path();
+    GPtrArray *files = g_ptr_array_new_with_free_func(g_free);
+    GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    const char *pictures = g_get_user_special_dir(G_USER_DIRECTORY_PICTURES);
+    char *user_backgrounds = g_build_filename(g_get_user_data_dir(), "backgrounds", NULL);
+    char *user_wallpapers = g_build_filename(g_get_user_data_dir(), "wallpapers", NULL);
+    const char *dirs[] = { user_backgrounds, user_wallpapers, pictures,
+                           "/usr/share/backgrounds", "/usr/share/wallpapers", "/usr/share/xfce4/backdrops", NULL };
+    for (guint i = 0; dirs[i] && files->len < WALLPAPER_GALLERY_LIMIT; i++)
+        wallpaper_collect_dir(dirs[i], i < 2 ? 0 : 1, files, seen);
+    g_ptr_array_sort(files, wallpaper_compare);
+
+    guint added = 0;
+    gboolean selected = FALSE;
+    if (current && *current && g_file_test(current, G_FILE_TEST_IS_REGULAR)) {
+        if (wallpaper_add_card(current, current)) {
+            added++;
+            selected = TRUE;
+        }
+    }
+    for (guint i = 0; i < files->len && added < WALLPAPER_GALLERY_LIMIT; i++) {
+        const char *path = g_ptr_array_index(files, i);
+        if (current && !g_strcmp0(path, current)) continue;
+        if (wallpaper_add_card(path, current)) {
+            added++;
+            if (current && !g_strcmp0(path, current)) selected = TRUE;
+        }
+    }
+    if (!selected && wallpaper_group)
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(wallpaper_group), FALSE);
+    if (!added) {
+        GtkWidget *empty = gtk_label_new("No wallpaper images found. Add a picture to get started.");
+        gtk_label_set_line_wrap(GTK_LABEL(empty), TRUE);
+        gtk_widget_set_margin_top(empty, 16);
+        gtk_widget_set_margin_bottom(empty, 16);
+        gtk_flow_box_insert(GTK_FLOW_BOX(wallpaper_flow), empty, -1);
+    }
+    gtk_widget_show_all(wallpaper_flow);
+    g_free(current);
+    g_free(user_backgrounds);
+    g_free(user_wallpapers);
+    g_hash_table_unref(seen);
+    g_ptr_array_unref(files);
+    loading = previous_loading;
+}
+
+static void wallpaper_gallery_sync_current(void)
+{
+    if (!wallpaper_flow) return;
+    char *current = wallpaper_current_path();
+    gboolean matched = FALSE;
+    gboolean previous_loading = loading;
+    loading = TRUE;
+    GList *children = gtk_container_get_children(GTK_CONTAINER(wallpaper_flow));
+    for (GList *item = children; item; item = item->next) {
+        GtkWidget *child = GTK_WIDGET(item->data);
+        GtkWidget *button = GTK_IS_BIN(child) ? gtk_bin_get_child(GTK_BIN(child)) : NULL;
+        if (!button || !GTK_IS_TOGGLE_BUTTON(button)) continue;
+        const char *path = g_object_get_data(G_OBJECT(button), "wallpaper-path");
+        gboolean active = current && path && !g_strcmp0(current, path);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(button), active);
+        matched |= active;
+    }
+    g_list_free(children);
+    loading = previous_loading;
+    if (current && *current && !matched) wallpaper_gallery_refresh();
+    g_free(current);
+}
+
+static gboolean wallpaper_gallery_sync_idle(gpointer data)
+{
+    (void)data;
+    wallpaper_sync_source = 0;
+    wallpaper_gallery_sync_current();
+    return G_SOURCE_REMOVE;
+}
+
+static void on_desktop_config_changed(GFileMonitor *monitor, GFile *file, GFile *other_file,
+                                      GFileMonitorEvent event, gpointer data)
+{
+    (void)monitor;
+    (void)event;
+    (void)data;
+    char *expected = desktop_config_path();
+    char *path = file ? g_file_get_path(file) : NULL;
+    char *other_path = other_file ? g_file_get_path(other_file) : NULL;
+    gboolean relevant = !g_strcmp0(path, expected) || !g_strcmp0(other_path, expected);
+    if (relevant && !wallpaper_sync_source)
+        wallpaper_sync_source = g_idle_add(wallpaper_gallery_sync_idle, NULL);
+    g_free(path);
+    g_free(other_path);
+    g_free(expected);
+}
+
+static void desktop_config_watch(void)
+{
+    if (desktop_config_monitor) return;
+    char *path = desktop_config_path();
+    char *directory_path = g_path_get_dirname(path);
+    g_mkdir_with_parents(directory_path, 0755);
+    GFile *directory = g_file_new_for_path(directory_path);
+    GError *error = NULL;
+    desktop_config_monitor = g_file_monitor_directory(directory, G_FILE_MONITOR_WATCH_MOVES, NULL, &error);
+    if (desktop_config_monitor)
+        g_signal_connect(desktop_config_monitor, "changed", G_CALLBACK(on_desktop_config_changed), NULL);
+    else if (error && getenv("HDE_DEBUG"))
+        g_printerr("hde-settings: cannot watch the desktop background config: %s\n", error->message);
+    g_clear_error(&error);
+    g_object_unref(directory);
+    g_free(directory_path);
+    g_free(path);
+}
+
+static void on_wallpaper_toggled(GtkToggleButton *button, gpointer data)
+{
+    (void)data;
+    if (loading || !gtk_toggle_button_get_active(button)) return;
+    const char *path = g_object_get_data(G_OBJECT(button), "wallpaper-path");
+    if (!path || !*path) return;
+    cfg_set_string("wallpaper", path);
+    desktop_config_set("wallpaper", path, 0);
+    settings_status("Desktop background changed");
+}
+
 static void choose_wallpaper(GtkButton *button, gpointer data)
 {
     (void)button; (void)data;
-    GtkWidget *dlg = gtk_file_chooser_dialog_new("Choose Wallpaper", GTK_WINDOW(settings_window()),
-                                                 GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel", GTK_RESPONSE_CANCEL,
-                                                 "_Select", GTK_RESPONSE_ACCEPT, NULL);
+    GtkWidget *dialog = gtk_file_chooser_dialog_new("Add Picture", GTK_WINDOW(settings_window()),
+                                                    GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel", GTK_RESPONSE_CANCEL,
+                                                    "_Open", GTK_RESPONSE_ACCEPT, NULL);
     GtkFileFilter *filter = gtk_file_filter_new();
     gtk_file_filter_set_name(filter, "Images");
     gtk_file_filter_add_pixbuf_formats(filter);
-    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), filter);
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
     const char *pictures = g_get_user_special_dir(G_USER_DIRECTORY_PICTURES);
     if (g_file_test("/usr/share/backgrounds", G_FILE_TEST_IS_DIR))
-        gtk_file_chooser_add_shortcut_folder(GTK_FILE_CHOOSER(dlg), "/usr/share/backgrounds", NULL);
-    if (pictures) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), pictures);
-    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
-        char *path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
-        cfg_set_string("wallpaper", path);
-        desktop_config_set("wallpaper", path, 0);
-        settings_status("Wallpaper changed");
+        gtk_file_chooser_add_shortcut_folder(GTK_FILE_CHOOSER(dialog), "/usr/share/backgrounds", NULL);
+    if (pictures) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), pictures);
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        if (path && g_file_test(path, G_FILE_TEST_IS_REGULAR)) {
+            cfg_set_string("wallpaper", path);
+            desktop_config_set("wallpaper", path, 0);
+            settings_status("Desktop background changed");
+            wallpaper_gallery_refresh();
+        }
         g_free(path);
     }
-    gtk_widget_destroy(dlg);
+    gtk_widget_destroy(dialog);
 }
 
 static void on_wallpaper_mode(GtkComboBox *c, gpointer d)
@@ -261,9 +578,11 @@ static GtkWidget *style_card(const char *title, gboolean dark, GtkWidget *group)
     GtkWidget *rb = group ? gtk_radio_button_new_from_widget(GTK_RADIO_BUTTON(group)) : gtk_radio_button_new(NULL);
     gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(rb), FALSE);         /* drawn as a card, without the radio dot */
     gtk_style_context_add_class(gtk_widget_get_style_context(rb), "style-card");
-    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_style_context_add_class(gtk_widget_get_style_context(rb), "appearance-style");
+    gtk_widget_set_size_request(rb, 220, -1);
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 9);
     GtkWidget *pv = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_size_request(pv, 170, 100);
+    gtk_widget_set_size_request(pv, 190, 108);
     gtk_style_context_add_class(gtk_widget_get_style_context(pv), "preview");
     gtk_style_context_add_class(gtk_widget_get_style_context(pv), dark ? "preview-dark" : "preview-light");
     GtkWidget *win = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
@@ -294,9 +613,7 @@ static void on_external_change(gpointer d)
     (void)d;
     if (!light_card) return;
     loading = TRUE;
-    int idx = cfg_get_int("theme_index", 0);
-    if (idx == 1 || idx == 2)
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(idx == 2 ? dark_card : light_card), TRUE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(current_is_dark() ? dark_card : light_card), TRUE);
     if (theme_combo) {                                /* e.g. gtk_theme=Yaru written by a script */
         char *base = base_theme();
         if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(theme_combo), base)) {
@@ -305,12 +622,10 @@ static void on_external_change(gpointer d)
         }
         g_free(base);
     }
-    if (accent_combo) {
-        accent_refresh_auto();
-        int item = accent_item_now();
-        GtkTreeModel *m = gtk_combo_box_get_model(GTK_COMBO_BOX(accent_combo));
-        if (item < gtk_tree_model_iter_n_children(m, NULL)) gtk_combo_box_set_active(GTK_COMBO_BOX(accent_combo), item);
-    }
+    style_note_update();
+    accent_palette_sync();
+    appearance_css_apply();
+    wallpaper_gallery_sync_current();
     loading = FALSE;
 }
 
@@ -318,28 +633,87 @@ GtkWidget *page_appearance_new(void)
 {
     loading = TRUE;
     GtkWidget *box = page_base();
+    appearance_css_apply();
 
     gtk_box_pack_start(GTK_BOX(box), section("Style"), FALSE, FALSE, 0);
-    GtkWidget *cards = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
-    light_card = style_card("Light", FALSE, NULL);
+    GtkWidget *cards = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+    gtk_widget_set_halign(cards, GTK_ALIGN_CENTER);
+    light_card = style_card("Default", FALSE, NULL);
     dark_card = style_card("Dark", TRUE, light_card);
-    gtk_box_pack_start(GTK_BOX(cards), light_card, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(cards), dark_card, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(cards), light_card, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(cards), dark_card, TRUE, TRUE, 0);
     gtk_widget_set_margin_top(cards, 4);
     gtk_box_pack_start(GTK_BOX(box), cards, FALSE, FALSE, 0);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(current_is_dark() ? dark_card : light_card), TRUE);
     g_signal_connect(light_card, "toggled", G_CALLBACK(on_style_toggled), NULL);
     g_signal_connect(dark_card, "toggled", G_CALLBACK(on_style_toggled), NULL);
-    style_note = info_label("Dark mode applies to the panel, menus, this window and all GTK applications immediately. "
-                            "Apps that follow the system color scheme (GTK4/libadwaita) switch too.");
-    gtk_box_pack_start(GTK_BOX(box), style_note, FALSE, FALSE, 4);
+    style_note = info_label("");
+    gtk_box_pack_start(GTK_BOX(box), style_note, FALSE, FALSE, 2);
+    style_note_update();
 
-    gtk_box_pack_start(GTK_BOX(box), section("Theme"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), section("Accent color"), FALSE, FALSE, 0);
+    GtkWidget *accent_surface = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_style_context_add_class(gtk_widget_get_style_context(accent_surface), "appearance-surface");
+    accent_palette = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(accent_palette, GTK_ALIGN_CENTER);
+    gtk_widget_set_hexpand(accent_palette, TRUE);
+    gtk_widget_set_margin_top(accent_palette, 2);
+    gtk_widget_set_margin_bottom(accent_palette, 2);
+    char *auto_color = hde_theme_accent_from_gtk();
+    accent_buttons[0] = accent_button_new("Automatic", auto_color ? auto_color : "#3584e4", "auto", NULL);
+    gtk_box_pack_start(GTK_BOX(accent_palette), accent_buttons[0], FALSE, FALSE, 0);
+    debug_geometry_watch(accent_buttons[0], "appearance-accent-auto");
+    for (guint i = 0; i < G_N_ELEMENTS(accent_names); i++) {
+        accent_buttons[i + 1] = accent_button_new(accent_names[i], accent_values[i], accent_values[i], accent_buttons[0]);
+        gtk_box_pack_start(GTK_BOX(accent_palette), accent_buttons[i + 1], FALSE, FALSE, 0);
+        char *watch_name = g_strdup_printf("appearance-accent-%s", accent_names[i]);
+        debug_geometry_watch(accent_buttons[i + 1], watch_name);
+        g_free(watch_name);
+    }
+    g_free(auto_color);
+    gtk_box_pack_start(GTK_BOX(accent_surface), accent_palette, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(box), accent_surface, FALSE, FALSE, 0);
+    accent_palette_sync();
+
+    GtkWidget *background_header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *background_title = section("Background");
+    gtk_widget_set_hexpand(background_title, TRUE);
+    GtkWidget *add_picture = gtk_button_new_with_label("+ Add Picture…");
+    gtk_style_context_add_class(gtk_widget_get_style_context(add_picture), "appearance-add-picture");
+    gtk_widget_set_valign(add_picture, GTK_ALIGN_CENTER);
+    g_signal_connect(add_picture, "clicked", G_CALLBACK(choose_wallpaper), NULL);
+    gtk_box_pack_start(GTK_BOX(background_header), background_title, TRUE, TRUE, 0);
+    gtk_box_pack_end(GTK_BOX(background_header), add_picture, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), background_header, FALSE, FALSE, 0);
+
+    GtkWidget *wallpaper_surface = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_style_context_add_class(gtk_widget_get_style_context(wallpaper_surface), "appearance-surface");
+    wallpaper_flow = gtk_flow_box_new();
+    gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(wallpaper_flow), GTK_SELECTION_NONE);
+    gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(wallpaper_flow), TRUE);
+    gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(wallpaper_flow), 2);
+    gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(wallpaper_flow), 4);
+    gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(wallpaper_flow), 8);
+    gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(wallpaper_flow), 8);
+    gtk_widget_set_hexpand(wallpaper_flow, TRUE);
+    gtk_widget_set_halign(wallpaper_flow, GTK_ALIGN_FILL);
+    debug_geometry_watch(wallpaper_flow, "appearance-wallpapers");
+    gtk_box_pack_start(GTK_BOX(wallpaper_surface), wallpaper_flow, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), wallpaper_surface, FALSE, FALSE, 0);
+    wallpaper_gallery_refresh();
+    desktop_config_watch();
+
+    GtkWidget *more = gtk_expander_new("More appearance options");
+    gtk_widget_set_margin_top(more, 14);
+    GtkWidget *advanced = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_style_context_add_class(gtk_widget_get_style_context(advanced), "appearance-surface");
+    gtk_container_add(GTK_CONTAINER(more), advanced);
+
     theme_combo = gtk_combo_box_text_new();
     char *base = base_theme();
     gchar **themes = hde_theme_list_gtk_themes();
     gboolean found = FALSE;
-    for (int i = 0; themes[i]; i++) {
+    for (int i = 0; themes && themes[i]; i++) {
         gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(theme_combo), themes[i], themes[i]);
         if (!g_strcmp0(themes[i], base)) found = TRUE;
     }
@@ -348,75 +722,35 @@ GtkWidget *page_appearance_new(void)
     g_strfreev(themes);
     g_free(base);
     g_signal_connect(theme_combo, "changed", G_CALLBACK(on_theme_changed), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("GTK theme", "Light/dark variants of this theme are picked automatically.", theme_combo), FALSE, FALSE, 0);
-
-    GtkListStore *acc = gtk_list_store_new(ACC_N, GDK_TYPE_PIXBUF, G_TYPE_STRING, G_TYPE_STRING);
-    char *auto_color = hde_theme_accent_from_gtk();
-    GdkPixbuf *sw = accent_swatch(auto_color ? auto_color : "#3584e4");
-    gtk_list_store_insert_with_values(acc, NULL, -1, ACC_SWATCH, sw, ACC_LABEL, "Automatic (from the theme)", ACC_VALUE, "", -1);
-    g_object_unref(sw);
-    g_free(auto_color);
-    for (guint i = 0; i < G_N_ELEMENTS(accent_names); i++) {
-        sw = accent_swatch(accent_values[i]);
-        gtk_list_store_insert_with_values(acc, NULL, -1, ACC_SWATCH, sw, ACC_LABEL, accent_names[i], ACC_VALUE, accent_values[i], -1);
-        g_object_unref(sw);
-    }
-    int acc_item = accent_item_now();
-    if (acc_item > (int)G_N_ELEMENTS(accent_values)) {                     /* a colour written into settings.ini by hand */
-        char *v = cfg_get_string("accent", "#3584e4");
-        char *l = g_strdup_printf("Custom (%s)", v);
-        sw = accent_swatch(v);
-        gtk_list_store_insert_with_values(acc, NULL, -1, ACC_SWATCH, sw, ACC_LABEL, l, ACC_VALUE, v, -1);
-        g_object_unref(sw);
-        g_free(l);
-        g_free(v);
-    }
-    GtkWidget *accent = accent_combo = gtk_combo_box_new_with_model(GTK_TREE_MODEL(acc));
-    g_object_unref(acc);
-    GtkCellRenderer *cr_sw = gtk_cell_renderer_pixbuf_new();
-    gtk_cell_layout_pack_start(GTK_CELL_LAYOUT(accent), cr_sw, FALSE);
-    gtk_cell_layout_add_attribute(GTK_CELL_LAYOUT(accent), cr_sw, "pixbuf", ACC_SWATCH);
-    GtkCellRenderer *cr_l = gtk_cell_renderer_text_new();
-    g_object_set(cr_l, "xpad", 6, NULL);
-    gtk_cell_layout_pack_start(GTK_CELL_LAYOUT(accent), cr_l, TRUE);
-    gtk_cell_layout_add_attribute(GTK_CELL_LAYOUT(accent), cr_l, "text", ACC_LABEL);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(accent), acc_item);
-    g_signal_connect(accent, "changed", G_CALLBACK(on_accent), NULL);
-    debug_geometry_watch(accent, "appearance-accent");
-    gtk_box_pack_start(GTK_BOX(box), row_box("Accent color",
-        "Automatic takes the colour of the GTK theme (orange with Yaru), so that the panel, the Start button and this "
-        "window match the switches and sliders of every application. A colour chosen here is also given to them.",
-        accent), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(advanced), row_box("GTK theme", "Light and dark variants are selected automatically.", theme_combo), FALSE, FALSE, 0);
 
     icon_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), "", "Default");
     char *cur_icons = cfg_get_string("icon_theme_name", "");
     gchar **icons = hde_theme_list_icon_themes();
-    for (int i = 0; icons[i]; i++) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), icons[i], icons[i]);
+    for (int i = 0; icons && icons[i]; i++) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), icons[i], icons[i]);
     if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(icon_combo), cur_icons))
         gtk_combo_box_set_active(GTK_COMBO_BOX(icon_combo), 0);
     g_strfreev(icons);
     g_free(cur_icons);
     g_signal_connect(icon_combo, "changed", G_CALLBACK(on_icons), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Icon theme", "Icon set used by GTK applications.", icon_combo), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(advanced), row_box("Icon theme", "Icon set used by GTK applications.", icon_combo), FALSE, FALSE, 0);
 
     GtkWidget *font = gtk_font_button_new();
-    char *f = cfg_get_string("font", "Sans 10");
-    gtk_font_chooser_set_font(GTK_FONT_CHOOSER(font), f);
-    g_free(f);
+    char *font_name = cfg_get_string("font", "Sans 10");
+    gtk_font_chooser_set_font(GTK_FONT_CHOOSER(font), font_name);
+    g_free(font_name);
     g_signal_connect(font, "font-set", G_CALLBACK(on_font), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Interface font", "Default font for the desktop and GTK applications.", font), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(advanced), row_box("Interface font", "Default font for the desktop and GTK applications.", font), FALSE, FALSE, 0);
 
-    gtk_box_pack_start(GTK_BOX(box), section("Wallpaper"), FALSE, FALSE, 0);
-    GtkWidget *wp = gtk_button_new_with_label("Choose wallpaper…");
-    g_signal_connect(wp, "clicked", G_CALLBACK(choose_wallpaper), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Desktop background", "Applied immediately to the desktop.", wp), FALSE, FALSE, 0);
     GtkWidget *mode = gtk_combo_box_text_new();
     const char *modes[] = { "Fill", "Fit", "Stretch", "Center" };
-    for (int i = 0; i < 4; i++) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(mode), modes[i]);
+    for (guint i = 0; i < G_N_ELEMENTS(modes); i++) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(mode), modes[i]);
     gtk_combo_box_set_active(GTK_COMBO_BOX(mode), CLAMP(cfg_get_int("wallpaper_mode_index", 0), 0, 3));
     g_signal_connect(mode, "changed", G_CALLBACK(on_wallpaper_mode), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Wallpaper mode", "How the picture fits the screen.", mode), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(advanced), row_box("Background fit", "How the picture fills the screen.", mode), FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), more, FALSE, FALSE, 0);
     loading = FALSE;
     hde_theme_watch(on_external_change, NULL);
     return box;

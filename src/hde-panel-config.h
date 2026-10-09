@@ -3,6 +3,8 @@
  * GLib only. Everything lives in ~/.config/hde/settings.ini, group [settings]; the panel follows changes live.
  *
  *   panel_position=bottom|top           panel_size=34 (24-64 px)          panel_opacity=100 (40-100 %)
+ *   panel_floating=false  panel_inset=16 (8-48 px; floating style only)  panel_spacing=6 (0-16 px)
+ *   panel_shadow=false  panel_rounded=false  panel_hover=true (shadow/corners: Floating style; compositing required)
  *   panel_show_menu / _desktop / _run / _launchers / _taskbar / _workspaces / _tray / _status / _notifications /
  *   _clock = true|false                 panel_taskbar_labels=true         panel_taskbar_group=auto|never|always
  *   clock_24h=true  clock_show_date=true  clock_show_seconds=false
@@ -36,6 +38,8 @@ typedef struct {
     gboolean top;                   /* panel at the top of the screen (default: bottom) */
     int size;                       /* height in pixels */
     int opacity;                    /* percent; below 100 needs a compositing window manager */
+    gboolean floating, shadow, rounded, hover; /* panel surface and its optional visual effects */
+    int inset, spacing;              /* side inset in floating mode and gap between panel items, in pixels */
     gboolean show_menu, show_desktop, show_run, show_launchers, show_taskbar, show_workspaces, show_tray,
              show_status, show_notifications, show_clock;
     gboolean taskbar_labels;        /* window titles next to the icons (FALSE: icons only) */

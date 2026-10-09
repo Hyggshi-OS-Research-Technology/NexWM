@@ -13,7 +13,8 @@
 #include <string.h>
 
 static GtkWidget *launchers_card, *applets_card, *favorites_card, *preview_area, *style_cards[3], *option_rows[8];
-static guint size_timer, opacity_timer, label_timer;
+static GtkWidget *panel_inset_row, *panel_shadow_row, *panel_rounded_row;
+static guint size_timer, opacity_timer, spacing_timer, inset_timer, label_timer;
 
 static void refresh_launchers(void);
 static void refresh_applets(void);
@@ -23,7 +24,13 @@ static void refresh_favorites(void);
 static void on_switch(GObject *s, GParamSpec *p, gpointer key)
 {
     (void)p;
-    cfg_set_bool(key, gtk_switch_get_active(GTK_SWITCH(s)));
+    gboolean active = gtk_switch_get_active(GTK_SWITCH(s));
+    cfg_set_bool(key, active);
+    if (!g_strcmp0(key, "panel_floating")) {
+        if (panel_inset_row) gtk_widget_set_sensitive(panel_inset_row, active);
+        if (panel_shadow_row) gtk_widget_set_sensitive(panel_shadow_row, active);
+        if (panel_rounded_row) gtk_widget_set_sensitive(panel_rounded_row, active);
+    }
     settings_status("Saved: %s", (const char *)g_object_get_data(s, "hde-title"));
     if (preview_area) gtk_widget_queue_draw(preview_area);
 }
@@ -462,6 +469,8 @@ static void refresh_applets(void)
 }
 
 /* ---------------------------------------------------------------- the panel preview */
+static void draw_round(cairo_t *cr, double x, double y, double w, double h, double r);
+
 static gboolean draw_preview(GtkWidget *w, cairo_t *cr, gpointer d)
 {
     (void)d;
@@ -483,30 +492,48 @@ static gboolean draw_preview(GtkWidget *w, cairo_t *cr, gpointer d)
     cairo_fill(cr);
     cairo_pattern_destroy(g);
     /* the panel, its height to scale (screen = 800 px high) */
-    double ph = MAX(4, sh * c.size / 800.0 * 2.2), py = c.top ? y0 : y0 + sh - ph;
+    double ph = MAX(4, sh * c.size / 800.0 * 2.2);
+    double inset = c.floating ? c.inset * sw / 1280.0 : 0;
+    double px = x0 + inset, pw = sw - 2 * inset;
+    double vgap = c.floating ? MAX(1.0, 3.0 * sh / 800.0 * 2.2) : 0;
+    double surface_h = MAX(3.0, ph - 2 * vgap);
+    double py = c.top ? y0 + vgap : y0 + sh - ph + vgap;
+    double radius = c.floating && c.rounded ? MIN(8.0, surface_h / 2.0) : 0;
+    if (c.floating && c.shadow) {
+        for (int spread = 6; spread >= 1; spread--) {
+            cairo_set_source_rgba(cr, 0, 0, 0, 0.025 * (7 - spread));
+            double sx = px - spread, sy = py + (c.top ? 2 : -2) - spread;
+            double swidth = pw + 2 * spread, sheight = surface_h + 2 * spread;
+            if (radius) draw_round(cr, sx, sy, swidth, sheight, radius + spread);
+            else cairo_rectangle(cr, sx, sy, swidth, sheight);
+            cairo_fill(cr);
+        }
+    }
     double a = c.opacity / 100.0;
     if (dark) cairo_set_source_rgba(cr, 0.12, 0.13, 0.16, a); else cairo_set_source_rgba(cr, 0.95, 0.96, 0.97, a);
-    cairo_rectangle(cr, x0, py, sw, ph);
+    if (radius) draw_round(cr, px, py, pw, surface_h, radius);
+    else cairo_rectangle(cr, px, py, pw, surface_h);
     cairo_fill(cr);
-    double x = x0 + 3, u = ph * 0.6, cy = py + (ph - u) / 2;
-    if (c.show_menu) { gdk_cairo_set_source_rgba(cr, &acc); cairo_rectangle(cr, x, cy, u * 2.4, u); cairo_fill(cr); x += u * 2.4 + 3; }
+    double side = 3 * sw / 1280.0, gap = c.spacing * sw / 1280.0;
+    double x = px + side, u = surface_h * 0.6, cy = py + (surface_h - u) / 2;
+    if (c.show_menu) { gdk_cairo_set_source_rgba(cr, &acc); cairo_rectangle(cr, x, cy, u * 2.4, u); cairo_fill(cr); x += u * 2.4 + gap; }
     cairo_set_source_rgba(cr, dark ? 0.8 : 0.3, dark ? 0.82 : 0.32, dark ? 0.86 : 0.36, 0.85);
-    if (c.show_desktop) { cairo_rectangle(cr, x, cy, u, u); cairo_fill(cr); x += u + 3; }
-    if (c.show_run) { cairo_rectangle(cr, x, cy, u * 1.6, u); cairo_fill(cr); x += u * 1.6 + 3; }
-    if (c.show_launchers) for (int i = 0; c.launchers[i] && i < 5; i++) { cairo_arc(cr, x + u / 2, cy + u / 2, u / 2, 0, 2 * G_PI); cairo_fill(cr); x += u + 2; }
+    if (c.show_desktop) { cairo_rectangle(cr, x, cy, u, u); cairo_fill(cr); x += u + gap; }
+    if (c.show_run) { cairo_rectangle(cr, x, cy, u * 1.6, u); cairo_fill(cr); x += u * 1.6 + gap; }
+    if (c.show_launchers) for (int i = 0; c.launchers[i] && i < 5; i++) { cairo_arc(cr, x + u / 2, cy + u / 2, u / 2, 0, 2 * G_PI); cairo_fill(cr); x += u + gap; }
     if (c.show_taskbar) {
         for (int i = 0; i < 3; i++) {
             cairo_set_source_rgba(cr, dark ? 1 : 0, dark ? 1 : 0, dark ? 1 : 0, 0.18);
             cairo_rectangle(cr, x + 2, cy, c.taskbar_labels ? u * 4 : u * 1.2, u);
             cairo_fill(cr);
-            x += (c.taskbar_labels ? u * 4 : u * 1.2) + 3;
+            x += (c.taskbar_labels ? u * 4 : u * 1.2) + gap;
         }
     }
-    double rx = x0 + sw - 3;
+    double rx = px + pw - side;
     cairo_set_source_rgba(cr, dark ? 0.8 : 0.3, dark ? 0.82 : 0.32, dark ? 0.86 : 0.36, 0.85);
-    if (c.show_clock) { rx -= u * 3; cairo_rectangle(cr, rx, cy, u * 3, u); cairo_fill(cr); rx -= 3; }
-    if (c.show_notifications) { rx -= u; cairo_arc(cr, rx + u / 2, cy + u / 2, u / 2.4, 0, 2 * G_PI); cairo_fill(cr); rx -= 3; }
-    if (c.show_status) for (int i = 0; i < 3; i++) { rx -= u; cairo_rectangle(cr, rx + u * 0.15, cy + u * 0.15, u * 0.7, u * 0.7); cairo_fill(cr); rx -= 2; }
+    if (c.show_clock) { rx -= u * 3; cairo_rectangle(cr, rx, cy, u * 3, u); cairo_fill(cr); rx -= gap; }
+    if (c.show_notifications) { rx -= u; cairo_arc(cr, rx + u / 2, cy + u / 2, u / 2.4, 0, 2 * G_PI); cairo_fill(cr); rx -= gap; }
+    if (c.show_status) for (int i = 0; i < 3; i++) { rx -= u; cairo_rectangle(cr, rx + u * 0.15, cy + u * 0.15, u * 0.7, u * 0.7); cairo_fill(cr); rx -= gap; }
     if (c.show_tray) { rx -= u * 2; cairo_rectangle(cr, rx, cy + u * 0.25, u * 2, u * 0.5); cairo_fill(cr); }
     hde_theme_info_clear(&ti);
     hde_panel_config_clear(&c);
@@ -545,6 +572,28 @@ static void on_opacity(GtkRange *r, gpointer d)
     opacity_timer = g_timeout_add(250, opacity_commit, r);
 }
 
+static gboolean panel_int_commit(gpointer data)
+{
+    GtkWidget *scale = data;
+    guint *timer = g_object_get_data(G_OBJECT(scale), "hde-timer");
+    if (timer) *timer = 0;
+    const char *key = g_object_get_data(G_OBJECT(scale), "hde-key");
+    const char *title = g_object_get_data(G_OBJECT(scale), "hde-title");
+    int value = (int)gtk_range_get_value(GTK_RANGE(scale));
+    if (key) cfg_set_int(key, value);
+    settings_status("%s: %d px", title ? title : "Panel setting", value);
+    if (preview_area) gtk_widget_queue_draw(preview_area);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_panel_int_scale(GtkRange *range, gpointer data)
+{
+    guint *timer = data;
+    if (*timer) g_source_remove(*timer);
+    g_object_set_data(G_OBJECT(range), "hde-timer", timer);
+    *timer = g_timeout_add(250, panel_int_commit, range);
+}
+
 static GtkWidget *scale_new(double min, double max, double step, double value, const char *fmt_suffix)
 {
     GtkWidget *s = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, min, max, step);
@@ -562,8 +611,8 @@ static void on_reset_panel(GtkButton *b, gpointer d)
     (void)b; (void)d;
     GtkWidget *q = gtk_message_dialog_new(GTK_WINDOW(settings_window()), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION,
                                           GTK_BUTTONS_OK_CANCEL, "Reset the panel to how it was at first?");
-    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(q), "Position, height, items, clock, pinned apps and "
-                                             "extensions go back to the defaults. The Start menu is not changed.");
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(q), "Position, height, appearance, spacing, items, clock, "
+                                             "pinned apps and extensions go back to the defaults. The Start menu is not changed.");
     int r = gtk_dialog_run(GTK_DIALOG(q));
     gtk_widget_destroy(q);
     if (r != GTK_RESPONSE_OK) return;
@@ -733,6 +782,30 @@ GtkWidget *page_panel_new(void)
     gtk_container_add(GTK_CONTAINER(card), row_box("Opacity", "Below 100 % the desktop shows through the panel (needs a "
                                                    "compositing window manager, e.g. Metacity, Marco, Mutter, Muffin; always on Wayland)", op));
     gtk_container_add(GTK_CONTAINER(card), screen_row());
+    gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Appearance and spacing"), FALSE, FALSE, 0);
+    card = card_new();
+    gboolean floating = cfg_get_bool("panel_floating", FALSE);
+    switch_row(card, "panel_floating", FALSE, "Floating panel", "Adds a transparent gap around the panel; requires a compositor");
+    GtkWidget *inset = scale_new(8, 48, 4, cfg_get_int("panel_inset", 16), "px");
+    g_object_set_data(G_OBJECT(inset), "hde-key", (gpointer)"panel_inset");
+    g_object_set_data(G_OBJECT(inset), "hde-title", (gpointer)"Side inset");
+    g_signal_connect(inset, "value-changed", G_CALLBACK(on_panel_int_scale), &inset_timer);
+    panel_inset_row = row_box("Side inset", "Space at the left and right edges in Floating style", inset);
+    gtk_widget_set_sensitive(panel_inset_row, floating);
+    gtk_container_add(GTK_CONTAINER(card), panel_inset_row);
+    panel_shadow_row = switch_row(card, "panel_shadow", FALSE, "Panel shadow",
+                                  "Adds a subtle shadow in Floating style; requires a compositor");
+    gtk_widget_set_sensitive(panel_shadow_row, floating);
+    panel_rounded_row = switch_row(card, "panel_rounded", FALSE, "Rounded corners", "Rounds the panel in Floating style");
+    gtk_widget_set_sensitive(panel_rounded_row, floating);
+    switch_row(card, "panel_hover", TRUE, "Button hover highlight", "Highlight buttons when the pointer is over them");
+    GtkWidget *spacing = scale_new(0, 16, 1, cfg_get_int("panel_spacing", 6), "px");
+    g_object_set_data(G_OBJECT(spacing), "hde-key", (gpointer)"panel_spacing");
+    g_object_set_data(G_OBJECT(spacing), "hde-title", (gpointer)"Item spacing");
+    g_signal_connect(spacing, "value-changed", G_CALLBACK(on_panel_int_scale), &spacing_timer);
+    gtk_container_add(GTK_CONTAINER(card), row_box("Item spacing", "Gap between panel buttons and applets, in pixels", spacing));
     gtk_box_pack_start(GTK_BOX(box), card, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Items on the panel"), FALSE, FALSE, 0);

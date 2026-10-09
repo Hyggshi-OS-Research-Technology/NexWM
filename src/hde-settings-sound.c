@@ -223,8 +223,9 @@ GtkWidget *page_sound_new(void)
     gtk_box_pack_start(GTK_BOX(box), row_box("Microphone mute", "Mute the default microphone.", mic_sw), FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Sound keys"), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), info_label("F1 mutes, F2 lowers and F3 raises the volume; the media keys work too. "
-                                                "You can turn the F1–F3 sound keys off in Keyboard & Shortcuts."), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), info_label("F1 mutes, F2 lowers and F3 raises the volume; F4 plays or pauses media "
+                                                "through playerctl. The media keys work too. You can turn the F1–F4 "
+                                                "sound and media keys off in Keyboard & Shortcuts."), FALSE, FALSE, 0);
     GtkWidget *mixer = gtk_button_new_with_label("Open advanced mixer…");
     gtk_widget_set_halign(mixer, GTK_ALIGN_START);
     g_signal_connect(mixer, "clicked", G_CALLBACK(on_mixer), NULL);

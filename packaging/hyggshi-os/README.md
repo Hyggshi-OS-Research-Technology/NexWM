@@ -29,8 +29,8 @@ Run as root inside the chroot:
 | `HDE_DEFAULT_SESSION` | | `true`: HDE is the default session of LightDM / SDDM |
 | `KEEP_BUILD_DEPS` | | `true`: keep the compiler and the `-dev` packages |
 
-What it does: installs the build dependencies and the runtime packages, builds (`make`), checks that all seven programs
-were built, `make install PREFIX=/usr` (programs, `hde-start`, `/usr/share/xsessions/hde.desktop`,
+What it does: installs the build dependencies and the runtime packages, builds (`make`), checks that the programs it expects
+were built (the session, the panel, Settings, Files, Media, Cmd, NexWM and hde-lock, HDE's own lock screen), `make install PREFIX=/usr` (programs, `hde-start`, `/usr/share/xsessions/hde.desktop`,
 `/usr/share/wayland-sessions/hde-wayland.desktop`, logos, the portal configuration), removes the `nexwm.desktop` /
 `start-nexde` of the old script, marks every library the programs use as manually installed and then removes only the
 build tools it installed itself, and finally checks that no library is missing.

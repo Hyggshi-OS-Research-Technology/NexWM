@@ -33,9 +33,11 @@
 #include "playlist.h"   /* HdePlayer: the list, the tags, repeat / shuffle / volume */
 #include "engine.h"     /* which program plays it, and with what arguments */
 #include "media.h"      /* MEDIA_TITLE */
+#include "mpris.h"      /* MPRIS 2 controls used by playerctl and HDE's media keys */
 
 #include <gtk/gtk.h>
 #include <gdk/gdk.h>
+#include <math.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>     /* gdk_x11_window_get_xid: where mpv is told to draw the video */
 #endif
@@ -61,6 +63,7 @@ struct _HdeMediaPlayer {
     HdeMediaEngineKind engine;
     char *engine_program;         /* the path of the engine found in $PATH, or NULL */
     GSubprocess *proc;
+    HdeMpris *mpris;              /* org.mpris.MediaPlayer2.hde-media on the session bus */
     unsigned generation;          /* which start the wait in flight belongs to */
     int can_seek;                 /* the mpv socket is up: pause, seek and the volume work */
     /* the mpv socket */
@@ -101,6 +104,7 @@ static void guard_unref(PlayerGuard *g)
 /* what the buttons and the status line are about (the widgets are built once, the state changes under them) */
 static const HdeTrack *player_now(const HdeMediaPlayer *p);
 static void player_report_subtitles(HdeMediaPlayer *p, const HdeTrack *t);
+static void player_mpris_changed(HdeMediaPlayer *p);
 
 static void player_log(const char *fmt, ...)
 {
@@ -342,6 +346,7 @@ static gboolean player_ipc_data(GIOChannel *ch, GIOCondition cond, gpointer d)
     if (cond & (G_IO_HUP | G_IO_ERR | G_IO_NVAL)) {
         mpv_teardown(p, 1);
         player_buttons_update(p);
+        player_mpris_changed(p);
         return G_SOURCE_REMOVE;
     }
 
@@ -352,6 +357,7 @@ static gboolean player_ipc_data(GIOChannel *ch, GIOCondition cond, gpointer d)
     if (st != G_IO_STATUS_NORMAL) {
         mpv_teardown(p, 1);
         player_buttons_update(p);
+        player_mpris_changed(p);
         return G_SOURCE_REMOVE;
     }
     g_string_append_len(p->ipc_in, buf, (gssize)got);
@@ -416,6 +422,7 @@ static gboolean player_ipc_connect(gpointer d)
     mpv_send(p, "{\"command\":[\"get_property\",\"duration\"]}");
     mpv_send(p, "{\"command\":[\"get_property\",\"time-pos\"]}");
     player_ui_update(p);
+    player_mpris_changed(p);
     return G_SOURCE_REMOVE;
 }
 
@@ -487,6 +494,7 @@ static void player_on_proc_exit(GObject *src, GAsyncResult *res, gpointer data)
     } else {
         player_log("end of the list, stopping");
         player_ui_update(p);
+        player_mpris_changed(p);
     }
 }
 
@@ -554,6 +562,7 @@ static void player_play_index(HdeMediaPlayer *p, long index)
         if (!p->ipc_connect_id) p->ipc_connect_id = g_timeout_add(100, player_ipc_connect, p);
     }
     player_ui_update(p);
+    player_mpris_changed(p);
 }
 
 static void player_skip(HdeMediaPlayer *p, int direction)
@@ -571,6 +580,23 @@ static void player_stop_here(HdeMediaPlayer *p)
     hde_player_stop(&p->player);
     player_log("stopped");
     player_ui_update(p);
+    player_mpris_changed(p);
+}
+
+/* The seek bar and the keyboard use absolute seeks; MPRIS translates its relative offset through this helper too. */
+static gboolean player_seek_to(HdeMediaPlayer *p, double to)
+{
+    if (!p->player.playing || !p->can_seek) return FALSE;
+    if (to < 0) to = 0;
+    if (p->duration > 0 && to > p->duration) to = p->duration;
+    p->position = to;
+    char *cmd = g_strdup_printf("{\"command\":[\"seek\",%.3f,\"absolute\"]}", to);
+    mpv_send(p, cmd);
+    g_free(cmd);
+    player_log("seek %.1f s", to);
+    player_seek_update(p);
+    if (p->mpris) hde_mpris_seeked(p->mpris, (gint64)(to * 1000000.0));
+    return TRUE;
 }
 
 /* Ctrl+Left / Ctrl+Right: five seconds back or forward, the keyboard of a seek bar */
@@ -581,15 +607,7 @@ static void player_seek_by(HdeMediaPlayer *p, double delta)
         player_log("%s cannot be moved inside a track (only mpv can)", hde_media_engine_kind_name(p->engine));
         return;
     }
-    double to = p->position + delta;
-    if (to < 0) to = 0;
-    if (p->duration > 0 && to > p->duration) to = p->duration;
-    p->position = to;
-    char *cmd = g_strdup_printf("{\"command\":[\"seek\",%.3f,\"absolute\"]}", to);
-    mpv_send(p, cmd);
-    g_free(cmd);
-    player_log("seek %.1f s", to);
-    player_seek_update(p);
+    player_seek_to(p, p->position + delta);
 }
 
 static void player_volume_step(HdeMediaPlayer *p, int direction)
@@ -605,6 +623,7 @@ static void player_volume_step(HdeMediaPlayer *p, int direction)
     }
     player_log("volume %d %%", (int)(v * 100.0 + 0.5));
     player_status_update(p);
+    player_mpris_changed(p);
 }
 
 /* ---------------------------------------------------------------- the buttons and the keys */
@@ -627,6 +646,7 @@ static void player_on_play(GtkWidget *b, gpointer d)
                                  : "{\"command\":[\"set_property\",\"pause\",false]}");
     player_log(p->player.paused ? "paused" : "playing on");
     player_ui_update(p);
+    player_mpris_changed(p);
 }
 
 static void player_on_stop(GtkWidget *b, gpointer d) { (void)b; player_stop_here(d); }
@@ -638,11 +658,9 @@ static void player_on_seek(GtkRange *r, gpointer d)
     HdeMediaPlayer *p = d;
     if (p->setting_seek) return;
     p->position = gtk_range_get_value(r);
-    if (p->can_seek) {
-        char *cmd = g_strdup_printf("{\"command\":[\"seek\",%.3f,\"absolute\"]}", p->position);
-        mpv_send(p, cmd);
-        g_free(cmd);
-        player_log("seek %.1f s", p->position);
+    if (p->can_seek && p->player.playing) {
+        player_seek_to(p, p->position);
+        return;
     }
     player_seek_update(p);
 }
@@ -658,6 +676,7 @@ static void player_on_volume(GtkRange *r, gpointer d)
         g_free(cmd);
     }
     player_status_update(p);
+    player_mpris_changed(p);
 }
 
 static void player_on_mute(GtkToggleButton *b, gpointer d)
@@ -669,6 +688,7 @@ static void player_on_mute(GtkToggleButton *b, gpointer d)
                                     : "{\"command\":[\"set_property\",\"mute\",false]}");
     player_log(p->player.muted ? "muted" : "sound on");
     player_status_update(p);
+    player_mpris_changed(p);
 }
 
 /* the track that is playing now, or NULL (what the subtitles and the status line are about) */
@@ -724,21 +744,351 @@ static void player_on_shuffle(GtkToggleButton *b, gpointer d)
     p->player.shuffle = gtk_toggle_button_get_active(b);
     player_log(p->player.shuffle ? "shuffle on" : "shuffle off");
     player_status_update(p);
+    player_mpris_changed(p);
 }
 
-static void player_repeat_next(HdeMediaPlayer *p)
+static void player_repeat_set(HdeMediaPlayer *p, HdeRepeat repeat)
 {
-    p->player.repeat = p->player.repeat == HDE_REPEAT_OFF ? HDE_REPEAT_ALL
-                     : (p->player.repeat == HDE_REPEAT_ALL ? HDE_REPEAT_ONE : HDE_REPEAT_OFF);
-    const char *what = p->player.repeat == HDE_REPEAT_ALL ? "all" : (p->player.repeat == HDE_REPEAT_ONE ? "one" : "off");
+    p->player.repeat = repeat;
+    const char *what = repeat == HDE_REPEAT_ALL ? "all" : (repeat == HDE_REPEAT_ONE ? "one" : "off");
     char *label = g_strdup_printf("Repeat: %s", what);
     gtk_button_set_label(GTK_BUTTON(p->repeat), label);
     g_free(label);
     player_log("repeat %s", what);
     player_status_update(p);
+    player_mpris_changed(p);
+}
+
+static void player_repeat_next(HdeMediaPlayer *p)
+{
+    HdeRepeat repeat = p->player.repeat == HDE_REPEAT_OFF ? HDE_REPEAT_ALL
+                     : (p->player.repeat == HDE_REPEAT_ALL ? HDE_REPEAT_ONE : HDE_REPEAT_OFF);
+    player_repeat_set(p, repeat);
 }
 
 static void player_on_repeat(GtkWidget *b, gpointer d) { (void)b; player_repeat_next(d); }
+
+/* ---------------------------------------------------------------- MPRIS 2 (the session-bus interface used by playerctl) */
+
+#define HDE_MPRIS_ROOT_IFACE "org.mpris.MediaPlayer2"
+#define HDE_MPRIS_PLAYER_IFACE "org.mpris.MediaPlayer2.Player"
+
+static const gchar *player_mpris_status(const HdeMediaPlayer *p)
+{
+    if (p->player.playing) return p->player.paused ? "Paused" : "Playing";
+    return "Stopped";
+}
+
+static GVariant *player_mpris_metadata(HdeMediaPlayer *p)
+{
+    GVariantBuilder metadata;
+    g_variant_builder_init(&metadata, G_VARIANT_TYPE("a{sv}"));
+    const HdeTrack *track = player_now(p);
+    if (track) {
+        gchar track_id[96];
+        if (p->player.index >= 0)
+            g_snprintf(track_id, sizeof track_id, "/org/mpris/MediaPlayer2/Track/%ld", p->player.index);
+        else
+            g_strlcpy(track_id, "/org/mpris/MediaPlayer2/TrackList/NoTrack", sizeof track_id);
+        g_variant_builder_add(&metadata, "{sv}", "mpris:trackid", g_variant_new_object_path(track_id));
+        g_variant_builder_add(&metadata, "{sv}", "xesam:title", g_variant_new_string(track->title));
+        if (track->artist[0]) {
+            const gchar *artists[] = { track->artist, NULL };
+            g_variant_builder_add(&metadata, "{sv}", "xesam:artist", g_variant_new_strv(artists, -1));
+        }
+        if (track->album[0])
+            g_variant_builder_add(&metadata, "{sv}", "xesam:album", g_variant_new_string(track->album));
+        if (track->duration > 0)
+            g_variant_builder_add(&metadata, "{sv}", "mpris:length",
+                                  g_variant_new_int64((gint64)(track->duration * 1000000.0)));
+        gchar *uri = g_filename_to_uri(track->path, NULL, NULL);
+        if (uri) {
+            g_variant_builder_add(&metadata, "{sv}", "xesam:url", g_variant_new_string(uri));
+            g_free(uri);
+        }
+    }
+    return g_variant_builder_end(&metadata);
+}
+
+static void player_mpris_changed(HdeMediaPlayer *p)
+{
+    if (!p || !p->mpris) return;
+    GVariantBuilder properties;
+    g_variant_builder_init(&properties, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&properties, "{sv}", "PlaybackStatus", g_variant_new_string(player_mpris_status(p)));
+    g_variant_builder_add(&properties, "{sv}", "LoopStatus",
+                          g_variant_new_string(p->player.repeat == HDE_REPEAT_ALL ? "Playlist"
+                                                : p->player.repeat == HDE_REPEAT_ONE ? "Track" : "None"));
+    g_variant_builder_add(&properties, "{sv}", "Rate", g_variant_new_double(1.0));
+    g_variant_builder_add(&properties, "{sv}", "Shuffle", g_variant_new_boolean(p->player.shuffle));
+    g_variant_builder_add(&properties, "{sv}", "Metadata", player_mpris_metadata(p));
+    g_variant_builder_add(&properties, "{sv}", "Volume",
+                          g_variant_new_double(p->player.muted ? 0.0 : p->player.volume));
+    g_variant_builder_add(&properties, "{sv}", "MinimumRate", g_variant_new_double(1.0));
+    g_variant_builder_add(&properties, "{sv}", "MaximumRate", g_variant_new_double(1.0));
+    g_variant_builder_add(&properties, "{sv}", "CanGoNext",
+                          g_variant_new_boolean(p->engine != HDE_MEDIA_ENGINE_NONE && p->player.list.n > 1));
+    g_variant_builder_add(&properties, "{sv}", "CanGoPrevious",
+                          g_variant_new_boolean(p->engine != HDE_MEDIA_ENGINE_NONE && p->player.list.n > 1));
+    g_variant_builder_add(&properties, "{sv}", "CanPlay",
+                          g_variant_new_boolean(p->engine != HDE_MEDIA_ENGINE_NONE && p->player.list.n > 0));
+    g_variant_builder_add(&properties, "{sv}", "CanPause", g_variant_new_boolean(p->can_seek));
+    g_variant_builder_add(&properties, "{sv}", "CanSeek", g_variant_new_boolean(p->can_seek));
+    g_variant_builder_add(&properties, "{sv}", "CanControl",
+                          g_variant_new_boolean(p->engine != HDE_MEDIA_ENGINE_NONE && p->player.list.n > 0));
+    hde_mpris_properties_changed(p->mpris, HDE_MPRIS_PLAYER_IFACE, g_variant_builder_end(&properties));
+}
+
+static gboolean player_mpris_set_paused(HdeMediaPlayer *p, gboolean paused)
+{
+    if (!p->can_seek || !p->player.playing || !p->proc) return FALSE;
+    paused = !!paused;
+    if (p->player.paused == paused) return TRUE;
+    p->player.paused = paused;
+    mpv_send(p, paused ? "{\"command\":[\"set_property\",\"pause\",true]}"
+                       : "{\"command\":[\"set_property\",\"pause\",false]}");
+    player_log(paused ? "paused" : "playing on");
+    player_ui_update(p);
+    player_mpris_changed(p);
+    return TRUE;
+}
+
+static void player_mpris_not_supported(GDBusMethodInvocation *invocation, const gchar *what)
+{
+    g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR, G_DBUS_ERROR_NOT_SUPPORTED,
+                                          "%s is not supported by the active player", what);
+}
+
+static void player_mpris_method(gpointer user_data, const gchar *interface_name, const gchar *method_name,
+                                GVariant *parameters, GDBusMethodInvocation *invocation)
+{
+    HdeMediaPlayer *p = user_data;
+    if (!g_strcmp0(interface_name, HDE_MPRIS_ROOT_IFACE)) {
+        if (!g_strcmp0(method_name, "Raise")) {
+            hde_media_player_present(p);
+            g_dbus_method_invocation_return_value(invocation, NULL);
+            return;
+        }
+        if (!g_strcmp0(method_name, "Quit")) {
+            g_dbus_method_invocation_return_value(invocation, NULL);
+            if (p->window) gtk_widget_destroy(p->window);
+            return;
+        }
+    } else if (!g_strcmp0(interface_name, HDE_MPRIS_PLAYER_IFACE)) {
+        if (!g_strcmp0(method_name, "Next")) {
+            if (p->engine == HDE_MEDIA_ENGINE_NONE || p->player.list.n < 2) {
+                player_mpris_not_supported(invocation, "Next");
+                return;
+            }
+            player_skip(p, 1);
+        } else if (!g_strcmp0(method_name, "Previous")) {
+            if (p->engine == HDE_MEDIA_ENGINE_NONE || p->player.list.n < 2) {
+                player_mpris_not_supported(invocation, "Previous");
+                return;
+            }
+            player_skip(p, -1);
+        } else if (!g_strcmp0(method_name, "Stop")) {
+            player_stop_here(p);
+        } else if (!g_strcmp0(method_name, "Pause")) {
+            if (!player_mpris_set_paused(p, TRUE)) {
+                player_mpris_not_supported(invocation, "Pause");
+                return;
+            }
+        } else if (!g_strcmp0(method_name, "Play")) {
+            if (!p->player.list.n || p->engine == HDE_MEDIA_ENGINE_NONE) {
+                player_mpris_not_supported(invocation, "Play");
+                return;
+            }
+            if (p->player.playing && p->proc) {
+                if (p->player.paused && !player_mpris_set_paused(p, FALSE)) {
+                    player_mpris_not_supported(invocation, "Play");
+                    return;
+                }
+            } else {
+                player_play_index(p, p->player.index >= 0 ? p->player.index : 0);
+            }
+        } else if (!g_strcmp0(method_name, "PlayPause")) {
+            if (!p->player.list.n || p->engine == HDE_MEDIA_ENGINE_NONE) {
+                player_mpris_not_supported(invocation, "PlayPause");
+                return;
+            }
+            if (p->player.playing && p->proc) {
+                if (!player_mpris_set_paused(p, !p->player.paused)) {
+                    player_mpris_not_supported(invocation, "PlayPause");
+                    return;
+                }
+            } else {
+                player_play_index(p, p->player.index >= 0 ? p->player.index : 0);
+            }
+        } else if (!g_strcmp0(method_name, "Seek")) {
+            gint64 offset_us = 0;
+            g_variant_get(parameters, "(x)", &offset_us);
+            if (!p->can_seek || !player_seek_to(p, p->position + (double)offset_us / 1000000.0)) {
+                player_mpris_not_supported(invocation, "Seek");
+                return;
+            }
+        } else if (!g_strcmp0(method_name, "SetPosition")) {
+            const gchar *track_id = NULL;
+            gint64 position_us = 0;
+            g_variant_get(parameters, "(&ox)", &track_id, &position_us);
+            const HdeTrack *track = player_now(p);
+            gchar current_id[96];
+            if (track && p->player.index >= 0) {
+                g_snprintf(current_id, sizeof current_id, "/org/mpris/MediaPlayer2/Track/%ld", p->player.index);
+                if (!g_strcmp0(track_id, current_id) &&
+                    (!p->can_seek || !player_seek_to(p, (double)position_us / 1000000.0))) {
+                    player_mpris_not_supported(invocation, "SetPosition");
+                    return;
+                }
+            }
+        } else if (!g_strcmp0(method_name, "OpenUri")) {
+            const gchar *uri = NULL;
+            g_variant_get(parameters, "(&s)", &uri);
+            gchar *hostname = NULL;
+            GError *error = NULL;
+            gchar *path = g_filename_from_uri(uri, &hostname, &error);
+            gboolean local = !hostname || !*hostname || !g_ascii_strcasecmp(hostname, "localhost");
+            g_free(hostname);
+            g_clear_error(&error);
+            struct stat file_stat;
+            gboolean supported = path && local && (hde_media_is_media(path) || hde_media_is_playlist(path)) &&
+                                 stat(path, &file_stat) == 0 && S_ISREG(file_stat.st_mode);
+            if (!supported) {
+                g_free(path);
+                player_mpris_not_supported(invocation, "OpenUri for this URI");
+                return;
+            }
+            size_t old_count = p->player.list.n;
+            long old_index = hde_playlist_find(&p->player.list, path);
+            char *paths[] = { path, NULL };
+            hde_media_player_open(p, paths, 1, 0);
+            long index = hde_playlist_find(&p->player.list, path);
+            size_t new_count = p->player.list.n;
+            g_free(path);
+            if (index < 0 && new_count == old_count) {
+                player_mpris_not_supported(invocation, "OpenUri for this file");
+                return;
+            }
+            if (index >= 0 && index == old_index) player_play_index(p, index);
+        } else {
+            g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD,
+                                                  "Unknown MPRIS method: %s", method_name);
+            return;
+        }
+        g_dbus_method_invocation_return_value(invocation, NULL);
+        return;
+    }
+    g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD,
+                                          "Unknown MPRIS method: %s", method_name);
+}
+
+static GVariant *player_mpris_get_property(gpointer user_data, const gchar *interface_name,
+                                           const gchar *property_name, GError **error)
+{
+    HdeMediaPlayer *p = user_data;
+    if (!g_strcmp0(interface_name, HDE_MPRIS_ROOT_IFACE)) {
+        if (!g_strcmp0(property_name, "CanQuit")) return g_variant_new_boolean(TRUE);
+        if (!g_strcmp0(property_name, "CanRaise")) return g_variant_new_boolean(TRUE);
+        if (!g_strcmp0(property_name, "HasTrackList")) return g_variant_new_boolean(FALSE);
+        if (!g_strcmp0(property_name, "Identity")) return g_variant_new_string("Hyggshi Media");
+        if (!g_strcmp0(property_name, "DesktopEntry")) return g_variant_new_string("hde-media");
+        if (!g_strcmp0(property_name, "SupportedUriSchemes")) {
+            const gchar *schemes[] = { "file", NULL };
+            return g_variant_new_strv(schemes, -1);
+        }
+        if (!g_strcmp0(property_name, "SupportedMimeTypes")) {
+            const gchar *types[] = { "audio/*", "video/*", "application/x-mpegurl",
+                                     "application/vnd.apple.mpegurl", NULL };
+            return g_variant_new_strv(types, -1);
+        }
+    } else if (!g_strcmp0(interface_name, HDE_MPRIS_PLAYER_IFACE)) {
+        if (!g_strcmp0(property_name, "PlaybackStatus")) return g_variant_new_string(player_mpris_status(p));
+        if (!g_strcmp0(property_name, "LoopStatus"))
+            return g_variant_new_string(p->player.repeat == HDE_REPEAT_ALL ? "Playlist"
+                                        : p->player.repeat == HDE_REPEAT_ONE ? "Track" : "None");
+        if (!g_strcmp0(property_name, "Rate") || !g_strcmp0(property_name, "MinimumRate") ||
+            !g_strcmp0(property_name, "MaximumRate")) return g_variant_new_double(1.0);
+        if (!g_strcmp0(property_name, "Shuffle")) return g_variant_new_boolean(p->player.shuffle);
+        if (!g_strcmp0(property_name, "Metadata")) return player_mpris_metadata(p);
+        if (!g_strcmp0(property_name, "Volume"))
+            return g_variant_new_double(p->player.muted ? 0.0 : p->player.volume);
+        if (!g_strcmp0(property_name, "Position"))
+            return g_variant_new_int64((gint64)(MAX(p->position, 0.0) * 1000000.0));
+        if (!g_strcmp0(property_name, "CanGoNext") || !g_strcmp0(property_name, "CanGoPrevious"))
+            return g_variant_new_boolean(p->engine != HDE_MEDIA_ENGINE_NONE && p->player.list.n > 1);
+        if (!g_strcmp0(property_name, "CanPlay"))
+            return g_variant_new_boolean(p->engine != HDE_MEDIA_ENGINE_NONE && p->player.list.n > 0);
+        if (!g_strcmp0(property_name, "CanPause") || !g_strcmp0(property_name, "CanSeek"))
+            return g_variant_new_boolean(p->can_seek);
+        if (!g_strcmp0(property_name, "CanControl"))
+            return g_variant_new_boolean(p->engine != HDE_MEDIA_ENGINE_NONE && p->player.list.n > 0);
+    }
+    g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_PROPERTY,
+                "Unknown MPRIS property %s on %s", property_name, interface_name);
+    return NULL;
+}
+
+static gboolean player_mpris_set_property(gpointer user_data, const gchar *interface_name,
+                                          const gchar *property_name, GVariant *value, GError **error)
+{
+    HdeMediaPlayer *p = user_data;
+    if (g_strcmp0(interface_name, HDE_MPRIS_PLAYER_IFACE)) {
+        g_set_error_literal(error, G_DBUS_ERROR, G_DBUS_ERROR_PROPERTY_READ_ONLY,
+                            "The MPRIS root properties are read-only");
+        return FALSE;
+    }
+    if (!g_strcmp0(property_name, "LoopStatus")) {
+        const gchar *mode = g_variant_get_string(value, NULL);
+        if (!g_strcmp0(mode, "None")) player_repeat_set(p, HDE_REPEAT_OFF);
+        else if (!g_strcmp0(mode, "Playlist")) player_repeat_set(p, HDE_REPEAT_ALL);
+        else if (!g_strcmp0(mode, "Track")) player_repeat_set(p, HDE_REPEAT_ONE);
+        else {
+            g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS, "Unknown LoopStatus: %s", mode);
+            return FALSE;
+        }
+        return TRUE;
+    }
+    if (!g_strcmp0(property_name, "Shuffle")) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->shuffle), g_variant_get_boolean(value));
+        player_mpris_changed(p);
+        return TRUE;
+    }
+    if (!g_strcmp0(property_name, "Volume")) {
+        if (!p->can_seek) {
+            g_set_error_literal(error, G_DBUS_ERROR, G_DBUS_ERROR_NOT_SUPPORTED,
+                                "The active playback engine does not support volume control");
+            return FALSE;
+        }
+        double volume = g_variant_get_double(value);
+        if (volume < 0.0 || volume > 1.0) {
+            g_set_error_literal(error, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS,
+                                "Volume must be between 0.0 and 1.0");
+            return FALSE;
+        }
+        if (p->player.muted) {
+            p->player.muted = 0;
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->mute_button), FALSE);
+        }
+        gtk_range_set_value(GTK_RANGE(p->volume), volume * 100.0);
+        player_mpris_changed(p);
+        return TRUE;
+    }
+    if (!g_strcmp0(property_name, "Rate")) {
+        if (fabs(g_variant_get_double(value) - 1.0) < 0.000001) return TRUE;
+        g_set_error_literal(error, G_DBUS_ERROR, G_DBUS_ERROR_NOT_SUPPORTED,
+                            "Changing playback speed is not supported by this player");
+        return FALSE;
+    }
+    g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_PROPERTY_READ_ONLY,
+                "MPRIS property %s is read-only", property_name);
+    return FALSE;
+}
+
+static const HdeMprisHandlers player_mpris_handlers = {
+    .method_call = player_mpris_method,
+    .get_property = player_mpris_get_property,
+    .set_property = player_mpris_set_property
+};
 
 static void player_on_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointer d)
 {
@@ -797,6 +1147,10 @@ static void player_on_destroy(GtkWidget *w, gpointer d)
     p->window = NULL;
     p->alive = 0;
     p->quitting = 1;
+    if (p->mpris) {
+        hde_mpris_free(p->mpris);
+        p->mpris = NULL;
+    }
     player_kill(p);
     player_log("closed");
 }
@@ -1019,6 +1373,7 @@ HdeMediaPlayer *hde_media_player_new(GtkApplication *app, char *const *paths, in
         player_log("engine: %s (%s)", hde_media_engine_kind_name(p->engine), p->engine_program ? p->engine_program : "?");
     player_log("%d in the list", (int)p->player.list.n);
 
+    p->mpris = hde_mpris_new(&player_mpris_handlers, p);
     gtk_widget_show_all(p->window);
     gtk_widget_set_visible(p->hint, p->engine == HDE_MEDIA_ENGINE_NONE);
     if (p->player.list.n > 0 && p->engine != HDE_MEDIA_ENGINE_NONE) player_play_index(p, 0);
@@ -1047,12 +1402,17 @@ void hde_media_player_open(HdeMediaPlayer *p, char *const *paths, int n_paths, i
         player_log("nothing new to play in what was handed over");
     }
     player_ui_update(p);
+    player_mpris_changed(p);
     hde_media_player_present(p);
 }
 
 void hde_media_player_free(HdeMediaPlayer *p)
 {
     if (!p) return;
+    if (p->mpris) {
+        hde_mpris_free(p->mpris);
+        p->mpris = NULL;
+    }
     player_kill(p);
     if (p->guard) {
         p->guard->alive = 0;                         /* a wait still in flight must not look at `p` any more */

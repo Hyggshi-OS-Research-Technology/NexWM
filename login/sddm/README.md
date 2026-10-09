@@ -79,8 +79,23 @@ title=Hyggshi Desktop Environment
 footer=HDE · Hyggshi OS
 clockPosition=top-right   # top-left / top-center / top-right
 userMode=user          # user: the list of the users of this computer, username: type a name
+showUserList=true      # the users as tiles; with no list to show, a field to type a name appears instead
 cardWidth=400
 ```
+
+Who is logging in: `userMode=user` shows the users of this computer as tiles (the avatar and the real name), and
+`userMode=username` a field to type a name in. The field is also what appears when there is no list to show —
+`showUserList=false`, or a greeter that hands over no users at all: SDDM leaves accounts out of its list by uid range
+(`[Users] MinimumUid` / `MaximumUid` in `/etc/sddm.conf.d`) and by `HideUsers` / `HideShells`, and without the field the
+card would have no way to say who is logging in and the *Sign in* button would stay grey. The screen says so in the
+greeter's log (`journalctl -u sddm`, or the log of the session that started the greeter):
+
+    hde-login: the greeter listed 1 user(s)
+    hde-login: the greeter listed no users: the login screen offers a user name field
+    hde-login: the keyboard is in the password field        # where the typing goes (the name field without a list)
+
+`hde-lock`-style diagnostics, for the login screen: if the log says *no users* and that is not what you expect, look at
+`HideUsers`, `HideShells` and the uid range of your account (`getent passwd "$USER"`).
 
 Rather than editing that file (an update overwrites it), put only your lines in `hde/theme.conf.user`: SDDM reads it
 after `theme.conf` and what it contains wins.
@@ -109,6 +124,7 @@ Optional parts it uses when SDDM provides them (and quietly skips when it does n
 sh tests/sddm-test.sh            # everything this machine can do
 sh tests/sddm-test.sh --no-render   # files, metadata, QML, theme.conf and the installer (no display needed)
 make check-login                 # the same
+python3 tests/sddm-qml-test.py   # the theme in a real QML engine, with the greeter made in the test (needs PySide6)
 ```
 
 The test checks the parts that are easy to get wrong: the files SDDM needs are there, `metadata.desktop` says what SDDM
@@ -116,10 +132,23 @@ reads, the QML balances and imports nothing a greeter may not have, every file t
 explains exactly the keys `Main.qml` reads, the installer writes (and `--uninstall` removes) the right files — and then,
 if SDDM's greeter and an X display are available (the CI job installs both), it renders the theme in the greeter, reads
 the greeter's log for QML errors and looks at the pixels of the screen: the dark background, the card, the accent line
-on it. The login screen of a distribution is not something that can be checked by looking at it once.
+on it — and whether typing reaches the card. The login screen of a distribution is not something that can be checked by
+looking at it once.
 
-CI: the `sddm-theme` job (Ubuntu, Qt 5 greeter) and the `Fedora (dnf, full desktop)` job (Fedora, Qt 6 greeter) both run
-this test, so both greeters are covered.
+The test also keeps pictures of the screen it looked at (`shot-sddm-*.png` in `$HDE_TEST_OUT`, uploaded as the
+`hde-sddm-login` artifact of the CI job): the login screen as it really renders — with the user tiles, and with the
+field to type a user name in when the greeter hands over no users. Nothing else shows a reader what their login screen
+will look like without logging out of their own session.
+
+`tests/sddm-qml-test.py` goes one step further and does what a machine's own greeter cannot be asked for: it loads
+`Main.qml` with a greeter made for the occasion (PySide6, Qt 6, offscreen — no display, no SDDM, no root) and checks
+three situations: one user from the greeter (tiles, the keyboard in the password field), an *empty* user list, and no
+user model at all. In the last two, the card has to offer a field to type a user name in, the keyboard has to be in it,
+and typing a name has to reach `sddm.login()`. Without PySide6 the test says so and skips (`pip install
+PySide6-Essentials` to run it); the CI job installs it.
+
+CI: the `SDDM login theme` job (Ubuntu, Qt 5 greeter, and the QML-engine test above) and the `Fedora (dnf, full
+desktop)` job (Fedora, Qt 6 greeter) both run this test, so both greeters are covered.
 
 ## Credits
 

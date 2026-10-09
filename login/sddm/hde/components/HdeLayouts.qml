@@ -8,6 +8,7 @@ Column {
     property color accent: "#3584e4"
     property string fontFamily: ""
     property alias currentIndex: combo.index
+    readonly property bool open: combo.open          // the list of layouts is open: the keyboard is its
     readonly property bool available: (typeof keyboard !== "undefined") && keyboard !== null
                                       && keyboard.layouts !== undefined && keyboard.layouts.length > 1
     property var names: []
@@ -28,7 +29,9 @@ Column {
 
     Component.onCompleted: refresh()
     Connections {
-        target: keyboard
+        // guarded: a greeter without the keyboard object (SDDM older than 0.19) has nothing to connect to, and an
+        // unguarded `keyboard` here is a ReferenceError in the greeter's log on every one of those machines
+        target: (typeof keyboard !== "undefined") ? keyboard : null
         function onLayoutsChanged() { root.refresh(); }
         function onCurrentLayoutChanged() { combo.index = keyboard.currentLayout; }
     }

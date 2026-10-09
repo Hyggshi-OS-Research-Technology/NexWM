@@ -123,7 +123,7 @@ static void usage(FILE *out)
 {
     fprintf(out,
             "Usage: hde-media [OPTION...] [PICTURE|FOLDER...]\n"
-            "The pictures of HDE (Hyggshi Media). The media player and the recorder come next in this same folder.\n"
+            "The pictures, music and video player of HDE (Hyggshi Media).\n"
             "\n"
             "  -s, --slideshow        start with the slideshow running\n"
             "  -i, --interval SEC     seconds per picture in the slideshow (0.5 .. 600, default 5)\n"
@@ -153,7 +153,10 @@ static void usage(FILE *out)
             "elsewhere). Keys: Space play/pause, Left/Right previous and next, Ctrl+Left/Right five\n"
             "seconds back or forward, s stop, Up/Down or + and - the volume, m mute, v the subtitles (the ones next\n"
             "to a video, and the ones inside it: mpv shows them, the other engines do not), z shuffle, r repeat, q\n"
-            "closes.\n");
+            "closes.\n"
+            "\n"
+            "Media keys and playerctl use MPRIS 2: playerctl --player=hde-media status / play-pause / next. Pause,\n"
+            "seek and volume are available when mpv is installed.\n");
 }
 
 /* the arguments of one invocation: the first one, or the one a second hde-media handed to the running window */

@@ -13,12 +13,13 @@ manager), a session manager and a system-hotkeys daemon.
 | **Battery** | Click the battery icon: charge, charging or on battery and **the time left** (to full while charging), a **chart of the charge** over the last hours (UPower's history, or since login), the draw in watts, **the health of the battery** (full charge now vs. when new), cycles, voltage, temperature, model, the firmware's charge limit, the batteries of wireless mice / keyboards / headsets, and the **power mode** (Power Saver / Balanced / Performance, with power-profiles-daemon). From the kernel's own numbers: no upower needed. **Battery saver** (*Settings → Power*): when the battery runs low (10–50 %, or always on battery) the Power Saver mode, a dimmer screen and fewer background updates, all put back when you plug in. **Low-battery warnings** at 10 % and 5 % (that one stays until closed) |
 | **Panel** | *Settings → Panel* (or **right-click the panel**: Panel Settings, Start Menu Settings, position, size, the items to show, extensions, Control Center, Task Manager, About), all live: **bottom or top**, height, transparency, which items it shows (Start button, Show Desktop, Run, pinned apps, taskbar with or without titles and grouping, workspaces, tray, status, notifications, clock), 12/24-hour clock with date and seconds. **Pinned apps** and **extensions**: processor and memory use (built in) or the output of any command refreshed every few seconds (weather, uptime, free disk space, … presets), with a command on click. Taskbar + workspaces (libwnck; on Wayland wlr-foreign-toplevel), system tray (XEmbed + StatusNotifierItem), Wi-Fi / Bluetooth / volume / battery status (right-click: a menu with icons for each), notification bell, calendar on the clock. **The panel measures the screen and itself** (straight from the X server, after every change): all of it always on the screen and the space it takes reserved, so maximized windows keep clear of it — moved or resized by someone else, it puts itself back; *Settings → Panel → Screen* shows the measurement (*Measure again*), `hde-panel --measure` prints it |
 | **Notifications** | Built-in `org.freedesktop.Notifications` 1.2 daemon (actions, images, urgency, sounds, history) — `notify-send` and every app work |
-| **Hotkeys** | Super = Start menu, **F1/F2/F3 = mute / volume down / volume up**, **F6/F7 = screen darker / brighter**, **F8 (or Super+P, or the display key of a laptop) = Project**, media + brightness keys with an on-screen display, screenshots, lock, terminal, files, run |
+| **Hotkeys** | Super = Start menu, **F1/F2/F3 = mute / volume down / volume up**, **F4 = play/pause (`playerctl`)**, **F6/F7 = screen darker / brighter**, **F8 (or Super+P, or the display key of a laptop) = Project**, media + brightness keys with an on-screen display, screenshots, lock, terminal, files, run |
+| **Lock screen** | **HDE's own lock screen** (`hde-lock`): the clock, the date, your name and a password field — the password is checked through **PAM**, the same one you log in and `sudo` with, and while the screen is locked nothing else can be used. On the **HDE** (X11) session it is a window of its own that no window manager can move, draw over or take the keyboard from (the keyboard and the mouse are held, the pointer is hidden); on the **HDE (Wayland)** session it is the compositor's **session lock** (`ext-session-lock-v1`, labwc), so the compositor itself stops showing and feeding input to every other program — a lock screen killed from outside does not give the session back. `Super+L` (or `hde-hotkeys --action lock`, `hde-session lock`, the Power menu of the panel) runs it first, on both sessions; where it cannot lock (built without PAM, a compositor without the session lock protocol) HDE falls back to the lockers the machine has (swaylock, gtklock, i3lock, slock, …). `hde-lock --check` says whether this session can be locked, 0 = yes |
 | **Screens (Project)** | **F8** opens a *Project* window like Windows + P: **PC screen only · Duplicate · Extend · Second screen only** for a projector, TV or second monitor (F8 again = next choice, Enter applies). Built on XRandR — no `xrandr`/`arandr` needed. *Second screen only* goes back by itself after 15 s unless kept (in case the other screen shows nothing). Plugging in a screen opens the window (or extends / duplicates, as chosen); unplugging the screen in use turns the computer's screen back on; the choice comes back at the next login for the same screens. The panel and desktop follow every change; each screen gets the whole wallpaper. **Resolution, refresh rate and orientation** of each screen in *Settings → Display* (the screens beside it move along; *Keep these display settings?* goes back by itself after 15 s), kept for the next logins |
 | **Brightness** | **F6 / F7** and the brightness keys, with an OSD, **without brightnessctl**: the laptop backlight (directly or through systemd-logind); on desktop monitors **the monitor's own brightness over DDC/CI** when `ddcutil` is installed; else software dimming of every screen (virtual machines), kept for the next login. Slider in *Settings → Display* and the Control Center; *Night Light* (warmer colours) works too |
 | **Screenshots** | Built-in `hde-screenshot` (no scrot or other tool needed): whole screen, drag an area, or the active window; saved to `~/Pictures/Screenshots`, copied to the clipboard, announced with a notification (Open / Show in Folder). Hold `Ctrl` to only copy to the clipboard. **Start menu → Screenshot** opens the *Screenshot* window: choose whole screen / window / area, a delay and whether the **mouse pointer** is in the picture, then Copy, Save As, Open or Show in Folder |
 | **About** | *Settings → About* and the **About HDE** window (desktop menu): the **logo of your system** from `/etc/os-release` (`ID=` hyggshios, ubuntu, debian, linuxmint, … — the logo the system installs, else HDE's own copy of 27 distribution logos, else a badge), its name and version, **"Based on Debian 13 (trixie)" / "Ubuntu 24.04 LTS"** with that logo too, its links; HDE version and build, the computer (model, processor, RAM, graphics, storage, screens), and **how much RAM HDE uses right now** (per program, measured live); *Copy system info* for bug reports. `hde-settings --about` prints the same |
-| **Wayland** | The **HDE (Wayland)** session on the login screen (needs `labwc`): the labwc compositor with HDE's panel, desktop, Start menu, notifications and OSD as layer-shell surfaces, a Wayland taskbar, the same keys (Super, F1–F3, F6–F8, PrtSc with `grim`, …) as labwc key bindings, title bars in HDE's colours; Settings for keyboard, touchpad and appearance apply there too |
+| **Wayland** | The **HDE (Wayland)** session on the login screen (needs `labwc`): the labwc compositor with HDE's panel, desktop, Start menu, notifications and OSD as layer-shell surfaces, a Wayland taskbar, the same keys (Super, F1–F4, F6–F8, PrtSc with `grim`, …) as labwc key bindings, title bars in HDE's colours; Settings for keyboard, touchpad and appearance apply there too |
 | **Desktop** | Wallpaper + icons from `~/Desktop` with a clear selection frame (accent color) and hover highlight; **right-click an icon for its own menu** — Open, Open With, Open in Terminal, Cut, Copy, Rename, Move to Trash, Properties; rubber-band and Ctrl+click selection; Paste, Delete, F2 and the usual keyboard shortcuts |
 | **Files** | **Hyggshi Files** (`hde-files`, in its own folder `hde-files/`), the file manager — and the one HDE uses: folders on the desktop, `Super+E`, *Show in Folder* of browsers and of the Screenshot tool open in it. Icons with **thumbnails** (pictures, and videos / PDF when a thumbnailer is installed) or a **list** (Name, Size, Type, Modified — click a column to sort), **tabs**, the places sidebar (bookmarks, drives, Trash, Recent), a path bar (`Ctrl+L` to type a path or an `sftp://` address, with completion), **search in the subfolders** (`Ctrl+F`), hidden files (`Ctrl+H`), zoom (`Ctrl` + wheel keys or the slider). **Copy, move, paste with progress and Cancel** — Replace / Skip / Keep Both / Merge when a name is taken, "name (copy)" in the same folder —, **drag and drop** (Ctrl copies, Shift moves), **the Trash** (restore where it was, delete, empty; no GVfs needed), **Undo** (`Ctrl+Z`), rename (the extension kept; `F2` once HDE's F1–F3 sound keys are off in *Settings → Keyboard & Shortcuts*, else from the menu), new folder / document (from `~/Templates`), Properties (size of folders, permissions, the app that opens the type), Open With, Run executables, compress / extract, open a terminal there; type the start of a name to jump to it; its Cut / Copy / Paste works with the desktop and the other file managers; it watches folders, so changes made elsewhere show at once; Light / Dark and the accent of HDE |
 | **Network** | Real Wi-Fi list (NetworkManager): scan, signal, security, connect with password, disconnect, forget, hidden networks; wired/VPN devices |
@@ -33,14 +34,16 @@ manager), a session manager and a system-hotkeys daemon.
 ## Install
 
 ```sh
-# build dependencies (libgtk-layer-shell-dev: for the Wayland session; libxcb1-dev: NexWM, HDE's own window manager)
+# build dependencies (libgtk-layer-shell-dev: for the Wayland session; libxcb1-dev: NexWM, HDE's own window manager;
+# libpam0g-dev: the password check of HDE's own lock screen, hde-lock)
 sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libgtk-layer-shell-dev \
-                 libxcb1-dev
+                 libxcb1-dev libpam0g-dev
 # recommended runtime packages
 sudo apt install metacity network-manager bluez pipewire-pulse policykit-1-gnome \
                  gnome-themes-extra libnotify-bin playerctl
-# for the HDE (Wayland) session: the compositor, screenshots, screen lock
-sudo apt install labwc grim slurp swaylock
+# for the HDE (Wayland) session: the compositor and screenshots (the screen lock is HDE's own hde-lock; a swaylock or
+# gtklock is only the fallback for a build without PAM or on a compositor without ext-session-lock-v1)
+sudo apt install labwc grim slurp
 make
 sudo make install          # PREFIX=/usr/local by default
 ```
@@ -56,6 +59,11 @@ Without a display manager: `echo 'exec /usr/local/bin/hde-start' > ~/.xinitrc &&
 Try it in a window without logging out: `scripts/test-nexde` (a whole HDE session from `./build` in Xephyr, on its own
 D-Bus, with a throw-away copy of your settings; `--fresh` = a new user, `--wm openbox`, `1920x1080 :3`, `--help`).
 Needs `sudo apt install xserver-xephyr`.
+Other systems: [`packaging/fedora/README.md`](packaging/fedora/README.md) (Fedora, Nobara, RHEL, ...
+`sh packaging/fedora/deps.sh install build runtime-minimal`), [`packaging/arch/README.md`](packaging/arch/README.md)
+(Arch, Manjaro, EndeavourOS, ... `sh packaging/arch/deps.sh install build runtime-minimal`) and
+`hde-settings --deps build|runtime|test`, which prints the command and the package names of *this* system (apt, dnf,
+pacman, zypper).
 Hyggshi OS: `packaging/hyggshi-os/build-nexwm.sh` builds and installs HDE inside the ISO's chroot.
 Reload a running session after rebuilding: `make dev` (from `./build`) or `sudo make install && make reload`.
 
@@ -74,11 +82,18 @@ Reload a running session after rebuilding: `make dev` (from `./build`) or `sudo 
 | `Ctrl+Alt+T` | Terminal |
 | `Ctrl+Alt+Delete` | Session / Power dialog |
 | `F1` / `F2` / `F3` | Mute / volume down / volume up (turn off in *Settings → Keyboard & Shortcuts*) |
+| `F4` | Play / pause the current MPRIS media player (`playerctl play-pause`; shares the F1–F4 switch) |
 | `F6` / `F7` | Screen darker / brighter, with an OSD (turn off with the F6–F8 switch in *Settings → Keyboard & Shortcuts*) |
 | `F8`, `Super+P`, the display key | *Project*: PC screen only / Duplicate / Extend / Second screen only. Press again for the next one, `Enter` applies, `1`–`4` apply directly, `Esc` closes |
 | Volume, mic-mute, brightness, display, play/pause keys | Work out of the box, with an OSD |
 | `Print`, `Shift+Print`, `Alt+Print` | Screenshot: screen / area (drag; `Esc` cancels) / active window |
 | `Ctrl+Print`, `Ctrl+Shift+Print`, `Ctrl+Alt+Print` | The same, copied to the clipboard only (no file) |
+
+F4 uses the same `playerctl play-pause` action as the multimedia Play/Pause key on HDE's X11 and labwc Wayland
+sessions, and as a default fallback on NexWM's Wayland compositor (an explicit `nexwm.conf` binding takes precedence).
+Install `playerctl` to control MPRIS players; if it is missing, HDE shows an installation hint. Disable
+*Use F1–F4 as sound and media keys* in *Settings → Keyboard & Shortcuts* to return the unmodified keys to apps.
+`Alt+F4` is unaffected.
 
 `hde-session` starts `hde-hotkeys` **before** the window manager, so these keys stay HDE's even when the window
 manager's own configuration binds them too (for example an Openbox `rc.xml` with `Print` → `scrot`, which used to
@@ -101,11 +116,13 @@ new tab, `F5` reload, `F10` the menu, `Ctrl+?` all of them.
 | Program | Role |
 |---------|------|
 | `hde-session` | Session manager. `hde-session wm` switches the window manager live, `hde-session restart` restarts panel + desktop, `hde-session {logout,reboot,shutdown,suspend,lock}` |
+| `hde-lock` | HDE's own lock screen, on both of HDE's sessions (see the **Lock screen** row above): `hde-lock [--x11\|--wayland]` locks the session in front of it (the session is picked from `WAYLAND_DISPLAY`/`DISPLAY`), `--check` takes no lock and says whether it could (exit 0 = yes, 3 = no), `--version` names the backends this build got. The password is checked by PAM: `/etc/pam.d/hde-lock` when that file exists (a system can say there what locking means, and the file that ships the program does not have to), `login` otherwise. TERM, INT, HUP and USR1 do not unlock it |
 | `nexwm` | HDE's own window manager (`nexwm/`, in this repository). `nexwm [--x11\|--wayland] [--replace] [--config FILE]`, `--version`, `--help`. The X11 side is a window manager of its own (XCB only, no libX11, no toolkit): frames, focus, workspaces, snap / maximize / full screen, `_NET_WM_STRUT` of the panel, `_NET_SUPPORTING_WM_CHECK`, `--replace` to take over from another window manager without logging out. Keys and settings in `~/.config/hde/nexwm.conf`; what the running one listens to is `xprop -root _NEXWM_KEYS`. The Wayland side is a wlroots compositor (`nexwm --wayland`) when wlroots is available at build time; both sides are optional and `nexwm --version` names the ones this build got (a build without `libxcb` still compiles; `nexwm --x11` then says what to install) |
 | `hde-panel` | Panel, Start menu, Control Center, battery panel, app search, notifications, OSD. `hde-panel --menu/--search/--run/--power/--show-desktop/--osd-volume/--osd-brightness N/--control-center[=wifi\|bluetooth\|sound\|notifications]/--notifications/--battery` control the running panel (X11 ClientMessage or D-Bus `org.hyggshi.HDE.Panel`); `hde-panel --measure` has the panel measure the screen again and put itself right, then prints the screen, the panel window, the space reserved for it and the room windows get (exit status 0 = it fits) |
 | `hde-files` | Hyggshi Files, the file manager (`hde-files/`, which has its own Makefile too): `hde-files [FOLDER\|FILE\|URI…]` (a file: its folder with the file selected; `trash:///`, `recent:///`), `--select PATH…` (the folders with these items selected), `--new-window`, `--quit`. One process; while it runs it answers `org.freedesktop.FileManager1` (*Show in Folder*). In HDE sessions folders open in it (`hde-mimeapps.list`; a choice of your own in *Open With* wins). Its settings: `~/.config/hde/files.ini` |
+| `hde-media` | Hyggshi Media: picture viewer and playlist player, with mpv / ffplay / GStreamer as available. The player exports MPRIS 2 as `org.mpris.MediaPlayer2.hde-media`, so `playerctl --player=hde-media play-pause` and the HDE media keys can control it. |
 | `hde-choose` | *Which program for this?* When more than one program on this machine can do the same thing — a terminal, a file manager, pictures, music and video, a system monitor, a screenshot tool — HDE asks which one to use, once, and remembers the answer. HDE's own program is offered first and marked *HDE's own* (Hyggshi Files, Hyggshi Media, hde-screenshot, and `hde-cmd` when the terminal of HDE is installed). `hde-choose terminal [ARGS…]` starts it (Super+T, Super+E and the other places of HDE run this), `--ask` asks even when the answer is remembered, `--no-ask` never asks, `--list` shows what is installed and what is remembered, `--set FEATURE PROGRAM` / `--reset FEATURE` change or forget an answer, and `HDE_CHOOSE=PROGRAM` overrides everything for one run. Where there is nothing to ask — one program installed, or no display — the first installed one runs and the log says why |
-| `hde-cmd` | HDE's terminal emulator (`hde-cmd/`, with its own Makefile): GTK window and PTY, with an in-tree VT engine by default; VTE is an optional build-time backend and can be selected with `--vte`. Supports shell or command execution (`hde-cmd -- COMMAND…`), working directory and title options, selection/clipboard, scrollback, font scaling and full screen. `make -C hde-cmd check` tests the VT engine without GTK or a display. |
+| `hde-cmd` | HDE's terminal emulator (`hde-cmd/`, with its own Makefile): GTK window and PTY, with an in-tree VT engine by default; VTE is an optional build-time backend and can be selected with `--vte`. Supports shell or command execution (`hde-cmd -- COMMAND…`), simple folder aliases (`-C DIR` / `--directory DIR`), title, selection/clipboard, scrollback and font scaling. Right-click shows Copy/Paste and terminal actions; `Ctrl+Shift+T` opens a new window, `Ctrl+Shift+O` opens a chosen folder in a new terminal, and `F11` toggles full screen. `make -C hde-cmd check` tests the VT engine without GTK or a display. |
 | `hde-desktop` | Wallpaper + desktop icons (icon menu, Cut/Copy/Paste compatible with GNOME/Xfce file managers) |
 | `hde-settings` | Hyggshi Settings. `hde-settings <page>` opens a page; `hde-settings --style dark|light|toggle` switches Dark mode from a script; `--project` (the F8 window), `--display-mode pc\|duplicate\|extend\|second`, `--displays`, `--display-set NAME WxH[@HZ]\|auto [normal\|left\|right\|inverted]` (the resolution / rotation of a screen, kept for next time), `--brightness [+N\|-N\|N]`, `--power` (battery, battery saver), `--night-light [on\|off\|toggle]`, `--about` (this computer, the system, the RAM HDE uses), `--about-window`, `--wayland-config [DIR] [--reload]` (labwc's configuration for the Wayland session) |
 | `hde-hotkeys` | System shortcuts (Xlib + XInput2). `hde-hotkeys --action NAME` does one action (volume-up, brightness-down, screenshot-area, project, lock, …): what the key bindings of the Wayland session run |
@@ -118,7 +135,7 @@ Everything lives in `~/.config/hde/settings.ini` (group `[settings]`), written b
 `theme_index` (1 light, 2 dark), `gtk_theme`, `gtk_theme_effective`, `accent` (`auto` — the default: the colour of the
 GTK theme — or `#rrggbb`), `icon_theme_name`, `font`,
 `wm` (`auto`, `metacity`, `marco`, `mutter`, `muffin`, `xfwm4`, `openbox`, `icewm`, `fluxbox`, `nexwm`),
-`super_menu`, `fkeys_sound`, `fkeys_display` (F6/F7/F8), `media_keys`, `system_shortcuts`, `screenshot_tool` (`builtin` or an installed
+`super_menu`, `fkeys_sound` (F1–F4), `fkeys_display` (F6/F7/F8), `media_keys`, `system_shortcuts`, `screenshot_tool` (`builtin` or an installed
 `gnome-screenshot`, `xfce4-screenshooter`, `mate-screenshot`, `flameshot`, `spectacle`, `maim`, `scrot`), `screenshot_pointer`
 (the mouse pointer in screenshots, default `false`), `dnd`, `notification_popups`,
 `notification_sounds`, `scale`, `keyboard_layout`, `repeat_rate`, `repeat_delay`, `screen_timeout`,
@@ -133,7 +150,8 @@ screens), `display_modes` (resolution / rotation per screen: `HDMI-1=1920x1080@7
 (10, 15, 20 — the default —, 30, 50 %, or 100 = always on battery), `battery_saver_dim` (default `true`),
 `battery_warnings` (default `true`), …
 The software brightness of the last session (no backlight, no DDC/CI) is kept in `~/.local/state/hde/state.ini`.
-Panel: `panel_position` (`bottom`/`top`), `panel_size`, `panel_opacity`, `panel_show_menu` / `_desktop` / `_run` /
+Panel: `panel_position` (`bottom`/`top`), `panel_size`, `panel_opacity`, `panel_floating`, `panel_inset` (8–48 px),
+`panel_spacing` (0–16 px), `panel_shadow`, `panel_rounded`, `panel_hover`, `panel_show_menu` / `_desktop` / `_run` /
 `_launchers` / `_taskbar` / `_workspaces` / `_tray` / `_status` / `_notifications` / `_clock`, `panel_taskbar_labels`,
 `panel_taskbar_group`, `clock_24h`, `clock_show_date`, `clock_show_seconds`, `panel_launchers` (pinned apps),
 `panel_applets` + one `[applet:ID]` group each (`type=cpu|memory|command|separator`, `label`, `command`, `interval`,
@@ -151,7 +169,9 @@ written to `~/.config/hde/labwc/` from these settings (rewritten when they chang
 
 ## Tests
 
-`make check` starts a complete HDE session inside Xvfb and checks the Super key, F1–F3 volume
+`make check` starts a complete HDE session inside Xvfb and *photographs it* (`shot-*.png` next to the results in
+`$HDE_TEST_OUT`, default /tmp/hde-smoke: the panel, the Start menu, the Control Center, Settings, the notifications,
+the desktop icons) and checks the Super key, F1–F3 volume
 (PulseAudio), notifications, PrtSc screenshots (also with an Openbox `rc.xml` that binds `Print`, and with Openbox
 holding `Print` before `hde-hotkeys` starts), `Ctrl+Print` to the clipboard, the desktop
 icon selection frame and icon menu (Rename, Trash, Copy/Paste, Properties), the Wi-Fi list (with a simulated
@@ -172,8 +192,17 @@ battery numbers (µWh / µAh, time left, health, two batteries, a mouse) and the
 `--display-set`, the screens beside moving along, kept or reverted, back at login) and DDC/CI with a simulated `ddcutil`;
 `scripts/test-nexde --check` starts a nested session in Xephyr; `packaging/hyggshi-os/build-nexwm.sh` runs in a Debian 13
 container and the installed session is started. Needs `xvfb xdotool dbus-x11` (optionally `metacity openbox
-pulseaudio libnotify-bin imagemagick xinput`). CI runs it on Ubuntu 22.04 and 24.04 and also builds HDE on Debian 13
-(trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
+pulseaudio libnotify-bin imagemagick xinput`). CI runs it on Ubuntu 22.04 and 24.04, on Fedora (`fedora:latest`, the
+pictures of the Fedora desktop) and on Arch (`archlinux:latest` with the current rolling wlroots — `tests/arch-test.sh`
+checks the list of `packaging/arch/deps.sh` and that HDE speaks pacman, then `make check` photographs the Arch
+desktop), and also builds HDE on Debian 13 (trixie, GCC 14) and Debian testing (newest GCC, C23 by default).
+`tests/smoke.sh` saves its pictures as `shot-*.png` in `HDE_TEST_OUT` (`/tmp/hde-smoke` in the CI): the job uploads them
+as the artifact of that system (`hde-smoke-ubuntu-22.04`, `hde-smoke-fedora`, `hde-smoke-arch`, ...) and, when the
+commit message contains `[shots]`, publishes each one as a check run of its own (`hde-shot ubuntu-22.04 01-desktop`,
+`hde-shot Fedora ...`), so a picture can be looked at without downloading anything. The checks of that test are in
+pixels (the clock of the panel, the width of the Settings window), so the Fedora and Arch jobs run it with
+`HDE_SMOKE_FONT="DejaVu Sans 10"`: the font the Ubuntu jobs happen to measure with, which makes the three systems
+measure the same desktop.
 
 `tests/display-test.sh` (CI only: needs root) runs a whole session on Xorg with the dummy video driver, whose RandR
 outputs act as real connectors: F8 / Super+P, Extend / Duplicate / Second screen only (with the automatic way back) /

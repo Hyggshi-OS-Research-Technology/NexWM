@@ -33,6 +33,13 @@ Player keys: `Space` play/pause (mpv only: the others cannot be paused), `Left`/
 shuffle, `r` repeat (off, all, one), `v` the subtitles (mpv only, and only a video), `q` closes the window — which stops
 the sound with it.
 
+The player exports **MPRIS 2** as `org.mpris.MediaPlayer2.hde-media`, so `playerctl`, desktop media widgets and the
+keyboard media keys can control HDE's own player. For example: `playerctl --player=hde-media status`,
+`playerctl --player=hde-media play-pause`, `playerctl --player=hde-media next`, or
+`playerctl --player=hde-media metadata`. It reports the current title, artist, album, duration, position, repeat and
+shuffle state. Pause, seek and volume changes need the mpv engine; other engines still support play, stop and track
+changes. Local media files can be opened with MPRIS `OpenUri`.
+
 A video is drawn *inside* this window when mpv is the engine and the session is X11 (mpv is given the X id of the black
 area above the seek bar); with ffplay, gst-launch-1.0, or on Wayland, it opens a window of its own.
 
@@ -64,7 +71,8 @@ The theme follows HDE: Light / Dark and the accent colour chosen in Settings, li
 | `src/gallery.c` | The implementation of that: folder scans (hidden files left out, sub-folders 8 deep with `-r`), the natural order (digit runs compare as numbers), the zoom ladder (5 % .. 1600 %), the slideshow clock, the human sizes. |
 | `src/viewer.c` | The window: a drawing area painted with cairo, the toolbar, the status line, the keys, the wheel, the dragging, the dropped pictures. |
 | `src/main.c` | The program: the options, the one running window a second `hde-media` hands its picture to, the theme and its CSS. |
-| `src/player.h`, `src/player.c` | The player window: what plays now, the seek bar, the transport, the list, the status line — and, for a video with mpv on X11, the black area mpv is told to draw in (`--wid`). It starts the engine and follows the list; it decodes nothing itself. |
+| `src/player.h`, `src/player.c` | The player window: what plays now, the seek bar, the transport, the list, the status line — and, for a video with mpv on X11, the black area mpv is told to draw in (`--wid`). It starts the engine, follows the list, and maps controls and track metadata to MPRIS; it decodes nothing itself. |
+| `src/mpris.h`, `src/mpris.c` | The MPRIS 2 D-Bus service: `org.mpris.MediaPlayer2.hde-media`, player commands, writable repeat/shuffle/volume properties, track metadata and seek notifications. |
 | `src/playlist.h` | What the player promises: the list of what is played, the tags of a file, the state of the playback (which track, what follows, shuffle, repeat, the volume). Plain C too (the window is `player.c`). |
 | `src/playlist.c` | The implementation of that: folder scans, the `.m3u`/`.m3u8`/`.pls` files other players write (relative paths included), and the tags read by hand — ID3v2.2/2.3/2.4 (all four text encodings, unsynchronisation) and ID3v1, the Vorbis comment of Ogg Vorbis/Opus/FLAC, FLAC's STREAMINFO, WAV's fmt/data chunks, and an estimate from the first frame of an MP3 with no TLEN. |
 | `src/engine.h`, `src/engine.c` | The hybrid engine's decision half: which of mpv / ffplay / gst-launch-1.0 / paplay / aplay this machine has, the command line that follows from it for a given file, the `file://` URI gst-launch-1.0 wants, and what to tell the user when none of them is installed. It starts nothing — the window does that. |
@@ -86,7 +94,7 @@ of empty executable files — mpv wins over ffplay over gst-launch-1.0, a WAV go
 there, a sound never gets a window from ffplay, a video never goes to the sound server, a `-weird.mp3` is handed over as
 `./-weird.mp3`, and the URI of `/nhạc/Cà phê.mp3` comes out byte for byte.
 
-`tests/player-window-test.sh` needs `xvfb xdotool metacity python3 dbus-x11` and *no* player at all: a stand-in for mpv
+`tests/player-window-test.sh` needs `xvfb xdotool metacity python3 dbus-x11 playerctl` and *no* player at all: a stand-in for mpv
 (`tests/fake-mpv.py`, an empty script that writes down what it was given, listens on the `--input-ipc-server` socket and
 answers the JSON the window sends — pause, seek, the volume, how far into the track it is) plays songs that last one
 second each, so the whole transport can be driven by the keyboard: the next and previous keys (and the wrap-around),
@@ -99,7 +107,9 @@ is what lets the test judge a seek exactly: `Ctrl+Right` has to ask mpv for wher
 absolute 5 s would be a different bug), and on a 2.5-second video the same key has to stop at the 2.5 s end of the track
 instead of running past it. The video of the last phase also comes with a `clip.srt` next to it and a second video
 (`zebra.mp4`) that has none: the log has to name the one and say there is nothing next to the other, and `v` has to send
-mpv the one command that hides the subtitles and, again, the one that shows them.
+mpv the one command that hides the subtitles and, again, the one that shows them. It uses `playerctl` on the session bus
+to confirm that HDE announces itself as `hde-media`, reports `Playing` and track metadata, and dispatches Play/Pause and
+Next to the same controls as the window.
 
 The picture-viewer test needs `xvfb xdotool metacity imagemagick dbus-x11`, opens a folder of solid-coloured pictures of known
 sizes and checks what the log says and what is on the screen: the arrows (wrapping included), the zoom keys and the
@@ -124,5 +134,4 @@ With none of them installed the window says so and gives the two commands (`sudo
 
 ## What comes next in this folder
 
-The panel showing what is playing (HDE's own MPRIS interface), the multimedia keys of `hde-hotkeys`, the volume on the
-screen, and a screen recorder.
+A panel showing what is playing, the volume on the screen, and a screen recorder.

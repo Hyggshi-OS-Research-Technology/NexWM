@@ -42,6 +42,7 @@ typedef struct {
     GtkWidget *window;
     GtkWidget *terminal_widget;
     GtkWidget *header;
+    GtkWidget *context_menu;
     HdeCmdVt *vt;
     HdeCmdOptions options;
     const char *program_name;
@@ -81,6 +82,9 @@ static const double DEFAULT_BG_B = 0.125;
 static const double DEFAULT_FG_R = 0.855;
 static const double DEFAULT_FG_G = 0.878;
 static const double DEFAULT_FG_B = 0.914;
+
+static void menu_new(GtkMenuItem *item, gpointer userdata);
+static void menu_open_folder(GtkMenuItem *item, gpointer userdata);
 
 static void queue_draw(CmdWindow *app)
 {
@@ -535,6 +539,15 @@ static gboolean app_key_press(GtkWidget *widget, GdkEventKey *event, gpointer us
     gboolean alt = (state & GDK_MOD1_MASK) != 0;
     (void)widget;
 
+    if (ctrl && shift) {
+        switch (gdk_keyval_to_lower(key)) {
+        case GDK_KEY_t: menu_new(NULL, app); return TRUE;
+        case GDK_KEY_o: menu_open_folder(NULL, app); return TRUE;
+        case GDK_KEY_w: gtk_widget_destroy(app->window); return TRUE;
+        default: break;
+        }
+    }
+
 #ifdef HDE_CMD_HAVE_VTE
     if (app->options.use_vte) {
         if (ctrl && shift && (key == GDK_KEY_c || key == GDK_KEY_C)) { vte_terminal_copy_clipboard(app->vte); return TRUE; }
@@ -675,6 +688,23 @@ static gboolean button_press(GtkWidget *widget, GdkEventButton *event, gpointer 
 {
     CmdWindow *app = userdata;
     (void)widget;
+    if (event->button == 3) {
+        if (app->options.use_vte) {
+            if (event->state & GDK_SHIFT_MASK) return FALSE;
+        } else if (app->vt && hde_cmd_vt_mouse_mode(app->vt) && !(event->state & GDK_SHIFT_MASK)) {
+            int column, row;
+            event_cell(app, event->x, event->y, &column, &row);
+            mouse_send(app, 2, column, row, 0);
+            return TRUE;
+        }
+        gtk_widget_grab_focus(app->terminal_widget);
+        if (app->context_menu) {
+            gtk_menu_popup(GTK_MENU(app->context_menu), NULL, NULL, NULL, NULL, event->button, event->time);
+            return TRUE;
+        }
+        return FALSE;
+    }
+    if (app->options.use_vte) return FALSE;
     if (event->button == 1) {
         int column, row;
         event_cell(app, event->x, event->y, &column, &row);
@@ -700,6 +730,14 @@ static gboolean button_release(GtkWidget *widget, GdkEventButton *event, gpointe
 {
     CmdWindow *app = userdata;
     (void)widget;
+    if (event->button == 3 && !app->options.use_vte && app->vt &&
+        hde_cmd_vt_mouse_mode(app->vt) && !(event->state & GDK_SHIFT_MASK)) {
+        int column, row;
+        event_cell(app, event->x, event->y, &column, &row);
+        mouse_send(app, 2, column, row, 1);
+        return TRUE;
+    }
+    if (app->options.use_vte) return FALSE;
     if (event->button == 1 && hde_cmd_vt_mouse_mode(app->vt) && !(event->state & GDK_SHIFT_MASK)) {
         int column, row;
         event_cell(app, event->x, event->y, &column, &row);
@@ -838,24 +876,53 @@ static void menu_font_reset(GtkMenuItem *item, gpointer userdata)
     update_font(app, DEFAULT_FONT_SIZE);
 }
 
-static void menu_new(GtkMenuItem *item, gpointer userdata)
+static void open_new_terminal(CmdWindow *app, const char *directory)
 {
-    CmdWindow *app = userdata;
-    (void)item;
     GPtrArray *args = g_ptr_array_new_with_free_func(g_free);
     g_ptr_array_add(args, g_strdup(app->program_name ? app->program_name : "hde-cmd"));
     if (app->options.use_vte) g_ptr_array_add(args, g_strdup("--vte"));
-    if (app->options.working_directory) {
-        g_ptr_array_add(args, g_strdup("--working-directory"));
-        g_ptr_array_add(args, g_strdup(app->options.working_directory));
+    const char *cwd = directory && *directory ? directory : app->options.working_directory;
+    if (cwd && *cwd) {
+        g_ptr_array_add(args, g_strdup("--directory"));
+        g_ptr_array_add(args, g_strdup(cwd));
+    }
+    if (app->options.title && *app->options.title) {
+        g_ptr_array_add(args, g_strdup("--title"));
+        g_ptr_array_add(args, g_strdup(app->options.title));
     }
     g_ptr_array_add(args, NULL);
     GError *error = NULL;
     if (!g_spawn_async(NULL, (char **)args->pdata, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &error)) {
-        g_printerr("hde-cmd: cannot open another terminal: %s\n", error->message);
+        g_printerr("hde-cmd: cannot open another terminal: %s\n", error ? error->message : "unknown error");
         g_clear_error(&error);
     }
     g_ptr_array_unref(args);
+}
+
+static void menu_new(GtkMenuItem *item, gpointer userdata)
+{
+    (void)item;
+    open_new_terminal(userdata, NULL);
+}
+
+static void menu_open_folder(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    (void)item;
+    GtkWidget *dialog = gtk_file_chooser_dialog_new("Open a Terminal in a Folder", GTK_WINDOW(app->window),
+                                                     GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+                                                     "_Cancel", GTK_RESPONSE_CANCEL,
+                                                     "_Open Terminal", GTK_RESPONSE_ACCEPT, NULL);
+    const char *start = app->options.working_directory ? app->options.working_directory : g_get_home_dir();
+    if (start && *start) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), start);
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *directory = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        if (directory) {
+            open_new_terminal(app, directory);
+            g_free(directory);
+        }
+    }
+    gtk_widget_destroy(dialog);
 }
 
 static GtkWidget *menu_item(GtkWidget *menu, const char *label, GCallback callback, CmdWindow *app)
@@ -866,16 +933,44 @@ static GtkWidget *menu_item(GtkWidget *menu, const char *label, GCallback callba
     return item;
 }
 
+static void menu_fullscreen(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    (void)item;
+    if (app->fullscreen) {
+        gtk_window_unfullscreen(GTK_WINDOW(app->window));
+        app->fullscreen = 0;
+    } else {
+        gtk_window_fullscreen(GTK_WINDOW(app->window));
+        app->fullscreen = 1;
+    }
+}
+
+static void menu_close(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    (void)item;
+    gtk_widget_destroy(app->window);
+}
+
 static GtkWidget *build_header(CmdWindow *app)
 {
     GtkWidget *header = gtk_header_bar_new();
     gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(header), TRUE);
     gtk_header_bar_set_title(GTK_HEADER_BAR(header), "HDE Cmd");
     gtk_header_bar_set_subtitle(GTK_HEADER_BAR(header), "Terminal");
+
+    GtkWidget *new_button = gtk_button_new_from_icon_name("list-add-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(new_button, "Open a new terminal window (Ctrl+Shift+T)");
+    g_signal_connect(new_button, "clicked", G_CALLBACK(menu_new), app);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_button);
+
     GtkWidget *button = gtk_menu_button_new();
     gtk_button_set_image(GTK_BUTTON(button), gtk_image_new_from_icon_name("open-menu-symbolic", GTK_ICON_SIZE_BUTTON));
+    gtk_widget_set_tooltip_text(button, "Terminal actions and keyboard shortcuts");
     GtkWidget *menu = gtk_menu_new();
-    menu_item(menu, "New Terminal", G_CALLBACK(menu_new), app);
+    menu_item(menu, "New Terminal Window  Ctrl+Shift+T", G_CALLBACK(menu_new), app);
+    menu_item(menu, "Open Folder in New Terminal…  Ctrl+Shift+O", G_CALLBACK(menu_open_folder), app);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
     menu_item(menu, "Copy  Ctrl+Shift+C", G_CALLBACK(menu_copy), app);
     menu_item(menu, "Paste  Ctrl+Shift+V", G_CALLBACK(menu_paste), app);
@@ -883,8 +978,12 @@ static GtkWidget *build_header(CmdWindow *app)
     menu_item(menu, "Zoom In  Ctrl++", G_CALLBACK(menu_font_up), app);
     menu_item(menu, "Zoom Out  Ctrl+-", G_CALLBACK(menu_font_down), app);
     menu_item(menu, "Reset Zoom  Ctrl+0", G_CALLBACK(menu_font_reset), app);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+    menu_item(menu, "Toggle Full Screen  F11", G_CALLBACK(menu_fullscreen), app);
+    menu_item(menu, "Close Window  Ctrl+Shift+W", G_CALLBACK(menu_close), app);
     gtk_menu_button_set_popup(GTK_MENU_BUTTON(button), menu);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), button);
+    app->context_menu = menu;
     gtk_widget_show_all(header);
     app->header = header;
     return header;
@@ -982,6 +1081,8 @@ static void activate(GtkApplication *application, gpointer userdata)
         g_signal_connect(app->vte, "child-exited", G_CALLBACK(vte_child_exited), app);
         g_signal_connect(app->vte, "window-title-changed", G_CALLBACK(vte_title_changed), app);
         g_signal_connect(app->vte, "key-press-event", G_CALLBACK(app_key_press), app);
+        gtk_widget_add_events(app->terminal_widget, GDK_BUTTON_PRESS_MASK);
+        g_signal_connect(app->vte, "button-press-event", G_CALLBACK(button_press), app);
         gtk_container_add(GTK_CONTAINER(app->window), app->terminal_widget);
         gtk_widget_show_all(app->window);
         update_font(app, DEFAULT_FONT_SIZE);

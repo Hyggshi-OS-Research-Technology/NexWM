@@ -11,10 +11,11 @@ working terminal.
 
 ```text
 hde-cmd                              start the user's login shell
-hde-cmd --working-directory ~/src    start in a folder
+hde-cmd -C ~/src                     start in a folder
+hde-cmd --directory ~/src            the same, with a long option
 hde-cmd --title "Build"              choose the initial window title
-hde-cmd -- /usr/bin/top              run a command
-hde-cmd -e /path/to/script arg       run a command and its arguments
+hde-cmd -- make check                run a command and its arguments
+hde-cmd -e git status                the same, without the -- separator
 hde-cmd --vte                        use VTE instead of the built-in engine (if available)
 hde-cmd --help, --version
 ```
@@ -22,8 +23,11 @@ hde-cmd --help, --version
 The built-in engine creates a PTY, sets `TERM=xterm-256color`, and supports Unicode text, ANSI/VT cursor movement,
 scrolling, insert/erase, 16/256/true-colour SGR, bold/italic/underline/inverse, alternate screen, OSC window titles,
 status replies, application cursor keys, mouse reporting, bracketed paste and up to 2,000 lines of scrollback.
-`Ctrl+Shift+C` copies a selection, `Ctrl+Shift+V` pastes, `Shift+PageUp/PageDown` scrolls, `Ctrl+Plus/Minus/0` changes
-font size, and `F11` toggles full screen.
+Right-click opens the actions menu (Copy, Paste, new terminal, open a folder in a new terminal, zoom and full screen).
+The header bar has a visible new-terminal button. `Ctrl+Shift+T` opens a new terminal window, `Ctrl+Shift+O` opens a
+folder in a new terminal, and `Ctrl+Shift+W` closes the current window. `Ctrl+Shift+C` copies a selection,
+`Ctrl+Shift+V` pastes, `Shift+PageUp/PageDown` scrolls, `Ctrl+Plus/Minus/0` changes font size, and `F11` toggles full
+screen.
 
 ## Build
 

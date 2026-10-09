@@ -436,7 +436,7 @@ About / Display.
   search as **layer-shell surfaces** (gtk-layer-shell), a **Wayland taskbar** (wlr-foreign-toplevel-management:
   click, middle-click to close, right-click Minimize / Maximize / Close; Show Desktop), the panel controlled over
   D-Bus, the keys as labwc key bindings that run `hde-hotkeys --action ...` (Super, Ctrl+Esc, F1–F3, F6–F8, media
-  keys, PrtSc through `grim` / `slurp`, Super+L with `swaylock`, ...). Changing a setting rewrites labwc's
+  keys, PrtSc through `grim` / `slurp`, Super+L with HDE's own `hde-lock`, ...). Changing a setting rewrites labwc's
   configuration and labwc reloads it; logging out stops labwc. Without `libgtk-layer-shell-dev` HDE builds for X11 only.
 
 ### Tests
@@ -700,3 +700,217 @@ to the trash with its `.trashinfo`, the Trash view and Restore, `Alt+Left`, the 
 folder, Properties of a folder with its size, `Ctrl+F` finding files in subfolders, a double click into a folder and
 `Backspace`, tabs, `ShowItems` over D-Bus, `hde-files --select`, Dark mode, `--quit`, no GTK criticals, and a double
 click on a folder of the desktop opening Hyggshi Files.
+
+## HDE's own lock screen, on both sessions (fix 18)
+
+`Super+L` used to hand the session over to somebody else's locker (swaylock, gtklock, i3lock, slock, …) and, on a
+machine without one, to `loginctl lock-session`. HDE now locks its sessions itself: `hde-lock` (sources
+`src/hde-lock.c`, `src/hde-lock-core.c` for the clock, the date, the name and the password field, and
+`protocols/ext-session-lock-v1.xml` for the Wayland side) is the first thing `HDE_SH_LOCK` runs on both of HDE's
+sessions. The other lockers stay where hde-lock cannot lock at all — a build without PAM, a compositor without the
+session lock protocol — and `hde-lock --check` says which of the two this session is (exit 0 = hde-lock can lock it).
+
+### Added
+
+- **The X11 session: a window of its own.** The lock screen is an override-redirect window over the whole screen that
+  no window manager can move, decorate, draw over or take the keyboard from, with the keyboard and the mouse grabbed
+  and the pointer invisible; `TERM`, `INT`, `HUP`, `QUIT` and `USR1` do not unlock it, and `_HDE_LOCKED` on the root
+  window tells the rest of HDE (and the tests) that the screen is locked. The keyboard is what the lock screen insists
+  on — without it the keys would go to whatever window has the focus — while a program that holds the *pointer* for a
+  moment (a menu, a flyout, the window manager in the middle of a drag) only gets the mouse retried while the screen
+  is locked, instead of the lock failing. A click is received by the lock screen itself (`INFO: a click on the lock
+  screen: it went to the lock screen, not to the session behind it`), and the password is checked through PAM.
+- **The Wayland session: the compositor's session lock.** `ext-session-lock-v1` (labwc offers it): the compositor
+  itself stops showing and feeding input to every other program, one `wl_shm` buffer per output, the clock, the date
+  and the name drawn on it. A lock client that is killed from outside does *not* give the session back — only the
+  password does; that is what the protocol is for.
+- **`hde-lock` also takes the way out**: `--check` (0 = this session can be locked, 3 = it cannot, with the reason in
+  one line), `--version` (which backends this build got), `--x11` / `--wayland` to pick the session by hand — without
+  them it is `WAYLAND_DISPLAY` first, then `DISPLAY`. The password means `/etc/pam.d/hde-lock` when that file exists
+  and `login` otherwise, so a system can say there what locking means, and the file that ships the program does not
+  have to.
+
+### Fixed
+
+- **A cursor needs a real pixmap, not `None`.** The invisible pointer was made with
+  `xcb_create_cursor(conn, cursor, XCB_NONE, XCB_NONE, …)`. The X protocol's `CreateCursor` is
+  `source: PIXMAP, mask: PIXMAP or None`: only the *mask* may be `None`, so the X server refused the request
+  (`BadPixmap`), the cursor never existed, and everything built on it went with it — the lock window was refused
+  (`BadCursor`) and the pointer grab as well, which made the lock screen look like "another program is holding the
+  keyboard" and left the screen unlocked. The cursor is now made from a 1×1 depth-1 pixmap with every bit clear (a
+  cursor the screen shines through), and a refusal says what it was: the reason of a grab that did not work and the
+  name of the X error (`BadAccess`, `BadCursor`, …) are in the log.
+
+### Tests
+
+`make check` (the screens job) locks the session through `HDE_SH_LOCK` — the same thing `Super+L` and the Power menu's
+Lock button do — and checks the lock screen's own background on the screen, that the click goes to the lock screen,
+that `TERM` does not unlock it, that a password PAM turns down is refused and only `Enter` is checked, and that a
+test PAM module accepts only the typed test password: 16 assertions, including `hde-lock --check`. The assertions
+of the locked state only run while the screen is really locked (an unlocked desktop used to pass some of them by
+itself). The Wayland job does the same on the compositor's session lock (`ext-session-lock-v1`) and checks that the
+compositor shows nothing but the lock screen, that `pam_deny` keeps it locked and that the correct test password
+unlocks it. Fedora checks that `pam-devel`,
+`libxcb-devel`, `wayland-devel` and `libxkbcommon-devel` really built all three backends of `hde-lock` there.
+
+## The login screen: the field to type the user name in (fix 19)
+
+The HDE login screen (`login/sddm/hde`, an SDDM theme) could come up with no user tiles *and* no field to type a user
+name in: the card showed the password field, the *Sign in* button answered *Please choose a user.* and there was
+nothing to type into at all. The screen was unusable, and its Enter key complained instead of giving the keyboard to a
+field.
+
+### Fixed
+
+- **A user list that is empty is not a user list.** SDDM builds the greeter's `userModel` from `getpwent()`, leaving
+  accounts out by uid range (`[Users] MinimumUid` / `MaximumUid` in `/etc/sddm.conf.d`) and by `HideUsers` /
+  `HideShells`; on a machine where that comes out empty, `HdeUsers` was 0 pixels high while `theme.conf` said
+  `userMode=user`, so no tiles and no name field were drawn and `userName` stayed empty: the login screen could not
+  name anybody. `Main.qml` now decides from what the greeter actually gave (`haveUserTiles` = tiles are shown *and*
+  `users.count > 0`) and falls back to a **user name field** (`showNameField`) whenever there is no tile list to show,
+  or when `userMode=username` is asked for. The card says why the list is missing ("This login screen has no user
+  list: type your user name."), `tryLogin()` reads the typed name, and `sddm.login()` is called with it — typing a name
+  and pressing Enter now logs in.
+- **The keyboard goes into the card.** With the greeter having taken the keyboard for its own window, `focus = true`
+  was not enough — the fields stayed unfocused, so typing went nowhere and the card's own Enter handler ran with the
+  keyboard outside it (which is where *Please choose a user.* came from). `HdeField`/`HdePassword.focusField()` use
+  `forceActiveFocus()` now, `Main.qml` puts the keyboard in the first field when the theme is loaded, when the card is
+  clicked and from a 600 ms watchdog `Timer`, and Enter with the keyboard nowhere focuses a field instead of
+  complaining. The names of the fields are in the greeter's log (`hde-login: the greeter listed 1 user(s)`,
+  `hde-login: the greeter listed no users: the login screen offers a user name field`, `hde-login: the keyboard is in
+  the password field`) so this is diagnosable from `journalctl -u sddm`.
+- **A `ReferenceError` in every greeter without a keyboard object.** `HdeLayouts.qml` connected to `keyboard` without a
+  guard; SDDM only has that object from 0.19 on, and on an older one the connection was a QML error. And
+  `closeChoosers()` called `layouts.closeCombo()` while `HdeLayouts` had no `id` — no session or layout popup could be
+  closed. Both fixed; `theme.conf` documents `showUserList` separately from the user mode.
+
+### Tests
+
+`tests/sddm-test.sh` now checks what the card decided from what the greeter gave it (the log lines above), where the
+keyboard is, that typing reaches the card (xdotool, when the WM-less CI X server delivers it) and renders the screen a
+second time with `[Users] MinimumUid=60000` written into `/etc/sddm.conf.d` so the greeter really does hand over no
+users: the name field has to be there, and the card still drawn. `tests/sddm-qml-test.py` (new, PySide6/Qt 6,
+offscreen, no display, no SDDM, no root) loads `Main.qml` with a greeter made in the test and checks three
+situations end to end — one user (tiles, keyboard in the password field), an empty user list and no user model at all
+(the name field appears, the keyboard goes into it, typing a name reaches `sddm.login()`): 27 checks, run by
+`sh tests/sddm-test.sh` and installed in the SDDM job of the CI. `pyside6-qmllint` on every QML file: no errors.
+
+The greeter runs on a pty in the test (`tests/ptylog.py`): SDDM's greeter only writes the theme's own output to stderr
+when it is on a terminal and sends it to journald otherwise (Fedora's SDDM, in a CI container without a journal: the
+log the test reads stays empty), which is what the Fedora job caught.
+
+## Fedora and Arch Linux, and the pictures of the login screen (fix 20)
+
+Three things a user asked for in one go: the login screen of HDE *seen*, not only described; the Fedora job doing what
+the Ubuntu job does (a whole desktop test, with pictures); and Arch Linux supported as a distribution, with the way it
+is done written down.
+
+### Added
+
+- **Pictures of the login screen.** `tests/sddm-qml-test.py` now photographs the theme as it renders, in every case it
+  checks: with the users as tiles, with an empty user list (the field to type a user name in, which is what fixes 19 is
+  about) and with no user model at all. They are `shot-sddm-*.png` in `$HDE_TEST_OUT`, they travel in the
+  `hde-sddm-login` artifact of the CI job, and the job publishes them as check runs (`hde-shot sddm-1`, …) when the
+  commit message says `[shots]` — so the login screen can be looked at without logging out of one's own session, and
+  without downloading anything.
+- **Fedora runs the smoke test, and gets the same pictures.** The Fedora job (`Fedora (dnf, full desktop)`) now runs
+  `tests/smoke.sh` — the same test the Ubuntu jobs run — after its own Fedora test: the whole desktop in Xvfb (the
+  panel, the Start menu, the Control Center, Settings, notifications, the desktop icons) *photographed* along the way,
+  the results published as annotations and the pictures in the **`hde-smoke-fedora`** artifact — the Fedora twin of
+  `hde-smoke-ubuntu-22.04`. Its check runs are labelled
+  (`hde-shot Fedora 01-panel`) so Fedora's, Ubuntu's and Arch's pictures of the same test are told apart.
+- **Arch Linux: `packaging/arch/README.md`, `packaging/arch/deps.sh` and a CI job.** Arch names its development
+  packages like the libraries (gtk3, libwnck3, libxcb, pam, wlroots: no `-dev`, no `-devel`), its Python package is
+  `python`, xrandr is a package of its own (`xorg-xrandr`) and its windows are in `xorg-xset`/`xorg-xsetroot` — all of
+  that is in the list, and `hde-settings --deps` prints `sudo pacman -S` with those names on an Arch (the translation
+  table in `src/hde-distro.h` got the rows it was missing: `python3` → `python`, `xsltproc` → `libxslt`, and `xrandr`
+  in the `x11-xserver-utils` row; `tests/distro-test.c` checks the three of them without an Arch machine).
+  `packaging/arch/README.md` has the package table (Debian ↔ Arch) and a word on the **rolling wlroots**: Arch carries
+  the newest release, `nexwm/src/wayland.c` supports 0.17 and newer (`-DNEXWM_WLROOTS_MINOR`), and the new CI job
+  builds the compositor against whatever Arch has today — a wlroots release that breaks the source is found there
+  first. `tests/arch-test.sh` checks the list everywhere (off an Arch it checks the list in the repository and skips
+  the machine-specific half), and on an Arch it checks pacman, the translation, and that NexWM was built with its
+  wlroots compositor. `make check-unit` runs it, `make check-arch` is the same test on an Arch.
+- **An Arch CI job** (`Arch Linux (pacman, current wlroots)`, `container: archlinux:latest`): install through
+  `packaging/arch/deps.sh install build runtime-minimal test`, build every target (and say which wlroots that was),
+  `tests/arch-test.sh --deps`, the smoke test in Xvfb (the pictures of the Arch desktop: the **`hde-smoke-arch`**
+  artifact), the unit tests, and the pictures as check runs under `[shots]` (named `hde-shot Arch …`, and Fedora's
+  `hde-shot Fedora …`, so the three systems' pictures of the same test are told apart).
+
+### Tests
+
+`tests/sddm-qml-test.py` did not need a display before and does not need one now: the pictures come from the QML
+engine itself (`QQuickView::grabWindow()` with the offscreen platform and the software backend — the same rendering
+the CI greeter uses). Locally: 30 checks, including "a picture of the login screen was saved" three times.
+`tests/arch-test.sh --deps` passes anywhere (11 checks); on an Arch it is 20 more (pacman, the package names,
+`nexwm --version`, the unit tests). `tests/distro-test.c`: 53 checks, three of them new for the Arch names.
+
+## The first Fedora and Arch runs: what failed, and the pictures (fix 21)
+
+The two commits before this one (`15d7c86`, `0a8df83`) took the new jobs to the CI and both jobs failed. The failures
+were read from the check-run annotations (the job logs themselves are not reachable through the API): the whole results
+body of a smoke test arrives as one annotation, so `tests/ci-annotate.py`'s output is what a run is diagnosed from.
+
+### Arch: `Install the dependencies (packaging/arch/deps.sh)` — exit 127 and exit 1
+
+The container of `archlinux:latest` has just been unpacked and its `/var/lib/pacman/sync` is empty: `pacman -S` cannot
+find a single name, and the fallback of `deps.sh` (`pick` takes the first alternative and says that pacman has no
+package information) installed nothing. The job then ran the report step without `python3` — that is the exit 127
+(`command not found`), and the upload step warned that it found no `/tmp/hde-smoke/*` and no `build.log`, which is why
+no `hde-smoke-arch` artifact exists.
+
+* `packaging/arch/deps.sh`: `install` runs `pacman -Sy --noconfirm` first when there is no sync database, with a line
+  saying why (nothing changes on an installed system, the databases are there).
+* The Arch job's report step checks for `python3` and says that a step before it did not get to install the packages
+  instead of failing with `command not found`.
+
+### Fedora: the smoke test's failures
+
+The same smoke test the Ubuntu jobs run passes there; on Fedora these checks failed, and this is what each one was:
+
+* **F6/F7/F8** ("F6 shows the brightness OSD", "F6 dims the screen to 95%", "the panel got the level for its OSD",
+  "F7 brightens it again", "fkeys_display=false gives F6/F7/F8 back to applications", "F8 opens the Project window"):
+  the brightness code itself works on Fedora (the Settings slider's software dimming checks all pass), so the key path
+  is what differs. The smoke test now writes the reason `hde-hotkeys` itself logs into the results whenever one of these
+  checks fails (`keys_reason`): whether another program holds the keys and which, and what the brightness action said.
+* **"... the date under the time"**: the panel puts the date under the time only when both lines fit (it never grows, an
+  item higher than the panel would be cut), and the line heights are font metrics. Fedora's font needs 34 px for the
+  two lines where the panel has 28, so the panel kept one line and said the numbers — the check now reads those numbers
+  and passes when the panel has really measured this. `src/hde-panel.c` also logs *which* font decided them.
+* **"Settings pairs a Bluetooth device"**: the Pair button of the "Other devices" card was clicked at one exact place
+  (1078,556), which the rows of that card move when the font of the system is another one. The test now clicks a small
+  ladder of positions around it and stops as soon as the mock reports the device paired.
+* **"crashed panel is restarted by hde-session"** and **"logout stops the panel / hde-hotkeys"**: these looked once
+  after a fixed 4 s / 5 s. They now wait for the event (up to 15 s) and, when it does not happen, print what is still
+  running into the results — a slower machine fails with a diagnosis instead of a bare FAIL.
+* **"right-click on a file: ... Compress ..."**: the menu of the file manager is read once after the click; on a loaded
+  machine the first read can catch half of it. It is read again (up to 3 s) before the check decides.
+
+### The font the CI measures with (`HDE_SMOKE_FONT`)
+
+The checks of `tests/smoke.sh` are in pixels (the clock of the panel on one line, the 1020x700 Settings window, the
+place of the Pair button) and the desktop these numbers were written for uses the font of an Ubuntu runner. A system
+whose default font is another one measures another desktop. `tests/smoke.sh` now reads `HDE_SMOKE_FONT` ("DejaVu Sans
+10") and writes it into the settings the session starts with; the Fedora and Arch jobs set it, so all three systems
+measure the same desktop and their pictures are of the same thing. It is unset by default: on a developer's machine
+nothing about the test changes.
+
+### Where the pictures are
+
+* the artifacts of a run: **`hde-smoke-ubuntu-22.04`**, **`hde-smoke-fedora`**, **`hde-smoke-arch`** (the `shot-*.png` of
+  `tests/smoke.sh` plus its logs) — they are uploaded even when the job fails, which is how the Fedora pictures of the
+  failing run could be looked at;
+* and, when the commit message contains `[shots]`, one check run per picture (`hde-shot Fedora 01-desktop`, ...), so
+  the pictures of a run can be looked at in the browser without downloading the artifact.
+
+## Fresh Arch containers: fully update before installing packages (fix 22)
+
+The Arch job for `2fc16f1` failed during `Install the dependencies (packaging/arch/deps.sh)`. The job log was not
+available through the Actions API while the workflow was still running, so the exact pacman error could not be read.
+The fresh-container path now runs `pacman -Syu --noconfirm` instead of syncing repository databases alone, avoiding a
+partial upgrade before installing dependencies. If pacman has sync databases but none of an entry's package alternatives
+exist, the installer now reports that explicitly rather than passing a stale package name onward. A mock-pacman test in
+`tests/arch-test.sh --deps` exercises the empty-database bootstrap without needing an Arch host.
+
+On that same run, Fedora's build and Fedora-specific session test succeeded; its full smoke test was still running at the
+last status check. No Fedora-only source or dependency change was indicated by those results.

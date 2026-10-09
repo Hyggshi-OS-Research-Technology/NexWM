@@ -97,6 +97,12 @@ void hde_panel_config_load(HdePanelConfig *c)
     g_free(pos);
     c->size = CLAMP(kf_int(kf, "panel_size", HDE_PANEL_SIZE_DEFAULT), HDE_PANEL_SIZE_MIN, HDE_PANEL_SIZE_MAX);
     c->opacity = CLAMP(kf_int(kf, "panel_opacity", 100), 40, 100);
+    c->floating = kf_bool(kf, "panel_floating", FALSE);
+    c->inset = CLAMP(kf_int(kf, "panel_inset", 16), 8, 48);
+    c->spacing = CLAMP(kf_int(kf, "panel_spacing", 6), 0, 16);
+    c->shadow = kf_bool(kf, "panel_shadow", FALSE);
+    c->rounded = kf_bool(kf, "panel_rounded", FALSE);
+    c->hover = kf_bool(kf, "panel_hover", TRUE);
     c->show_menu = kf_bool(kf, "panel_show_menu", TRUE);
     c->show_desktop = kf_bool(kf, "panel_show_desktop", TRUE);
     c->show_run = kf_bool(kf, "panel_show_run", TRUE);

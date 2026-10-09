@@ -7,8 +7,16 @@
 #      even SDDM's component module: the same theme has to run in the Qt 5 and the Qt 6 greeter).
 #   2. the install script: --dry-run says what it would do, a real install into a throw-away root puts the theme in
 #      usr/share/sddm/themes/hde and writes etc/sddm.conf.d/50-hde-theme.conf, --uninstall takes both away again.
-#   3. the login screen for real: SDDM's greeter renders the theme in an X server, and the test looks at the log (no
-#      QML error) and at the screen (the card is there, with the accent colour on it).
+#   3. the login screen for real: SDDM's greeter renders the theme in an X server (on a pty, tests/ptylog.py, so that
+#      the greeter writes the theme's output to stderr: without a terminal it sends it to journald, or to a log file of
+#      its own, and the log this test reads stays empty), and the test looks at the log (no
+#      QML error, and what the theme says it was given: the users, where the keyboard is) and at the screen (the card
+#      is there, with the accent colour on it). Then the same render with the greeter handing over no user at all
+#      ([Users] MinimumUid in /etc/sddm.conf.d hides every account), where the login screen has to offer a field to
+#      type a user name in: without one nobody could log in on such a machine.
+#   4. the same theme in a real QML engine (PySide6, offscreen, no display, no SDDM, no root) with the greeter made in
+#      the test — one user, an empty user list and no user model at all — which is the only way to check the empty
+#      user list everywhere. See tests/sddm-qml-test.py.
 #
 #   sh tests/sddm-test.sh                 everything this machine can do
 #   sh tests/sddm-test.sh --no-render     only 1. and 2. (no display, no greeter needed)
@@ -39,6 +47,7 @@ done
 [ -n "$THEME" ] && [ -d "$THEME" ] || { echo "theme directory '$THEME' not found" >&2; exit 2; }
 
 mkdir -p "$OUT"
+HDE_TEST_OUT=$OUT export HDE_TEST_OUT      # tests/sddm-qml-test.py writes its PASS/FAIL lines into the same file
 FAILS=0
 pass() { echo "PASS: sddm: $*" | tee -a "$OUT/results.txt"; }
 fail() { echo "FAIL: sddm: $*" | tee -a "$OUT/results.txt"; FAILS=$((FAILS + 1)); }
@@ -60,6 +69,26 @@ else
     same() { return 1; }
 fi
 skip() { echo "SKIP: sddm: $*" | tee -a "$OUT/results.txt"; }
+# card_pixels -> "CARD ACCENT": how many pixels of the column at x=640 of the 1280x800 screen the greeter runs on are
+# the card's colour and how many are the accent colour. A drawn login card has both; an empty screen has neither.
+card_pixels() {
+    acc=0; crd=0; y=0
+    while [ "$y" -lt 800 ]; do
+        c=$($XT pixel 640 "$y" 2>/dev/null)
+        if [ -n "$c" ]; then
+            # shellcheck disable=SC2086
+            set -- $c
+            if [ "$1" -ge 25 ] && [ "$1" -le 95 ] && [ "$2" -ge 90 ] && [ "$2" -le 175 ] && [ "$3" -ge 180 ]; then
+                acc=$((acc + 1))
+            fi
+            if [ "$1" -le 40 ] && [ "$2" -le 45 ] && [ "$3" -ge 22 ] && [ "$3" -le 70 ]; then
+                crd=$((crd + 1))
+            fi
+        fi
+        y=$((y + 4))
+    done
+    echo "$crd $acc"
+}
 
 info "theme: $THEME ($(find "$THEME" -name '*.qml' | wc -l) QML files, $(du -sk "$THEME" | cut -f1) KiB)"
 
@@ -293,13 +322,16 @@ else
         export DISPLAY="$DISP"
         if [ -n "$DISP" ] && $XT popups >/dev/null 2>&1; then
             # SDDM 0.20 and newer: --test; older: --test-mode
-            GOPID=""
+            GOPID=""; GFLAG=""
             for flag in --test --test-mode; do
+                # tests/ptylog.py: on a terminal, and only there, SDDM's greeter writes the theme's own output to
+                # stderr. With its stderr redirected to a file it sends it to journald instead (Fedora's SDDM; in the
+                # CI container there is no journal and the log stays empty), so the greeter runs on a pty here.
                 QT_QUICK_BACKEND="${QT_QUICK_BACKEND:-software}" QT_LOGGING_RULES="*.debug=true" \
-                    "$GREETER" "$flag" --theme "$THEME" > "$OUT/greeter.log" 2>&1 &
+                    python3 "$HERE/ptylog.py" "$OUT/greeter.log" "$GREETER" "$flag" --theme "$THEME" &
                 gpid=$!
                 sleep 4
-                if kill -0 "$gpid" 2>/dev/null; then GOPID=$gpid; break; fi
+                if kill -0 "$gpid" 2>/dev/null; then GOPID=$gpid; GFLAG=$flag; break; fi
                 wait "$gpid" 2>/dev/null
             done
             if [ -z "$GOPID" ]; then
@@ -326,6 +358,25 @@ else
                     fail "the QML of the theme reports errors:"; echo "$errs" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
                     echo "$errs" | head -n 3 | sed 's/^/        /'
                 fi
+                # ... and the theme says in the greeter's log what the greeter gave it and where the keyboard is. This
+                # is how a login screen that shows a field to type a user name in (instead of the avatars) is told
+                # apart from one that simply lost its list, and how "typing does nothing" can be seen from the log.
+                # how many users the greeter handed over, or that it handed over none at all: on a machine with no
+                # user account for it to list (the Fedora CI container has root only, and root is below SDDM's
+                # [Users] MinimumUid) the theme offers a field to type a user name in, which is the case this test is
+                # about — the check is that the theme says which of the two it was, not that there are users
+                listed=$(grep -o "hde-login: the greeter listed [0-9][0-9]* user(s)" "$OUT/greeter.log" 2>/dev/null | tail -n1)
+                [ -n "$listed" ] || listed=$(grep -o "hde-login: the greeter listed no users" "$OUT/greeter.log" 2>/dev/null | tail -n1)
+                if [ -n "$listed" ]; then pass "the theme says what the greeter gave it ($listed)"
+                else fail "the theme does not say what the greeter gave it: no 'hde-login: the greeter listed ...' in the greeter's log ($(grep -c . "$OUT/greeter.log" 2>/dev/null | tr -d ' ') log lines, $(grep -c 'hde-login' "$OUT/greeter.log" 2>/dev/null | tr -d ' ') of them with hde-login)"; fi
+                where=$(grep -o "the keyboard goes into the [a-z ]*field" "$OUT/greeter.log" 2>/dev/null | tail -n1)
+                if [ -n "$where" ]; then pass "the theme puts the keyboard in a field of the card ($where)"
+                else fail "the theme never puts the keyboard in a field: typing on the login screen would do nothing ($(grep -c . "$OUT/greeter.log" 2>/dev/null | tr -d ' ') log lines, $(grep -c 'hde-lock\|hde-login' "$OUT/greeter.log" 2>/dev/null | tr -d ' ') about the login screen)"; fi
+                if reported=$(grep -o "the keyboard is in the [a-z ]*field" "$OUT/greeter.log" 2>/dev/null | tail -n1); then
+                    pass "and it really is there ($reported)"
+                else
+                    info "the theme did not report the keyboard back: the greeter's window may not be the active one here"
+                fi
                 # ... and it drew what it is supposed to draw: a dark screen, the card, the accent line on the card
                 W=1280; H=800
                 geo=$($XT geometry "$($XT root-window "_NET_SUPPORTING_WM_CHECK" 2>/dev/null)" 2>/dev/null)
@@ -336,22 +387,8 @@ else
                 else
                     fail "the top-left pixel is '${corner:-?}': the background is missing or not dark"
                 fi
-                accent=0; card=0
-                y=0
-                while [ "$y" -lt "$H" ]; do
-                    c=$($XT pixel 640 "$y" 2>/dev/null)
-                    if [ -n "$c" ]; then
-                        # shellcheck disable=SC2086
-                        set -- $c
-                        if [ "$1" -ge 25 ] && [ "$1" -le 95 ] && [ "$2" -ge 90 ] && [ "$2" -le 175 ] && [ "$3" -ge 180 ]; then
-                            accent=$((accent + 1))
-                        fi
-                        if [ "$1" -le 40 ] && [ "$2" -le 45 ] && [ "$3" -ge 22 ] && [ "$3" -le 70 ]; then
-                            card=$((card + 1))
-                        fi
-                    fi
-                    y=$((y + 4))
-                done
+                set -- $(card_pixels)
+                card=$1; accent=$2
                 if [ "$accent" -ge 1 ] && [ "$card" -ge 10 ]; then
                     pass "the login card is drawn in the middle of the screen, with the accent colour on it ($card card pixels, $accent accent pixels)"
                 else
@@ -362,6 +399,24 @@ else
                     import -display "$DISPLAY" -window root "$OUT/shot-sddm-login.png" 2>/dev/null &&
                         info "screenshot: $OUT/shot-sddm-login.png"
                 fi
+                # Typing really has to land somewhere: this is the bug the checks above are about (a login screen
+                # that looks right and does nothing when you type). xdotool sends the keys to whatever the X server
+                # has the keyboard on — with no window manager that is not always the greeter's window — so a screen
+                # that does not change is *said*, not failed: the greeter's log above is what decides.
+                if have import && have compare && have xdotool; then
+                    import -display "$DISPLAY" -window root "$OUT/shot-sddm-before-typing.png" 2>/dev/null
+                    xdotool type --delay 30 "hde-test"
+                    sleep 1
+                    import -display "$DISPLAY" -window root "$OUT/shot-sddm-typed.png" 2>/dev/null
+                    changed=$(compare -metric AE "$OUT/shot-sddm-before-typing.png" "$OUT/shot-sddm-typed.png" null: 2>&1 | head -c 12)
+                    if [ -n "$changed" ] && [ "${changed%.*}" -gt 50 ] 2>/dev/null; then
+                        pass "typing reaches the card: the screen changed by $changed pixels when 'hde-test' was typed"
+                    else
+                        info "typing did not change the screen ($changed pixels): this X server has no window manager, so the keys may not have reached the greeter's window"
+                    fi
+                else
+                    skip "typing was not tried (needs xdotool, import and compare)"
+                fi
                 # the greeter must not have crashed while we looked at it
                 if kill -0 "$GOPID" 2>/dev/null; then
                     pass "the greeter is still running after the checks"
@@ -371,12 +426,84 @@ else
                 kill "$GOPID" 2>/dev/null
                 sleep 1
                 kill -9 "$GOPID" 2>/dev/null
+
+                # A greeter can hand over no users at all: SDDM leaves accounts out of its list by uid range
+                # ([Users] MinimumUid / MaximumUid) and by HideUsers / HideShells, and that is a login screen nobody
+                # can log in on unless the theme offers a field to type a user name in. The greeter reads its
+                # configuration from /etc/sddm.conf.d, so a file there that hides every account is enough to see the
+                # theme's fallback; the file the machine had is left alone and the temporary one is removed again.
+                SUDO=""
+                if [ ! -w /etc/sddm.conf.d ] || [ ! -d /etc/sddm.conf.d ]; then
+                    if sudo -n true 2>/dev/null; then SUDO="sudo -n"; fi
+                fi
+                NOCONF=/etc/sddm.conf.d/90-hde-sddm-test-no-users.conf
+                printf '[Users]\nMinimumUid=60000\n' > "$OUT/sddm-no-users.conf"
+                if $SUDO sh -c "mkdir -p /etc/sddm.conf.d && cp '$OUT/sddm-no-users.conf' '$NOCONF'" 2>/dev/null; then
+                    info "the user list is emptied for one greeter ($NOCONF: [Users] MinimumUid=60000)"
+                    QT_QUICK_BACKEND="${QT_QUICK_BACKEND:-software}" QT_LOGGING_RULES="*.debug=true" \
+                        python3 "$HERE/ptylog.py" "$OUT/greeter-no-users.log" "$GREETER" "$GFLAG" --theme "$THEME" &
+                    npid=$!
+                    sleep 4
+                    if kill -0 "$npid" 2>/dev/null; then
+                        if grep -q "the greeter listed no users: the login screen offers a user name field" "$OUT/greeter-no-users.log" 2>/dev/null; then
+                            pass "with no users from the greeter the login screen offers a field to type a user name in"
+                        else
+                            fail "with no users from the greeter the login screen does not offer a user name field ($(grep -c 'hde-login' "$OUT/greeter-no-users.log" 2>/dev/null) hde-login lines in its log)"
+                        fi
+                        where=$(grep -o "the keyboard goes into the [a-z ]*field" "$OUT/greeter-no-users.log" 2>/dev/null | tail -n1)
+                        case "$where" in
+                        *"user name field"*) pass "the keyboard goes into that field ($where)" ;;
+                        *) fail "the keyboard does not go into the user name field when there is no user list (${where:-nothing about the keyboard in the log})" ;;
+                        esac
+                        set -- $(card_pixels)
+                        if [ "$2" -ge 1 ] && [ "$1" -ge 10 ]; then
+                            pass "the login card is still drawn with no user list ($1 card pixels, $2 accent pixels)"
+                        else
+                            fail "the login card is missing with no user list ($1 card pixels, $2 accent pixels at x=640)"
+                        fi
+                        if have import; then
+                            import -display "$DISPLAY" -window root "$OUT/shot-sddm-no-users.png" 2>/dev/null &&
+                                info "screenshot: $OUT/shot-sddm-no-users.png"
+                        fi
+                        errs=$(grep -nE "failed to load component|Cannot find file|is not a type|ReferenceError|TypeError|SyntaxError|Unable to assign|Unable to determine|Cannot assign|is not a function" "$OUT/greeter-no-users.log" | head -n 5)
+                        if [ -z "$errs" ]; then pass "the theme runs without an error with no user list either"
+                        else fail "the theme reports errors with no user list:"; echo "$errs" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+                        fi
+                        kill "$npid" 2>/dev/null
+                        sleep 1
+                        kill -9 "$npid" 2>/dev/null
+                    else
+                        fail "the greeter did not stay up with no users in its list: $(tail -n 3 "$OUT/greeter-no-users.log" | tr '\n' '|')"
+                    fi
+                    $SUDO rm -f "$NOCONF"
+                else
+                    info "no way to write $NOCONF (needs root): the empty-user-list render is skipped"
+                fi
             fi
         else
             info "no X display could be started: skipping the render step"
         fi
         [ "${OWN_XVFB:-0}" = 1 ] && kill "${XVFB:-0}" 2>/dev/null
     fi
+fi
+
+# ===================== 4. the login screen in a real QML engine (tests/sddm-qml-test.py) =====================
+# The render step above shows what SDDM's greeter makes of the theme *on this machine*, where the user list depends on
+# the accounts here. tests/sddm-qml-test.py loads Main.qml with a greeter made for the occasion (PySide6, Qt 6,
+# offscreen: no display, no SDDM, no root) and covers what this machine cannot be asked for — above all a greeter that
+# hands over no users at all, which is a login screen nobody can log in on unless the card offers a field to type a
+# user name in (SDDM leaves accounts out of its list by uid range, [Users] MinimumUid / MaximumUid, and by HideUsers /
+# HideShells). It writes its own PASS/FAIL lines into results.txt; without PySide6 there is nothing to run.
+if [ "$RENDER" = 0 ]; then
+    : # --no-render: the CI runs the full test, and that is where these lines belong once
+elif python3 -c "import PySide6" >/dev/null 2>&1; then
+    if python3 "$HERE/sddm-qml-test.py" "$THEME" >/dev/null 2>&1; then
+        pass "the login screen in a real QML engine, with a greeter that hands over no users (tests/sddm-qml-test.py)"
+    else
+        fail "the login screen in a real QML engine (tests/sddm-qml-test.py): see its FAIL lines above"
+    fi
+else
+    skip "tests/sddm-qml-test.py was not run (no PySide6 here: pip install PySide6-Essentials)"
 fi
 
 echo ""

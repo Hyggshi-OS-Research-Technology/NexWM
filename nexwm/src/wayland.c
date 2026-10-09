@@ -7,6 +7,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "nexwm.h"
+#include "notify.h"
 
 #include <stdio.h>
 
@@ -68,6 +69,9 @@ int nexwm_wayland_run(const char *config_path, int replace, const char *session)
 
 #define NEXWM_LAYER_COUNT 4
 #define NEXWM_CHILD_POLL_MS 100
+#define NEXWM_PING_INTERVAL_MS 3000
+#define NEXWM_PING_TIMEOUT_MS 5000
+#define NEXWM_RENDER_RETRY_MS 250
 #define NEXWM_DEFAULT_WIDTH 800
 #define NEXWM_DEFAULT_HEIGHT 600
 /* Wayland keyboard keycodes are evdev codes; xkbcommon keycodes include the 8-code offset. */
@@ -104,7 +108,9 @@ struct NexwmOutput {
     struct wlr_output *wlr;
     struct wlr_output_layout_output *layout_output;
     struct wlr_scene_output *scene_output;
+    struct wl_event_source *retry_timer;
     struct wlr_scene_tree *layer_trees[NEXWM_LAYER_COUNT];
+    unsigned render_failures;
     struct wlr_box full_area;
     struct wlr_box usable_area;
     struct wlr_box layout_box;
@@ -127,10 +133,12 @@ struct NexwmView {
     bool minimized;
     bool maximized;
     bool fullscreen;
+    bool unresponsive;
     struct wl_listener map;
     struct wl_listener unmap;
     struct wl_listener destroy;
     struct wl_listener commit;
+    struct wl_listener ping_timeout;
     struct wl_listener request_maximize;
     struct wl_listener request_fullscreen;
     struct wl_listener request_minimize;
@@ -205,6 +213,7 @@ struct NexwmServer {
 
     HdeNexwmConfig config;
     int workspace;
+    uint64_t last_ping_ms;
     bool pointer_present;
     bool running;
     int exit_code;
@@ -278,6 +287,20 @@ static struct wlr_box server_workarea(NexwmServer *server)
     return box;
 }
 
+static uint64_t monotonic_ms(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+static void schedule_output_frames(NexwmServer *server)
+{
+    NexwmOutput *output;
+    wl_list_for_each(output, &server->outputs, link)
+        wlr_output_schedule_frame(output->wlr);
+}
+
 static void output_refresh_geometry(NexwmOutput *output)
 {
     wlr_output_effective_resolution(output->wlr, &output->full_area.width, &output->full_area.height);
@@ -323,13 +346,37 @@ static void update_output_layout(NexwmOutput *output)
     if (output->scene_output) wlr_output_schedule_frame(output->wlr);
 }
 
+static int output_retry_frame(void *data)
+{
+    NexwmOutput *output = data;
+    if (output->wlr) wlr_output_schedule_frame(output->wlr);
+    return 0;
+}
+
 static void output_frame(struct wl_listener *listener, void *data)
 {
     (void)data;
     NexwmOutput *output = wl_container_of(listener, output, frame);
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    if (!wlr_scene_output_commit(output->scene_output, NULL)) return;
+    if (!wlr_scene_output_commit(output->scene_output, NULL)) {
+        if (!output->render_failures)
+            log_message("warning", "render commit failed on %s; retrying (set WLR_RENDERER=pixman to test software rendering)",
+                        output->wlr->name);
+        output->render_failures++;
+        if (!output->retry_timer)
+            output->retry_timer = wl_event_loop_add_timer(output->server->event_loop, output_retry_frame, output);
+        if (output->retry_timer)
+            wl_event_source_timer_update(output->retry_timer, NEXWM_RENDER_RETRY_MS);
+        else
+            wlr_output_schedule_frame(output->wlr);
+        return;
+    }
+    if (output->render_failures) {
+        log_message("info", "rendering recovered on %s after %u failed frame(s)",
+                    output->wlr->name, output->render_failures);
+        output->render_failures = 0;
+    }
     wlr_scene_output_send_frame_done(output->scene_output, &now);
 }
 
@@ -338,6 +385,7 @@ static void output_destroy(struct wl_listener *listener, void *data)
     (void)data;
     NexwmOutput *output = wl_container_of(listener, output, destroy);
     NexwmServer *server = output->server;
+    if (output->retry_timer) wl_event_source_remove(output->retry_timer);
     wl_list_remove(&output->frame.link);
     wl_list_remove(&output->destroy.link);
     wl_list_remove(&output->link);
@@ -558,6 +606,7 @@ static void view_set_position_and_size(NexwmView *view, int x, int y, int width,
     view->height = height;
     wlr_scene_node_set_position(&view->scene_tree->node, x, y);
     wlr_xdg_toplevel_set_size(view->xdg, width, height);
+    schedule_output_frames(view->server);
 }
 
 static void view_restore(NexwmView *view)
@@ -786,6 +835,13 @@ static bool handle_binding(NexwmServer *server, struct wlr_keyboard *keyboard, u
         run_action(server, binding);
         return true;
     }
+    /* X11's hde-hotkeys daemon owns this key there; a Wayland compositor must handle it itself. Explicit
+     * nexwm.conf bindings above take precedence, and Alt+F4 is never treated as an unmodified media key. */
+    const char *media_command = nexwm_hde_media_command((unsigned)sym, modifiers);
+    if (media_command) {
+        spawn_command(server, media_command);
+        return true;
+    }
     return false;
 }
 
@@ -886,6 +942,7 @@ static void view_update_drag(NexwmServer *server)
         view->restore_y = y;
         view->restore_valid = !view->maximized && !view->fullscreen;
         wlr_scene_node_set_position(&view->scene_tree->node, x, y);
+        schedule_output_frames(server);
     } else if (server->cursor_mode == NEXWM_CURSOR_RESIZE) {
         int dx = (int)(server->cursor->x - server->grab_x);
         int dy = (int)(server->cursor->y - server->grab_y);
@@ -1137,10 +1194,25 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data)
     arrange_layers(output);
 }
 
+static void view_ping_timeout(struct wl_listener *listener, void *data)
+{
+    (void)data;
+    NexwmView *view = wl_container_of(listener, view, ping_timeout);
+    if (!view->mapped || view->unresponsive) return;
+    view->unresponsive = true;
+    const char *title = view->xdg->title ? view->xdg->title : "(untitled)";
+    log_message("warning", "'%s' is not responding to an xdg-shell ping", title);
+    nexwm_notify_app_unresponsive(title);
+}
+
 static void view_commit(struct wl_listener *listener, void *data)
 {
     (void)data;
     NexwmView *view = wl_container_of(listener, view, commit);
+    if (view->unresponsive) {
+        view->unresponsive = false;
+        log_message("info", "'%s' is responding again", view->xdg->title ? view->xdg->title : "(untitled)");
+    }
     if (view->xdg->base->initial_commit) {
         /* A toplevel must be configured after its first empty commit before it is allowed to map. */
         wlr_xdg_toplevel_set_size(view->xdg, 0, 0);
@@ -1224,6 +1296,7 @@ static void view_destroy(struct wl_listener *listener, void *data)
     wl_list_remove(&view->unmap.link);
     wl_list_remove(&view->destroy.link);
     wl_list_remove(&view->commit.link);
+    wl_list_remove(&view->ping_timeout.link);
     wl_list_remove(&view->request_maximize.link);
     wl_list_remove(&view->request_fullscreen.link);
     wl_list_remove(&view->request_minimize.link);
@@ -1367,6 +1440,7 @@ static void server_new_toplevel(struct wl_listener *listener, void *data)
     NEXWM_ADD_LISTENER(&xdg->base->surface->events.unmap, view->unmap, view_unmap);
     NEXWM_ADD_LISTENER(&xdg->base->events.destroy, view->destroy, view_destroy);
     NEXWM_ADD_LISTENER(&xdg->base->surface->events.commit, view->commit, view_commit);
+    NEXWM_ADD_LISTENER(&xdg->base->events.ping_timeout, view->ping_timeout, view_ping_timeout);
     NEXWM_ADD_LISTENER(&xdg->events.request_maximize, view->request_maximize, view_request_maximize);
     NEXWM_ADD_LISTENER(&xdg->events.request_fullscreen, view->request_fullscreen, view_request_fullscreen);
     NEXWM_ADD_LISTENER(&xdg->events.request_minimize, view->request_minimize, view_request_minimize);
@@ -1491,6 +1565,18 @@ static void server_new_popup(struct wl_listener *listener, void *data)
     create_scene_popup(server, popup, parent_tree);
 }
 
+static void ping_visible_views(NexwmServer *server)
+{
+    uint64_t now = monotonic_ms();
+    if (now < server->last_ping_ms || now - server->last_ping_ms < NEXWM_PING_INTERVAL_MS) return;
+    server->last_ping_ms = now;
+    NexwmView *view;
+    wl_list_for_each(view, &server->views, link) {
+        if (view->mapped && !view->minimized && view->workspace == server->workspace)
+            wlr_xdg_surface_ping(view->xdg->base);
+    }
+}
+
 static void child_timer(struct wl_event_loop *loop, void *data)
 {
     (void)loop;
@@ -1511,6 +1597,7 @@ static int child_timer_tick(void *data)
 {
     child_timer(NULL, data);
     NexwmServer *server = data;
+    ping_visible_views(server);
     return wl_event_source_timer_update(server->child_timer, NEXWM_CHILD_POLL_MS);
 }
 
@@ -1583,7 +1670,11 @@ static bool server_init(NexwmServer *server)
         log_message("error", "could not create a wlroots backend (is a seat or a nested Wayland/X11 display available?)");
         return false;
     }
+    /* Permit a software fallback for the compositor renderer only; do not leak this default into launched apps. */
+    bool software_fallback_was_set = getenv("WLR_RENDERER_ALLOW_SOFTWARE") != NULL;
+    if (!software_fallback_was_set) setenv("WLR_RENDERER_ALLOW_SOFTWARE", "1", 0);
     server->renderer = wlr_renderer_autocreate(server->backend);
+    if (!software_fallback_was_set) unsetenv("WLR_RENDERER_ALLOW_SOFTWARE");
     if (!server->renderer) {
         log_message("error", "could not create a wlroots renderer");
         return false;
@@ -1623,6 +1714,7 @@ static bool server_init(NexwmServer *server)
         log_message("error", "could not create the compositor's Wayland globals");
         return false;
     }
+    server->xdg_shell->ping_timeout = NEXWM_PING_TIMEOUT_MS;
 
     server->scene_layers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND] =
         wlr_scene_tree_create(&server->scene->tree);
@@ -1664,10 +1756,31 @@ static bool server_init(NexwmServer *server)
     return true;
 }
 
+/* Take a listener of this program off the object it was put on. A listener that was never added (the compositor
+ * failed before it got that far) is left alone: wl_list_remove on nothing is a crash, not a no-op. */
+static void listener_remove(struct wl_listener *listener)
+{
+    if (listener->link.prev || listener->link.next) wl_list_remove(&listener->link);
+}
+
 static void server_finish(NexwmServer *server)
 {
     stop_session_command(server);
     if (server->display) wl_display_destroy_clients(server->display);
+    /* Every listener this program put on something of wlroots comes off before the objects are destroyed. The cursor
+     * is the one that insists on it: wlr_cursor_destroy requires that nothing is listening to it any more ("Assertion
+     * `wl_list_empty(&cur->events.motion.listener_list)' failed" — wlr_cursor.c), and a distribution builds wlroots
+     * with its assertions on, so a compositor that leaves its listeners behind is ended by an abort (status 134)
+     * instead of the clean exit its session asked for. The seat's listeners go before the backend that owns the seat
+     * is destroyed, and the shell's before the display takes the shells down. */
+    listener_remove(&server->cursor_motion);
+    listener_remove(&server->cursor_motion_absolute);
+    listener_remove(&server->cursor_button);
+    listener_remove(&server->request_set_cursor);
+    listener_remove(&server->request_set_selection);
+    listener_remove(&server->new_toplevel);
+    listener_remove(&server->new_popup);
+    listener_remove(&server->new_layer_surface);
     if (server->backend) {
         wl_list_remove(&server->new_output.link);
         wl_list_remove(&server->new_input.link);
@@ -1686,7 +1799,6 @@ static void server_finish(NexwmServer *server)
     if (server->display) wl_display_destroy(server->display);
     nexwm_config_free(&server->config);
 }
-
 int nexwm_wayland_run(const char *config_path, int replace, const char *session)
 {
     if (replace) {

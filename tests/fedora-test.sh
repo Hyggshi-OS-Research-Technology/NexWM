@@ -168,6 +168,31 @@ done
 if [ -z "$miss" ]; then pass "ldd: every built program finds all of its libraries"
 else fail "ldd: missing libraries for:$miss"; ldd "$B/hde-panel" 2>/dev/null | grep "not found" | sed 's/^/INFO:   /' >> "$OUT/results.txt"; fi
 
+# HDE's own lock screen: Fedora's pam-devel, cairo-devel and libxcb-devel build it (packaging/fedora/deps.sh), so both
+# of HDE's sessions can be locked here with HDE's own locker and the password checked the way Fedora checks it.
+if [ -x "$B/hde-lock" ]; then
+    pass "hde-lock is built (HDE's own lock screen)"
+    v=$("$B/hde-lock" --version 2>&1)
+    case "$v" in
+    *"X11 session (XCB): yes"*) pass "hde-lock has the X11 session lock (libxcb)" ;;
+    *) fail "hde-lock has the X11 session lock (libxcb): $(printf '%s' "$v" | tr '\n' ' ')" ;;
+    esac
+    case "$v" in
+    *"Wayland session (ext-session-lock-v1): yes"*) pass "hde-lock has the Wayland session lock (wayland-client + xkbcommon)" ;;
+    *) fail "hde-lock has the Wayland session lock (wayland-client + xkbcommon): $(printf '%s' "$v" | tr '\n' ' ')" ;;
+    esac
+    case "$v" in
+    *"Password check (PAM): yes"*) pass "hde-lock checks the password through Fedora's PAM" ;;
+    *) fail "hde-lock checks the password through Fedora's PAM (pam-devel missing?): $(printf '%s' "$v" | tr '\n' ' ')" ;;
+    esac
+    if ldd "$B/hde-lock" 2>/dev/null | grep -q "not found"; then
+        fail "ldd: hde-lock finds all of its libraries"
+        ldd "$B/hde-lock" 2>/dev/null | grep "not found" | sed 's/^/INFO:   /' >> "$OUT/results.txt"
+    else pass "ldd: hde-lock finds all of its libraries"; fi
+else
+    info "no hde-lock in $B (packaging/fedora/deps.sh installs what builds it: pam-devel, cairo-devel, libxcb-devel)"
+fi
+
 # NexWM: HDE's own window manager is built here, so a base Fedora without metacity or openbox would have a window
 # manager after all. The base part of this test is about the other path — a session that finds no window manager at all
 # and has to say so — so the one HDE brings is put aside for it; the phase after the base checks puts it back and looks
@@ -212,6 +237,7 @@ if [ "$MODE" = full ]; then
 
     check "the panel publishes its window (_HDE_PANEL_WINDOW)" \
         sh -c "[ \"\$($XT root-window _HDE_PANEL_WINDOW)\" != 0 ]"
+    check "hde-lock --check says this X session can be locked (the lock screen of HDE itself)" "$B/hde-lock" --check
     l=$(grep "^hde-panel: measured: " "$LOG" | tail -n 1)
     case "$l" in
     *"fits") pass "the panel measured itself on this screen: ${l#hde-panel: measured: }" ;;
@@ -243,7 +269,23 @@ if [ "$MODE" = full ]; then
     after=$(xdotool search --onlyvisible --class "" 2>/dev/null | wc -l)
     if [ "$after" -gt "$before" ]; then pass "Ctrl+Alt+T opened a terminal window ($before -> $after windows)"
     else fail "Ctrl+Alt+T opened a terminal window ($before -> $after windows; $(grep -i terminal "$LOG" | tail -n 1))"; fi
-    W=$(xdotool search --onlyvisible --name "." 2>/dev/null | tail -n 1)
+    # The window of the terminal is the one the EWMH checks are made on. `_NET_CLIENT_LIST` is what the window manager
+    # itself says it manages, and of those the window looked for is a real one: the panel and the desktop skip the
+    # taskbar (and reserve their struts), the panel also keeps a 1x1 helper window off the screen at -200,-200, and a
+    # maximize request to any of them does nothing but show that EWMH "does not work". So the list is walked from the
+    # end (the newest window — the terminal — is the last of it) and a window has to be one the taskbar would list.
+    cands=$(xprop -root _NET_CLIENT_LIST 2>/dev/null | sed -n 's/^.*window id # //p' | tr ',' ' ')
+    [ -n "$cands" ] || cands=$(xdotool search --onlyvisible --name "." 2>/dev/null | tr '\n' ' ')
+    W=""
+    for w in $cands; do
+        case "$($XT wm-state "$w" 2>/dev/null)" in *SKIP_TASKBAR*) continue ;; esac
+        g=$($XT geometry "$w" 2>/dev/null)                  # "X Y W H" of the window
+        gw=$(printf '%s\n' "$g" | cut -d' ' -f3)
+        gh=$(printf '%s\n' "$g" | cut -d' ' -f4)
+        case "${gw:-x}${gh:-x}" in *[!0-9]*) continue ;; esac
+        [ "$gw" -ge 100 ] && [ "$gh" -ge 100 ] || continue  # a window, not a helper
+        W=$w
+    done
     if [ -n "$W" ]; then
         fr=$($XT frame "$W")
         st=$($XT wm-state "$W")
@@ -254,6 +296,13 @@ if [ "$MODE" = full ]; then
         if $XT wm-state "$W" | grep -q MAXIMIZED; then pass "the window manager maximized the window (EWMH works)"
         else fail "EWMH maximize did not work ($($XT wm-state "$W"))"; fi
         xdotool windowkill "$W" 2>/dev/null
+    else
+        # what was there to choose from, and what each one said about itself: a failure here is readable from this line
+        what=""
+        for w in $cands; do
+            what="$what $w[$(xprop -id "$w" _NET_WM_WINDOW_TYPE 2>/dev/null | sed -n 's/^.*= //p') $($XT geometry "$w" 2>/dev/null) $($XT wm-state "$w" 2>/dev/null)]"
+        done
+        fail "no window the window manager manages was found to check EWMH with:$what"
     fi
     shot "03-terminal"
 
