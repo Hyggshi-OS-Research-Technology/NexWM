@@ -1064,13 +1064,18 @@ python3 - "$SETTINGS_INI" <<'EOF'
 import sys
 p = sys.argv[1]
 s = open(p).read().rstrip("\n") + "\n"
-s = s.replace("[settings]\n", "[settings]\npanel_position=top\npanel_size=40\npanel_show_run=false\nmenu_button_icon=os\n"
-              "menu_button_label=Start\npanel_applets=t1;c1;\n", 1)
+s = s.replace("[settings]\n", "[settings]\npanel_position=top\npanel_size=40\npanel_show_run=false\n"
+              "panel_floating=true\npanel_inset=20\npanel_spacing=10\npanel_shadow=true\npanel_rounded=true\npanel_hover=false\n"
+              "menu_button_icon=os\nmenu_button_label=Start\npanel_applets=t1;c1;\n", 1)
 s += "\n[applet:t1]\ntype=command\nlabel=Test\ncommand=echo HDE-EXT-OK\ninterval=5\n\n[applet:c1]\ntype=cpu\nlabel=CPU\ninterval=2\n"
 open(p, "w").write(s)
 EOF
 sleep 3
 check "panel_position=top, panel_size=40: the panel moves to the top, 40 px high" grep -q "hde-panel: settings changed: panel at 0,0 1280x40" "$OUT/session.log"
+check "floating style, inset, spacing and effect switches load from settings.ini" \
+    grep -q "hde-panel: visual: floating, inset 20px, spacing 10px, effects: shadow rounded hover-off" "$OUT/session.log"
+if grep -q "^hde-panel: CSS:" "$OUT/session.log"; then fail "panel appearance CSS loads without errors"
+else pass "panel appearance CSS loads without errors"; fi
 pgeo "0 0 1280 40" "... its window really is there"
 check "... the desktop icons make room for it" grep -q "hde-desktop: panel now takes 40 px at the top, 0 px at the bottom" "$OUT/session.log"
 if grep "hde-panel: settings applied: top, 40px" "$OUT/session.log" | tail -n 1 | grep -q "items: menu desktop launchers taskbar"; then
@@ -1130,7 +1135,7 @@ p = sys.argv[1]
 s = open(p).read()
 s = s.split("\n[applet:")[0].rstrip("\n") + "\n"
 s = re.sub(r"(?m)^(panel_position|panel_size|panel_show_run|menu_button_icon|menu_button_label|panel_applets|panel_opacity|"
-           r"panel_taskbar_labels|clock_24h)=.*\n", "", s)
+           r"panel_floating|panel_inset|panel_spacing|panel_shadow|panel_rounded|panel_hover|panel_taskbar_labels|clock_24h)=.*\n", "", s)
 open(p, "w").write(s)
 EOF
 sleep 3

@@ -78,7 +78,7 @@ static const Category categories[] = {
 #define N_CATS G_N_ELEMENTS(categories)
 
 static HdePanelConfig pcfg;
-static GtkWidget *panel_win, *panel_fit, *panel_box;
+static GtkWidget *panel_win, *panel_fit, *panel_surface, *panel_box;
 static GtkWidget *menu_btn, *menu_btn_img, *menu_btn_lbl, *desk_btn, *run_btn, *launchers, *tasks, *pager, *tray,
                  *status_area, *notify_btn, *applets, *clock_btn, *clock_label, *date_label;
 static GtkWidget *app_menu;
@@ -1229,6 +1229,13 @@ static void on_panel_pressed(GtkGestureMultiPress *g, int n, double x, double y,
 }
 
 /* ---------- CSS: light/dark according to Settings > Appearance, opacity and size of Settings > Panel ---------- */
+static gboolean panel_has_compositing(void)
+{
+    if (!hde_is_x11()) return TRUE;
+    GdkScreen *screen = panel_win ? gtk_widget_get_screen(panel_win) : gdk_screen_get_default();
+    return screen && gdk_screen_is_composited(screen);
+}
+
 static void load_css(void)
 {
     HdeThemeInfo ti;
@@ -1243,23 +1250,39 @@ static void load_css(void)
     const char *popbg  = dark ? "#252a33" : "#ffffff";
     const char *popbd  = dark ? "#3a4150" : "#d0d4da";
     const char *entry  = dark ? "#1b1f26" : "#f4f5f7";
+    gboolean composited = panel_has_compositing();
+    gboolean floating = pcfg.floating && composited;
     double alpha = pcfg.opacity / 100.0;
-    if (panel_win && hde_is_x11() && !gdk_screen_is_composited(gtk_widget_get_screen(panel_win))) alpha = 1.0;
+    if (!composited) alpha = 1.0;
     int big = pcfg.size >= 44, small = pcfg.size < 30, vpad = small ? 0 : 2;
+    const char *shadow = pcfg.shadow && composited && floating
+        ? (pcfg.top ? "0px 4px 14px alpha(black, 0.24)" : "0px -4px 14px alpha(black, 0.24)")
+        : "none";
     GString *s = g_string_new(NULL);
-    g_string_append_printf(s, ".hde-panel { background: rgba(%s, %.2f); color: %s; %s: 1px solid %s; }", bg, alpha, fg,
-                           pcfg.top ? "border-bottom" : "border-top", border);
+    if (floating) {
+        g_string_append_printf(s, ".hde-panel { background: transparent; color: %s; border: none; box-shadow: none; }"
+                                  ".hde-panel .panel-surface { background: rgba(%s, %.2f); color: %s; border: 1px solid %s; "
+                                  "border-radius: %dpx; box-shadow: %s; }",
+                               fg, bg, alpha, fg, border, pcfg.rounded ? 14 : 0, shadow);
+    } else {
+        g_string_append_printf(s, ".hde-panel { background: transparent; color: %s; border: none; box-shadow: none; }"
+                                  ".hde-panel .panel-surface { background: rgba(%s, %.2f); color: %s; %s: 1px solid %s; "
+                                  "border-radius: 0; box-shadow: none; }",
+                               fg, bg, alpha, fg, pcfg.top ? "border-bottom" : "border-top", border);
+    }
     /* min-height: 0 — themes give buttons 24 px + padding, more than a thin panel has (the panel never grows) */
     g_string_append_printf(s, ".hde-panel button { background: transparent; background-image: none; border: none; border-radius: 4px;"
                               "  padding: %dpx %dpx; min-height: 0; color: %s; box-shadow: none; text-shadow: none;"
                               "  -gtk-icon-shadow: none; }",
                            vpad, small ? 5 : 8, fg);
-    g_string_append_printf(s, ".hde-panel button:hover { background: %s; }", hover);
+    if (pcfg.hover) g_string_append_printf(s, ".hde-panel button:hover { background: %s; }", hover);
+    else g_string_append(s, ".hde-panel button:hover { background: transparent; }");
     g_string_append_printf(s, ".hde-panel button:checked { background: %s; color: white; }", ti.accent);
     g_string_append_printf(s, ".hde-panel .menu-btn, .hde-panel .menu-btn label { font-weight: bold; background: %s; color: white; }", ti.accent);
-    g_string_append_printf(s, ".hde-panel .menu-btn:hover { background: shade(%s, 1.15); }", ti.accent);
+    if (pcfg.hover) g_string_append_printf(s, ".hde-panel .menu-btn:hover { background: shade(%s, 1.15); }", ti.accent);
+    else g_string_append_printf(s, ".hde-panel .menu-btn:hover { background: %s; }", ti.accent);
     g_string_append_printf(s, ".hde-panel .run-btn { background: %s; }", runbg);
-    g_string_append_printf(s, ".hde-panel .run-btn:hover { background: %s; }", hover);
+    g_string_append_printf(s, ".hde-panel .run-btn:hover { background: %s; }", pcfg.hover ? hover : runbg);
     g_string_append_printf(s, ".hde-panel .launcher { padding: %dpx 5px; }", vpad);
     g_string_append_printf(s, ".hde-panel .applet { padding: %dpx 6px; }", vpad);
     g_string_append_printf(s, ".hde-panel .icons-only button { padding: %dpx 6px; }", vpad);
@@ -1711,6 +1734,14 @@ static void apply_config(gboolean first)
 {
     HdePanelConfig old = pcfg;
     hde_panel_config_load(&pcfg);
+    gboolean floating = pcfg.floating && panel_has_compositing();
+    if (panel_surface) {
+        gtk_widget_set_margin_start(panel_surface, floating ? pcfg.inset : 0);
+        gtk_widget_set_margin_end(panel_surface, floating ? pcfg.inset : 0);
+        gtk_widget_set_margin_top(panel_surface, floating ? 3 : 0);
+        gtk_widget_set_margin_bottom(panel_surface, floating ? 3 : 0);
+    }
+    if (panel_box) gtk_box_set_spacing(GTK_BOX(panel_box), pcfg.spacing);
     gtk_widget_set_visible(menu_btn, pcfg.show_menu);
     gtk_widget_set_visible(desk_btn, pcfg.show_desktop);
     gtk_widget_set_visible(run_btn, pcfg.show_run);
@@ -1740,6 +1771,8 @@ static void apply_config(gboolean first)
         place_id = g_idle_add(panel_place, (gpointer)"settings changed");
     }
     if (first || old.top != pcfg.top || old.size != pcfg.size || old.opacity != pcfg.opacity ||
+        old.floating != pcfg.floating || old.inset != pcfg.inset || old.spacing != pcfg.spacing ||
+        old.shadow != pcfg.shadow || old.rounded != pcfg.rounded || old.hover != pcfg.hover ||
         old.clock_24h != pcfg.clock_24h || old.clock_seconds != pcfg.clock_seconds)
         load_css();
     update_clock(NULL);
@@ -1750,6 +1783,12 @@ static void apply_config(gboolean first)
             pcfg.show_desktop ? " desktop" : "", pcfg.show_run ? " run" : "", pcfg.show_launchers ? " launchers" : "",
             pcfg.show_taskbar ? " taskbar" : "", pcfg.show_workspaces ? " workspaces" : "", pcfg.show_tray ? " tray" : "",
             pcfg.show_status ? " status" : "", pcfg.show_notifications ? " notifications" : "", pcfg.show_clock ? " clock" : "");
+    if (!first)
+        DBG("visual: %s, inset %dpx, spacing %dpx, effects:%s%s%s%s",
+            floating ? "floating" : "edge-to-edge", pcfg.inset, pcfg.spacing,
+            pcfg.shadow ? " shadow" : "", pcfg.rounded ? " rounded" : "",
+            pcfg.hover ? " hover" : "", pcfg.hover ? "" : " hover-off");
+    if (!first && pcfg.floating && !floating) DBG("floating style needs a compositor; using edge-to-edge");
     hde_panel_config_clear(&old);
 }
 
@@ -1912,9 +1951,15 @@ int main(int argc, char **argv)
     panel_fit = g_object_new(hde_height_bin_get_type(), NULL);
     height_bin_set(panel_fit, pcfg.size);
     gtk_container_add(GTK_CONTAINER(win), panel_fit);
-    GtkWidget *box = panel_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    panel_surface = gtk_event_box_new();
+    gtk_event_box_set_visible_window(GTK_EVENT_BOX(panel_surface), TRUE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(panel_surface), "panel-surface");
+    gtk_widget_set_hexpand(panel_surface, TRUE);
+    gtk_widget_set_vexpand(panel_surface, TRUE);
+    gtk_container_add(GTK_CONTAINER(panel_fit), panel_surface);
+    GtkWidget *box = panel_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, pcfg.spacing);
     gtk_container_set_border_width(GTK_CONTAINER(box), PANEL_BORDER);
-    gtk_container_add(GTK_CONTAINER(panel_fit), box);
+    gtk_container_add(GTK_CONTAINER(panel_surface), box);
 
     menu_btn = gtk_button_new();
     GtkWidget *mb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);

@@ -143,7 +143,8 @@ screens), `display_modes` (resolution / rotation per screen: `HDMI-1=1920x1080@7
 (10, 15, 20 — the default —, 30, 50 %, or 100 = always on battery), `battery_saver_dim` (default `true`),
 `battery_warnings` (default `true`), …
 The software brightness of the last session (no backlight, no DDC/CI) is kept in `~/.local/state/hde/state.ini`.
-Panel: `panel_position` (`bottom`/`top`), `panel_size`, `panel_opacity`, `panel_show_menu` / `_desktop` / `_run` /
+Panel: `panel_position` (`bottom`/`top`), `panel_size`, `panel_opacity`, `panel_floating`, `panel_inset` (8–48 px),
+`panel_spacing` (0–16 px), `panel_shadow`, `panel_rounded`, `panel_hover`, `panel_show_menu` / `_desktop` / `_run` /
 `_launchers` / `_taskbar` / `_workspaces` / `_tray` / `_status` / `_notifications` / `_clock`, `panel_taskbar_labels`,
 `panel_taskbar_group`, `clock_24h`, `clock_show_date`, `clock_show_seconds`, `panel_launchers` (pinned apps),
 `panel_applets` + one `[applet:ID]` group each (`type=cpu|memory|command|separator`, `label`, `command`, `interval`,

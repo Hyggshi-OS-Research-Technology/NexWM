@@ -264,9 +264,13 @@ h0=$(nlog "battery: hidden"); wtype -s 400 -k Escape
 if wait_more "battery: hidden" "$h0" 30; then pass "Esc closes the battery panel"; else fail "Esc closes the battery panel"; fi
 
 # ---------- 6. settings follow live: panel at the top, labwc reloads its configuration ----------
-printf '[settings]\npanel_position=top\n' > "$INI"
+printf '[settings]\npanel_position=top\npanel_floating=true\npanel_inset=24\npanel_spacing=9\npanel_shadow=true\npanel_rounded=true\npanel_hover=false\n' > "$INI"
 if wait_log "hde-panel: settings changed: panel at the top, 34px high (Wayland layer shell" 50; then pass "panel_position=top moves the panel to the top"
 else fail "panel_position=top moves the panel to the top"; fi
+check "floating style, spacing and effect switches apply on Wayland" \
+    grep -q "hde-panel: visual: floating, inset 24px, spacing 9px, effects: shadow rounded hover-off" "$LOG"
+if grep -q "^hde-panel: CSS:" "$LOG"; then fail "panel appearance CSS loads without errors"
+else pass "panel appearance CSS loads without errors"; fi
 sleep 1; shot 12-panel-top
 # a panel made higher, then lower again, is as high as set again (on X11 it kept the bigger height and sank below
 # the screen; a GTK window does not shrink by itself)
