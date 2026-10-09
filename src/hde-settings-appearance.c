@@ -26,7 +26,7 @@ static const char *const accent_values[ACCENT_COUNT] = {
     "#3584e4", "#2190a4", "#2ec27e", "#e5a50a", "#ff7800", "#e01b24", "#d56199", "#9141ac", "#6f8396"
 };
 
-static GtkWidget *light_card, *dark_card, *theme_combo, *icon_combo, *style_note;
+static GtkWidget *light_card, *dark_card, *auto_card, *theme_combo, *icon_combo, *style_note;
 static GtkWidget *accent_buttons[ACCENT_COUNT + 1], *accent_palette, *accent_custom_button;
 static GtkWidget *wallpaper_flow, *wallpaper_group;
 static GtkCssProvider *appearance_css;
@@ -34,8 +34,63 @@ static GFileMonitor *desktop_config_monitor;
 static guint wallpaper_sync_source;
 static gboolean loading;
 
+/* ---------------------------------------------------------------- wallpaper brightness */
+
+/* Compute the average luminance [0..1] of a wallpaper image by sampling up to 64×64 pixels.
+ * Returns -1.0 when the file cannot be loaded. */
+static double wallpaper_luminance(const char *path)
+{
+    if (!path || !*path) return -1.0;
+    GError *error = NULL;
+    /* Scale to a small size so large images are fast. */
+    GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, 64, 64, TRUE, &error);
+    if (!pb) { g_clear_error(&error); return -1.0; }
+    guchar *pixels = gdk_pixbuf_get_pixels(pb);
+    int w = gdk_pixbuf_get_width(pb);
+    int h = gdk_pixbuf_get_height(pb);
+    int rowstride = gdk_pixbuf_get_rowstride(pb);
+    int nch = gdk_pixbuf_get_n_channels(pb);
+    double sum = 0.0;
+    int count = 0;
+    for (int y = 0; y < h; y++) {
+        guchar *row = pixels + y * rowstride;
+        for (int x = 0; x < w; x++) {
+            double r = row[x * nch + 0] / 255.0;
+            double g = row[x * nch + 1] / 255.0;
+            double b = row[x * nch + 2] / 255.0;
+            /* perceptual luminance (WCAG) */
+            sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            count++;
+        }
+    }
+    g_object_unref(pb);
+    return count > 0 ? sum / count : -1.0;
+}
+
+/* Apply dark or light style based on the current wallpaper brightness (called after wallpaper change). */
+static void apply_style_from_wallpaper(void)
+{
+    char *wp = wallpaper_current_path();
+    double lum = wallpaper_luminance(wp);
+    g_free(wp);
+    if (lum < 0.0) return;   /* could not read */
+    gboolean want_dark = (lum < 0.45);
+    char *base = base_theme();
+    apply_style(want_dark ? HDE_STYLE_DARK : HDE_STYLE_LIGHT, base);
+    g_free(base);
+    settings_status("Style set to %s automatically (wallpaper luminance %.2f)",
+                    want_dark ? "Dark" : "Default", lum);
+}
+
+/* TRUE when the user has chosen "Auto (from wallpaper)". */
+static gboolean wallpaper_auto_enabled(void)
+{
+    return cfg_get_int("wallpaper_theme_auto", 0) != 0;
+}
+
 static void on_accent_toggled(GtkToggleButton *button, gpointer data);
 static void on_wallpaper_toggled(GtkToggleButton *button, gpointer data);
+static char *wallpaper_current_path(void);   /* defined later; used by apply_style_from_wallpaper */
 
 static gboolean current_is_dark(void)
 {
@@ -98,7 +153,31 @@ static void on_style_toggled(GtkToggleButton *b, gpointer d)
     if (loading || !gtk_toggle_button_get_active(b)) return;
     char *base = base_theme();
     apply_style(GTK_WIDGET(b) == dark_card ? HDE_STYLE_DARK : HDE_STYLE_LIGHT, base);
+    /* Disable wallpaper auto when user picks explicitly. */
+    cfg_set_int("wallpaper_theme_auto", 0);
+    if (auto_card) {
+        loading = TRUE;
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(auto_card), FALSE);
+        loading = FALSE;
+    }
     g_free(base);
+}
+
+static void on_auto_style_toggled(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    if (loading) return;
+    gboolean on = gtk_toggle_button_get_active(b);
+    cfg_set_int("wallpaper_theme_auto", on ? 1 : 0);
+    if (on) {
+        apply_style_from_wallpaper();
+        /* Reflect the resulting dark/light state on the cards without re-triggering on_style_toggled. */
+        loading = TRUE;
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(current_is_dark() ? dark_card : light_card), TRUE);
+        loading = FALSE;
+    } else {
+        settings_status("Automatic style (from wallpaper) turned off.");
+    }
 }
 
 static void on_theme_changed(GtkComboBox *c, gpointer d)
@@ -479,6 +558,7 @@ static void wallpaper_gallery_sync_current(void)
     g_list_free(children);
     loading = previous_loading;
     if (current && *current && !matched) wallpaper_gallery_refresh();
+    if (wallpaper_auto_enabled()) apply_style_from_wallpaper();
     g_free(current);
 }
 
@@ -535,6 +615,9 @@ static void on_wallpaper_toggled(GtkToggleButton *button, gpointer data)
     cfg_set_string("wallpaper", path);
     desktop_config_set("wallpaper", path, 0);
     settings_status("Desktop background changed");
+    /* If wallpaper-auto mode is on, re-derive the style from the new image. */
+    if (wallpaper_auto_enabled())
+        apply_style_from_wallpaper();
 }
 
 static void choose_wallpaper(GtkButton *button, gpointer data)
@@ -614,6 +697,8 @@ static void on_external_change(gpointer d)
     if (!light_card) return;
     loading = TRUE;
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(current_is_dark() ? dark_card : light_card), TRUE);
+    if (auto_card)
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(auto_card), wallpaper_auto_enabled());
     if (theme_combo) {                                /* e.g. gtk_theme=Yaru written by a script */
         char *base = base_theme();
         if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(theme_combo), base)) {
@@ -640,13 +725,31 @@ GtkWidget *page_appearance_new(void)
     gtk_widget_set_halign(cards, GTK_ALIGN_CENTER);
     light_card = style_card("Default", FALSE, NULL);
     dark_card = style_card("Dark", TRUE, light_card);
+
+    /* "Auto (from wallpaper)" toggle: a plain check button placed beside the cards */
+    auto_card = gtk_check_button_new_with_label("Auto (from wallpaper)");
+    gtk_widget_set_tooltip_text(auto_card,
+        "Switch Dark / Default automatically based on the brightness of the selected wallpaper.");
+    gtk_widget_set_valign(auto_card, GTK_ALIGN_CENTER);
+
     gtk_box_pack_start(GTK_BOX(cards), light_card, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(cards), dark_card, TRUE, TRUE, 0);
     gtk_widget_set_margin_top(cards, 4);
     gtk_box_pack_start(GTK_BOX(box), cards, FALSE, FALSE, 0);
+
+    /* Place the Auto button below the cards, left-aligned */
+    GtkWidget *auto_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_start(auto_row, 4);
+    gtk_box_pack_start(GTK_BOX(auto_row), auto_card, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), auto_row, FALSE, FALSE, 0);
+
+    /* Set active states */
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(current_is_dark() ? dark_card : light_card), TRUE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(auto_card), wallpaper_auto_enabled());
+
     g_signal_connect(light_card, "toggled", G_CALLBACK(on_style_toggled), NULL);
     g_signal_connect(dark_card, "toggled", G_CALLBACK(on_style_toggled), NULL);
+    g_signal_connect(auto_card, "toggled", G_CALLBACK(G_CALLBACK(on_auto_style_toggled)), NULL);
     style_note = info_label("");
     gtk_box_pack_start(GTK_BOX(box), style_note, FALSE, FALSE, 2);
     style_note_update();

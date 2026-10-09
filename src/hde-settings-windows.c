@@ -10,6 +10,105 @@
 static GtkWidget *running_row, *apply_btn;
 static guint running_timer;
 
+static char *nexwm_ini_path(void)
+{
+    return g_build_filename(g_get_user_config_dir(), "hde", "nexwm.ini", NULL);
+}
+
+static int nexwm_ini_get_int(const char *key, int def)
+{
+    char *p = nexwm_ini_path();
+    GKeyFile *kf = g_key_file_new();
+    int val = def;
+    if (g_key_file_load_from_file(kf, p, G_KEY_FILE_NONE, NULL)) {
+        if (g_key_file_has_key(kf, "nexwm", key, NULL))
+            val = g_key_file_get_integer(kf, "nexwm", key, NULL);
+    }
+    g_key_file_free(kf);
+    g_free(p);
+    return val;
+}
+
+static void nexwm_ini_set_int(const char *key, int val)
+{
+    char *p = nexwm_ini_path();
+    char *dir = g_path_get_dirname(p);
+    g_mkdir_with_parents(dir, 0755);
+    GKeyFile *kf = g_key_file_new();
+    g_key_file_load_from_file(kf, p, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_set_integer(kf, "nexwm", key, val);
+    g_key_file_save_to_file(kf, p, NULL);
+    g_key_file_free(kf);
+    g_free(dir);
+    g_free(p);
+}
+
+static char *nexwm_ini_get_string(const char *key, const char *def)
+{
+    char *p = nexwm_ini_path();
+    GKeyFile *kf = g_key_file_new();
+    char *val = NULL;
+    if (g_key_file_load_from_file(kf, p, G_KEY_FILE_NONE, NULL)) {
+        val = g_key_file_get_string(kf, "nexwm", key, NULL);
+    }
+    g_key_file_free(kf);
+    g_free(p);
+    return val && *val ? val : g_strdup(def);
+}
+
+static void nexwm_ini_set_string(const char *key, const char *val)
+{
+    char *p = nexwm_ini_path();
+    char *dir = g_path_get_dirname(p);
+    g_mkdir_with_parents(dir, 0755);
+    GKeyFile *kf = g_key_file_new();
+    g_key_file_load_from_file(kf, p, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_set_string(kf, "nexwm", key, val);
+    g_key_file_save_to_file(kf, p, NULL);
+    g_key_file_free(kf);
+    g_free(dir);
+    g_free(p);
+}
+
+static void on_nexwm_spin_changed(GtkSpinButton *sb, gpointer user_data)
+{
+    const char *key = (const char *)user_data;
+    int val = gtk_spin_button_get_value_as_int(sb);
+    nexwm_ini_set_int(key, val);
+    settings_status("NexWM setting '%s' updated: %d", key, val);
+}
+
+static void on_nexwm_buttons_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    static const char *const btn_values[] = {
+        "min,max,close",
+        "close,max,min",
+        "close",
+        "none"
+    };
+    int idx = gtk_combo_box_get_active(combo);
+    if (idx >= 0 && idx < (int)G_N_ELEMENTS(btn_values)) {
+        nexwm_ini_set_string("buttons", btn_values[idx]);
+        settings_status("NexWM buttons layout updated: %s", btn_values[idx]);
+    }
+}
+
+static void on_nexwm_align_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    static const char *const align_values[] = {
+        "centre",
+        "left",
+        "right"
+    };
+    int idx = gtk_combo_box_get_active(combo);
+    if (idx >= 0 && idx < (int)G_N_ELEMENTS(align_values)) {
+        nexwm_ini_set_string("title_align", align_values[idx]);
+        settings_status("NexWM title alignment updated: %s", align_values[idx]);
+    }
+}
+
 static char *running_wm(void)
 {
     GdkScreen *s = gdk_screen_get_default();
@@ -208,6 +307,75 @@ GtkWidget *page_windows_new(void)
         g_free(msg);
         free(hint);
     }
+
+    /* ---- NexWM customization (nexwm.ini) ---- */
+    gtk_box_pack_start(GTK_BOX(box), section("NexWM Window Customization"), FALSE, FALSE, 0);
+    GtkWidget *nexcard = card_new();
+
+    int cur_tb = nexwm_ini_get_int("titlebar", 24);
+    GtkWidget *tb_spin = gtk_spin_button_new_with_range(0, 64, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(tb_spin), cur_tb);
+    gtk_widget_set_valign(tb_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(tb_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"titlebar");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Titlebar height", "Height of window title bars in pixels (0 = no title bar, default 24)", tb_spin));
+
+    int cur_bd = nexwm_ini_get_int("border", 2);
+    GtkWidget *bd_spin = gtk_spin_button_new_with_range(0, 32, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(bd_spin), cur_bd);
+    gtk_widget_set_valign(bd_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(bd_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"border");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Window border", "Thickness of window borders in pixels (default 2)", bd_spin));
+
+    int cur_bs = nexwm_ini_get_int("button_size", 0);
+    GtkWidget *bs_spin = gtk_spin_button_new_with_range(0, 48, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(bs_spin), cur_bs);
+    gtk_widget_set_valign(bs_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(bs_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"button_size");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Button size", "Diameter of close/minimize/maximize buttons in pixels (0 = automatic)", bs_spin));
+
+    char *cur_btns = nexwm_ini_get_string("buttons", "min,max,close");
+    GtkWidget *btn_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(btn_combo), "Minimize, Maximize, Close (Default)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(btn_combo), "Close, Maximize, Minimize");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(btn_combo), "Close only");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(btn_combo), "None");
+    if (!g_strcmp0(cur_btns, "close,max,min")) gtk_combo_box_set_active(GTK_COMBO_BOX(btn_combo), 1);
+    else if (!g_strcmp0(cur_btns, "close")) gtk_combo_box_set_active(GTK_COMBO_BOX(btn_combo), 2);
+    else if (!g_strcmp0(cur_btns, "none") || !g_strcmp0(cur_btns, "no")) gtk_combo_box_set_active(GTK_COMBO_BOX(btn_combo), 3);
+    else gtk_combo_box_set_active(GTK_COMBO_BOX(btn_combo), 0);
+    g_free(cur_btns);
+    gtk_widget_set_valign(btn_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(btn_combo, "changed", G_CALLBACK(on_nexwm_buttons_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Titlebar buttons", "Window controls displayed on titlebar (close, minimize, maximize)", btn_combo));
+
+    char *cur_align = nexwm_ini_get_string("title_align", "centre");
+    GtkWidget *align_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(align_combo), "Centre (Default)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(align_combo), "Left");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(align_combo), "Right");
+    if (!g_strcmp0(cur_align, "left")) gtk_combo_box_set_active(GTK_COMBO_BOX(align_combo), 1);
+    else if (!g_strcmp0(cur_align, "right")) gtk_combo_box_set_active(GTK_COMBO_BOX(align_combo), 2);
+    else gtk_combo_box_set_active(GTK_COMBO_BOX(align_combo), 0);
+    g_free(cur_align);
+    gtk_widget_set_valign(align_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(align_combo, "changed", G_CALLBACK(on_nexwm_align_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Title alignment", "Position of the window title text in the titlebar", align_combo));
+
+    int cur_rg = nexwm_ini_get_int("resize_grip", 6);
+    GtkWidget *rg_spin = gtk_spin_button_new_with_range(2, 24, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(rg_spin), cur_rg);
+    gtk_widget_set_valign(rg_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(rg_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"resize_grip");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Corner resize grab", "Size of window corner resize zone in pixels (default 6)", rg_spin));
+
+    gtk_box_pack_start(GTK_BOX(box), nexcard, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), info_label("NexWM customizations are stored in ~/.config/hde/nexwm.ini and take effect immediately or on the next window manager reload."), FALSE, FALSE, 4);
 
     g_signal_connect(box, "map", G_CALLBACK(on_map), NULL);
     g_signal_connect(box, "unmap", G_CALLBACK(on_unmap), NULL);
