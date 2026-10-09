@@ -745,11 +745,12 @@ session lock protocol — and `hde-lock --check` says which of the two this sess
 
 `make check` (the screens job) locks the session through `HDE_SH_LOCK` — the same thing `Super+L` and the Power menu's
 Lock button do — and checks the lock screen's own background on the screen, that the click goes to the lock screen,
-that `TERM` does not unlock it, that a password PAM turns down is refused and only `Enter` is checked, and that the
-password unlocks it: 15 assertions, `hde-lock --check` before them. The assertions of the locked state only run
-while the screen is really locked (an unlocked desktop used to pass some of them by itself). The Wayland job does the
-same on the compositor's session lock (`ext-session-lock-v1`) and checks that the compositor shows nothing but the
-lock screen, that `pam_deny` keeps it locked and that the password unlocks it. Fedora checks that `pam-devel`,
+that `TERM` does not unlock it, that a password PAM turns down is refused and only `Enter` is checked, and that a
+test PAM module accepts only the typed test password: 16 assertions, including `hde-lock --check`. The assertions
+of the locked state only run while the screen is really locked (an unlocked desktop used to pass some of them by
+itself). The Wayland job does the same on the compositor's session lock (`ext-session-lock-v1`) and checks that the
+compositor shows nothing but the lock screen, that `pam_deny` keeps it locked and that the correct test password
+unlocks it. Fedora checks that `pam-devel`,
 `libxcb-devel`, `wayland-devel` and `libxkbcommon-devel` really built all three backends of `hde-lock` there.
 
 ## The login screen: the field to type the user name in (fix 19)

@@ -212,21 +212,45 @@ static void ui_draw(cairo_t *cr, const struct lockui *ui, int w, int h, double c
 /* ====================================================================================================== the password */
 
 #if defined(HDE_LOCK_HAVE_PAM)
+struct pam_credentials {
+    const char *username;
+    const char *password;
+};
+
+static void pam_responses_free(struct pam_response *responses, int n)
+{
+    if (!responses) return;
+    for (int i = 0; i < n; i++) free(responses[i].resp);
+    free(responses);
+}
+
 static int pam_conv_(int n, const struct pam_message **msg, struct pam_response **resp, void *data)
 {
-    const char *password = data;
+    if (n <= 0 || !msg || !resp || !data) return PAM_CONV_ERR;
+    const struct pam_credentials *credentials = data;
     struct pam_response *r = calloc((size_t)n, sizeof *r);
     if (!r) return PAM_BUF_ERR;
     for (int i = 0; i < n; i++) {
+        if (!msg[i]) {
+            pam_responses_free(r, n);
+            return PAM_CONV_ERR;
+        }
+        const char *answer = NULL;
         switch (msg[i]->msg_style) {
-        case PAM_PROMPT_ECHO_OFF:
-        case PAM_PROMPT_ECHO_ON:
-            r[i].resp = strdup(password ? password : "");
-            if (!r[i].resp) { free(r); return PAM_BUF_ERR; }
-            break;
-        default:                                   /* PAM_ERROR_MSG / PAM_TEXT_INFO: nothing to answer */
-            r[i].resp = NULL;
-            break;
+        case PAM_PROMPT_ECHO_OFF: answer = credentials->password; break;
+        case PAM_PROMPT_ECHO_ON:  answer = credentials->username; break;
+        case PAM_ERROR_MSG:
+        case PAM_TEXT_INFO:       break;
+        default:
+            pam_responses_free(r, n);
+            return PAM_CONV_ERR;
+        }
+        if (answer) {
+            r[i].resp = strdup(answer);
+            if (!r[i].resp) {
+                pam_responses_free(r, n);
+                return PAM_BUF_ERR;
+            }
         }
     }
     *resp = r;
@@ -244,12 +268,14 @@ static bool password_ok(const struct lockui *ui, char *why, size_t why_len)
      * screen uses ("login") does exactly what is wanted here: check that account's password. */
     const char *service = access("/etc/pam.d/hde-lock", R_OK) == 0 ? "hde-lock" : "login";
     pam_handle_t *ph = NULL;
-    struct pam_conv conv = { pam_conv_, (void *)ui->field.text };
+    struct pam_credentials credentials = { ui->user, ui->field.text };
+    struct pam_conv conv = { pam_conv_, &credentials };
     int rc = pam_start(service, ui->user, &conv, &ph);
     if (rc == PAM_SUCCESS) rc = pam_authenticate(ph, 0);
     if (rc != PAM_SUCCESS) {
         const char *msg = ph ? pam_strerror(ph, rc) : "PAM could not be started";
-        snprintf(why, why_len, "%s", msg ? msg : "the password was not accepted");
+        snprintf(why, why_len, "%s (PAM service '%s', status %d)",
+                 msg ? msg : "the password was not accepted", service, rc);
     }
     if (ph) pam_end(ph, rc);
     return rc == PAM_SUCCESS;
@@ -557,7 +583,7 @@ static int x11_lock_run(struct lockui *ui)
         if (!key_held) {
             xcb_generic_error_t *err = NULL;
             xcb_grab_keyboard_reply_t *k =
-                xcb_grab_keyboard_reply(x.conn, xcb_grab_keyboard(x.conn, 1, x.screen->root, XCB_CURRENT_TIME,
+                xcb_grab_keyboard_reply(x.conn, xcb_grab_keyboard(x.conn, 0, x.win, XCB_CURRENT_TIME,
                                                                   XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC), &err);
             key_held = k && k->status == XCB_GRAB_STATUS_SUCCESS;
             why_of_grab(key_why, sizeof key_why, k != NULL, k ? k->status : 0, err);
@@ -568,7 +594,7 @@ static int x11_lock_run(struct lockui *ui)
             xcb_generic_error_t *err = NULL;
             xcb_grab_pointer_reply_t *p =
                 xcb_grab_pointer_reply(x.conn,
-                                       xcb_grab_pointer(x.conn, 1, x.screen->root, XCB_EVENT_MASK_BUTTON_PRESS,
+                                       xcb_grab_pointer(x.conn, 0, x.win, XCB_EVENT_MASK_BUTTON_PRESS,
                                                         XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, blank,
                                                         XCB_CURRENT_TIME),
                                        &err);
@@ -615,7 +641,7 @@ static int x11_lock_run(struct lockui *ui)
         if (!ptr_held) {   /* the program that had the mouse may have let go of it by now */
             xcb_grab_pointer_reply_t *p =
                 xcb_grab_pointer_reply(x.conn,
-                                       xcb_grab_pointer(x.conn, 1, x.screen->root, XCB_EVENT_MASK_BUTTON_PRESS,
+                                       xcb_grab_pointer(x.conn, 0, x.win, XCB_EVENT_MASK_BUTTON_PRESS,
                                                         XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, blank,
                                                         XCB_CURRENT_TIME),
                                        NULL);

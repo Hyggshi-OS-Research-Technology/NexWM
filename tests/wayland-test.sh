@@ -297,63 +297,67 @@ printf '[settings]\n' > "$INI"; sleep 2
 # (ext-session-lock-v1, which labwc offers), so what covers the screen is the compositor itself and no client of the
 # session can draw over it or be typed at. hde-lock asks PAM for the password; what that means is /etc/pam.d/hde-lock
 # when that file exists ("login" otherwise), so a CI container that is root writes a service file of its own: first
-# pam_permit (any password unlocks, the test can type the unlock), then pam_deny (a password PAM turns down must not
-# unlock). A session lock is not a window: the compositor keeps the screen hidden unless the lock screen *unlocks* it
-# (labwc keeps the session locked when a lock client dies, which is the whole point of the protocol), so there is no
-# "kill it if the test went wrong" here — the permit service file is written again before every unlock.
+# pam_permit and pam_deny check the accept/reject paths, then a small test PAM module accepts only a known test
+# password. A session lock is not a window: the compositor keeps the screen hidden unless the lock screen *unlocks* it
+# (labwc keeps the session locked when a lock client dies, which is the whole point of the protocol), so the test uses
+# a temporary PAM service and must unlock the session before it restores the machine's original PAM file.
 LOCKLOG="$OUT/lock.log"
 if [ ! -x "$B/hde-lock" ]; then
     info "no hde-lock in $B: the lock screen is not tested (it needs pkg-config cairo and xcb or wayland-client + xkbcommon, and PAM)"
 elif [ ! -w /etc/pam.d ] && ! sudo -n true 2>/dev/null; then
     info "no way to write /etc/pam.d/hde-lock: the lock screen is not tested (run the test as root, or with sudo)"
 else
-    HADPAM=0
-    if sudo -n test -f /etc/pam.d/hde-lock 2>/dev/null || [ -f /etc/pam.d/hde-lock ]; then
-        HADPAM=1; sudo -n cp /etc/pam.d/hde-lock "$OUT/pam.d-hde-lock.had" 2>/dev/null || cp /etc/pam.d/hde-lock "$OUT/pam.d-hde-lock.had"
-    fi
-    locker() { printf 'auth required %s\n' "$1" | { sudo -n tee /etc/pam.d/hde-lock >/dev/null 2>&1 || tee /etc/pam.d/hde-lock >/dev/null; }; }
-    locklog() { i=0; while [ "$i" -lt "${2:-100}" ]; do grep -q "$1" "$LOCKLOG" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
-    locker pam_permit.so
-    if "$B/hde-lock" --check; then pass "hde-lock --check: this Wayland session can be locked by HDE's own lock screen"
-    else fail "hde-lock --check: this Wayland session can be locked by HDE's own lock screen"; fi
+    if ! ${CC:-cc} -fPIC -shared -o "$OUT/pam-lock-check.so" "$HERE/pam-lock-check.c" -lpam; then
+        fail "the test PAM module builds; the Wayland lock test was not started"
+    else
+        HADPAM=0
+        if sudo -n test -f /etc/pam.d/hde-lock 2>/dev/null || [ -f /etc/pam.d/hde-lock ]; then
+            HADPAM=1; sudo -n cp /etc/pam.d/hde-lock "$OUT/pam.d-hde-lock.had" 2>/dev/null || cp /etc/pam.d/hde-lock "$OUT/pam.d-hde-lock.had"
+        fi
+        locker() { printf 'auth required %s\n' "$1" | { sudo -n tee /etc/pam.d/hde-lock >/dev/null 2>&1 || tee /etc/pam.d/hde-lock >/dev/null; }; }
+        locklog() { i=0; while [ "$i" -lt "${2:-100}" ]; do grep -q "$1" "$LOCKLOG" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+        locker pam_permit.so
+        if "$B/hde-lock" --check; then pass "hde-lock --check: this Wayland session can be locked by HDE's own lock screen"
+        else fail "hde-lock --check: this Wayland session can be locked by HDE's own lock screen"; fi
 
-    shot 07-before-lock
-    before=$(pixel "$OUT/shot-wl-07-before-lock.png" 5 5)
-    : > "$LOCKLOG"
-    PATH="$B:$PATH" "$B/hde-hotkeys" --action lock > "$LOCKLOG" 2>&1
-    if locklog "the Wayland session is locked"; then pass "the lock key of HDE locks the session with HDE's own hde-lock (ext-session-lock-v1)"
-    else fail "the lock key of HDE locks the session with HDE's own hde-lock (ext-session-lock-v1)"; fi
-    check "... and hde-lock is the program that is running" pgrep -x hde-lock
-    sleep 1
-    shot 07-locked
-    after=$(pixel "$OUT/shot-wl-07-locked.png" 5 5)
-    if [ "$after" = "22 26 33" ]; then pass "the compositor shows the lock screen and nothing else (its background 0x161a21 where the panel was)"
-    else fail "the compositor shows the lock screen and nothing else (the panel's corner reads '$after', not '22 26 33')"; fi
-    colours=$(command -v convert >/dev/null 2>&1 && convert "$OUT/shot-wl-07-locked.png" -format "%k" info: 2>/dev/null)
-    if [ "${colours:-0}" -gt 8 ] 2>/dev/null; then pass "the clock, the date and the user's name are drawn on it ($colours colours)"
-    else fail "the clock, the date and the user's name are drawn on it (${colours:-?} colours)"; fi
+        shot 07-before-lock
+        before=$(pixel "$OUT/shot-wl-07-before-lock.png" 5 5)
+        : > "$LOCKLOG"
+        PATH="$B:$PATH" "$B/hde-hotkeys" --action lock > "$LOCKLOG" 2>&1
+        if locklog "the Wayland session is locked"; then pass "the lock key of HDE locks the session with HDE's own hde-lock (ext-session-lock-v1)"
+        else fail "the lock key of HDE locks the session with HDE's own hde-lock (ext-session-lock-v1)"; fi
+        check "... and hde-lock is the program that is running" pgrep -x hde-lock
+        sleep 1
+        shot 07-locked
+        after=$(pixel "$OUT/shot-wl-07-locked.png" 5 5)
+        if [ "$after" = "22 26 33" ]; then pass "the compositor shows the lock screen and nothing else (its background 0x161a21 where the panel was)"
+        else fail "the compositor shows the lock screen and nothing else (the panel's corner reads '$after', not '22 26 33')"; fi
+        colours=$(command -v convert >/dev/null 2>&1 && convert "$OUT/shot-wl-07-locked.png" -format "%k" info: 2>/dev/null)
+        if [ "${colours:-0}" -gt 8 ] 2>/dev/null; then pass "the clock, the date and the user's name are drawn on it ($colours colours)"
+        else fail "the clock, the date and the user's name are drawn on it (${colours:-?} colours)"; fi
 
-    locker pam_deny.so
-    wtype -d 20 "not the password"; wtype -k Return
-    if locklog "the password was not accepted" 50 && pgrep -x hde-lock >/dev/null; then
-        pass "a password PAM turns down is not accepted, and the session stays locked"
-    else fail "a password PAM turns down is not accepted, and the session stays locked"; fi
-    sleep 0.5; shot 07-wrong-password
+        locker pam_deny.so
+        wtype -d 20 "not the password"; wtype -k Return
+        if locklog "the password was not accepted" 50 && pgrep -x hde-lock >/dev/null; then
+            pass "a password PAM turns down is not accepted, and the session stays locked"
+        else fail "a password PAM turns down is not accepted, and the session stays locked"; fi
+        sleep 0.5; shot 07-wrong-password
 
-    locker pam_permit.so
-    wtype -d 20 "the password"; wtype -k Return
-    if locklog "the Wayland session is unlocked" && ! pgrep -x hde-lock >/dev/null; then
-        pass "the password unlocks it: the session comes back"
-    else fail "the password unlocks it: the session comes back"; fi
-    check "... the log says what it did" grep -q "the password of" "$LOCKLOG"
-    sleep 1
-    shot 07-unlocked
-    after2=$(pixel "$OUT/shot-wl-07-unlocked.png" 5 5)
-    if [ "$after2" != "22 26 33" ]; then pass "... and the panel is on the screen again (${after2:-?}, was $before before locking)"
-    else fail "... and the panel is on the screen again (still '$after2')"; fi
-    sed 's/^/INFO:   /' "$LOCKLOG" | tail -n 6 | tee -a "$OUT/results.txt"
-    sudo -n rm -f /etc/pam.d/hde-lock 2>/dev/null || rm -f /etc/pam.d/hde-lock 2>/dev/null
-    [ "$HADPAM" = 1 ] && { sudo -n cp "$OUT/pam.d-hde-lock.had" /etc/pam.d/hde-lock 2>/dev/null || cp "$OUT/pam.d-hde-lock.had" /etc/pam.d/hde-lock; }
+        locker "$OUT/pam-lock-check.so"
+        wtype -d 20 "hde-lock-test-pass-42"; wtype -k Return
+        if locklog "the Wayland session is unlocked" && ! pgrep -x hde-lock >/dev/null; then
+            pass "PAM accepts the typed correct test password, and the session comes back"
+        else fail "PAM accepts the typed correct test password, and the session comes back"; fi
+        check "... the log says what it did" grep -q "the password of" "$LOCKLOG"
+        sleep 1
+        shot 07-unlocked
+        after2=$(pixel "$OUT/shot-wl-07-unlocked.png" 5 5)
+        if [ "$after2" != "22 26 33" ]; then pass "... and the panel is on the screen again (${after2:-?}, was $before before locking)"
+        else fail "... and the panel is on the screen again (still '$after2')"; fi
+        sed 's/^/INFO:   /' "$LOCKLOG" | tail -n 6 | tee -a "$OUT/results.txt"
+        sudo -n rm -f /etc/pam.d/hde-lock 2>/dev/null || rm -f /etc/pam.d/hde-lock 2>/dev/null
+        [ "$HADPAM" = 1 ] && { sudo -n cp "$OUT/pam.d-hde-lock.had" /etc/pam.d/hde-lock 2>/dev/null || cp "$OUT/pam.d-hde-lock.had" /etc/pam.d/hde-lock; }
+        fi
 fi
 
 # ---------- 8. logout ----------
