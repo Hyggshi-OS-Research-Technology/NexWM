@@ -16,8 +16,8 @@ make -j"$(nproc)"
 sudo make install            # PREFIX=/usr/local by default: use PREFIX=/usr to be a distribution package
 ```
 
-In a container that has just been unpacked (no sync database yet, so `pacman -S` would not find a single name)
-`deps.sh install` runs `pacman -Sy` first and says so; on an installed system nothing changes.
+In a fresh container (no sync database yet), `deps.sh install` runs `pacman -Syu` first, syncing the repositories and updating
+base packages before it installs HDE's dependencies. Installed systems with sync databases are left alone.
 
 Then log out and choose **HDE** (X11) or **HDE (Wayland)** on the login screen. Logs: `~/.cache/hde/session.log`.
 `packaging/arch/deps.sh` with no arguments prints its groups; `list GROUP` prints the package names of one group

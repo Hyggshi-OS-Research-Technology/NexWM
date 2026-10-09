@@ -53,6 +53,35 @@ if [ -x "$DEPS" ] || [ -f "$DEPS" ]; then
         if [ "$c" -ge 3 ]; then pass "deps.sh lists $g ($c entries)"; else fail "deps.sh list $g ($c entries)"; fi
     done
     check "deps.sh says which groups it has" sh "$DEPS" groups
+    # A fresh Arch container has no sync databases. Simulate pacman so this path is tested on every build host.
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/hde-arch-deps.XXXXXX")
+    mkdir -p "$tmp/bin"
+    cat > "$tmp/bin/pacman" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$PACMAN_LOG"
+case "$1" in
+    -Syu|-Si|-S) exit 0 ;;
+    -Qq) exit 1 ;;
+    *) echo "unexpected pacman arguments: $*" >&2; exit 2 ;;
+esac
+EOF
+    cat > "$tmp/bin/ls" <<'EOF'
+#!/bin/sh
+[ "$*" = "-A /var/lib/pacman/sync" ] && exit 0
+exec /bin/ls "$@"
+EOF
+    cat > "$tmp/bin/sudo" <<'EOF'
+#!/bin/sh
+exec "$@"
+EOF
+    chmod +x "$tmp/bin/pacman" "$tmp/bin/ls" "$tmp/bin/sudo"
+    if PATH="$tmp/bin:$PATH" PACMAN_LOG="$tmp/pacman.log" sh "$DEPS" install build >"$tmp/output" 2>&1 &&
+       grep -q '^-Syu --noconfirm$' "$tmp/pacman.log" && grep -q '^-S --needed --noconfirm ' "$tmp/pacman.log"; then
+        pass "deps.sh fully syncs a fresh container before installing packages"
+    else
+        fail "deps.sh fully syncs a fresh container before installing packages ($(tr '\n' '|' < "$tmp/output"))"
+    fi
+    rm -rf "$tmp"
     if sh "$DEPS" list nonsense 2>&1 | grep -q "unknown group"; then pass "an unknown group is said, not ignored"
     else fail "an unknown group is ignored"; fi
 else

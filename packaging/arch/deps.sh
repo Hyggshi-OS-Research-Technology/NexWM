@@ -138,33 +138,37 @@ if [ "$action" != list ]; then
     command -v pacman >/dev/null 2>&1 || { echo "$0: pacman not found: this script is for Arch Linux" >&2; exit 1; }
 fi
 
-# `install` on a machine that has never run -Sy (a container that has just been unpacked: no sync database) would fail
-# on every name: get the package information first. On an installed system the databases are there and nothing happens.
+# `install` on a fresh Arch container needs a full sync and upgrade before adding packages. Syncing only the
+# databases (`-Sy`) and then installing packages can leave the base system partially upgraded. An installed system
+# with sync databases already present is left alone.
 SUDO=""
 [ "$(id -u)" = 0 ] || SUDO="sudo"
 if [ "$action" = install ] && [ -z "$(ls -A /var/lib/pacman/sync 2>/dev/null)" ]; then
-    echo "note: no package information yet (a container that has just been unpacked): running 'pacman -Sy' first" >&2
-    $SUDO pacman -Sy --noconfirm
+    echo "note: no package information yet (a fresh container): running 'pacman -Syu' first" >&2
+    $SUDO pacman -Syu --noconfirm
 fi
 
-# pacman knows this package (it is in the sync databases: -Sy has been run)
+# pacman knows this package (it is in the sync databases)
 available() {
     pacman -Si "$1" >/dev/null 2>&1
 }
 installed() {
     pacman -Qq "$1" >/dev/null 2>&1
 }
-# the first alternative that exists here. When pacman has no sync database (a machine that never ran -Sy, or a
-# container that has just unpacked one), the first alternative is used: an Arch without a window manager would be a
-# session that does not start, which is worse than a package name that needs a second look.
+# the first alternative that exists here. If the sync databases are present but none match, stop with a useful error
+# instead of passing a stale package name to pacman. With no databases, retain the first-choice fallback.
 pick() {
     p_ifs=$IFS; IFS='|'
     for cand in $1; do
         if available "$cand"; then IFS=$p_ifs; echo "$cand"; return 0; fi
     done
     IFS=$p_ifs
+    if [ -n "$(ls -A /var/lib/pacman/sync 2>/dev/null)" ]; then
+        echo "$0: none of '$1' is available in the pacman sync databases" >&2
+        return 1
+    fi
     first=$(printf '%s\n' "$1" | cut -d'|' -f1)
-    echo "note: pacman has no package information yet (pacman -Sy): using '$first'" >&2
+    echo "note: pacman has no package information yet (pacman -Syu): using '$first'" >&2
     echo "$first"
     return 0
 }

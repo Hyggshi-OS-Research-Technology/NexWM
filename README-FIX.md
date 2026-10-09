@@ -901,3 +901,15 @@ nothing about the test changes.
   failing run could be looked at;
 * and, when the commit message contains `[shots]`, one check run per picture (`hde-shot Fedora 01-desktop`, ...), so
   the pictures of a run can be looked at in the browser without downloading the artifact.
+
+## Fresh Arch containers: fully update before installing packages (fix 22)
+
+The Arch job for `2fc16f1` failed during `Install the dependencies (packaging/arch/deps.sh)`. The job log was not
+available through the Actions API while the workflow was still running, so the exact pacman error could not be read.
+The fresh-container path now runs `pacman -Syu --noconfirm` instead of syncing repository databases alone, avoiding a
+partial upgrade before installing dependencies. If pacman has sync databases but none of an entry's package alternatives
+exist, the installer now reports that explicitly rather than passing a stale package name onward. A mock-pacman test in
+`tests/arch-test.sh --deps` exercises the empty-database bootstrap without needing an Arch host.
+
+On that same run, Fedora's build and Fedora-specific session test succeeded; its full smoke test was still running at the
+last status check. No Fedora-only source or dependency change was indicated by those results.
