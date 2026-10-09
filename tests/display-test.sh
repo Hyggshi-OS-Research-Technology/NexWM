@@ -583,7 +583,7 @@ else
             else fail "Enter checks the rejected password and keeps the lock in place"; fi
 
             locker "$OUT/pam-lock-check.so"
-            xdotool type --delay 20 "hde-lock-test-pass-42"; xdotool key Return
+            xdotool type --delay 20 "${HDE_TEST_PAM_PASS:-hde-test-pass}"; xdotool key Return
             if wait_prop _HDE_LOCKED 0 100; then pass "PAM accepts the typed correct test password, and the session comes back"
             else fail "PAM accepts the typed correct test password, and the session comes back"; fi
             check "... the log says so" grep -q "the X11 session is unlocked" "$LOCKLOG"

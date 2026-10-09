@@ -46,6 +46,7 @@ static int bar_size(const NexwmFrameStyle *st) { return st->titlebar > 0 ? st->t
 static int button_size(const NexwmFrameStyle *st)
 {
     int bar = bar_size(st);
+    if (st->button_size > 0 && st->button_size <= bar) return st->button_size;
     int size = bar - 2 * NEXWM_FRAME_PAD;
     /* a thin bar has no room for the padding: the buttons are the whole height of it (and of a sane width) */
     if (size < 6) size = bar;
@@ -100,7 +101,10 @@ int nexwm_frame_title_x(const NexwmFrameStyle *st, int frame_w, int text_w, int 
         left = NEXWM_FRAME_PAD;
         right = frame_w - NEXWM_FRAME_PAD;
     }
-    int x = left + (right - left - text_w) / 2;
+    int x;
+    if (st->title_align == 1)      x = left;                          /* left */
+    else if (st->title_align == 2) x = right - text_w;                /* right */
+    else                           x = left + (right - left - text_w) / 2; /* centre (default) */
     if (x < NEXWM_FRAME_PAD) x = NEXWM_FRAME_PAD;
     return x;
 }
@@ -129,13 +133,13 @@ int nexwm_frame_hit(const NexwmFrameStyle *st, int frame_w, int frame_h, int px,
     }
 
     /* The sides: below the title bar they are exactly the border of the frame; in the bar they are a little wider
-     * (NEXWM_FRAME_GRAB), because a two-pixel frame is not something to aim at. The top of the bar is the top edge of
-     * the window, so the top border plus the first few pixels of the bar resize instead of moving it. */
+     * (NEXWM_FRAME_GRAB or resize_grip), because a two-pixel frame is not something to aim at. */
     unsigned s = 0;
-    int side_w = in_bar ? (st->border > NEXWM_FRAME_GRAB ? st->border : NEXWM_FRAME_GRAB) : st->border;
+    int grab_size = st->resize_grip > 0 ? st->resize_grip : NEXWM_FRAME_GRAB;
+    int side_w = in_bar ? (st->border > grab_size ? st->border : grab_size) : st->border;
     int top_h = st->border;
     if (bar > 0) {
-        int grab = bar > NEXWM_FRAME_GRAB ? NEXWM_FRAME_GRAB : bar;
+        int grab = bar > grab_size ? grab_size : bar;
         top_h = st->border + grab;
     }
     if (top_h > 0 && py < top_h) s |= NEXWM_SIDE_TOP;

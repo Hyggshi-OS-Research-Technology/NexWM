@@ -346,7 +346,7 @@ else
         sleep 0.5; shot 07-wrong-password
 
         locker "$OUT/pam-lock-check.so"
-        wtype -d 20 "hde-lock-test-pass-42"; wtype -k Return
+        wtype -d 20 "${HDE_TEST_PAM_PASS:-hde-test-pass}"; wtype -k Return
         if locklog "the Wayland session is unlocked" && ! pgrep -x hde-lock >/dev/null; then
             pass "PAM accepts the typed correct test password, and the session comes back"
         else fail "PAM accepts the typed correct test password, and the session comes back"; fi

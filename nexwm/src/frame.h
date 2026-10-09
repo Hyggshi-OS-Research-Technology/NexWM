@@ -62,6 +62,9 @@ typedef struct {
     int        titlebar;      /* px of title bar (0 = no title bar: the frames are borders only) */
     const int *buttons;       /* NEXWM_BUTTON_* (nexwm.h), in the order they are drawn, left to right */
     int        n_buttons;
+    int        button_size;   /* px of buttons (0 = auto) */
+    int        title_align;   /* 0 = centre, 1 = left, 2 = right */
+    int        resize_grip;   /* corner resize grab zone in px (0 = default) */
 } NexwmFrameStyle;
 
 /* the numbers a frame is drawn by: the space around a button and the title, and how wide the grab zones are */

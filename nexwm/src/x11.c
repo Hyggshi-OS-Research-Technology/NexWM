@@ -636,6 +636,9 @@ static NexwmFrameStyle frame_style(void)
     st.titlebar = wm.cfg.titlebar;
     st.buttons = wm.cfg.buttons;
     st.n_buttons = wm.cfg.n_buttons;
+    st.button_size = wm.cfg.button_size;
+    st.title_align = wm.cfg.title_align;
+    st.resize_grip = wm.cfg.resize_grip;
     return st;
 }
 
@@ -649,6 +652,9 @@ static NexwmFrameStyle frame_style_of(const NexwmClient *c)
         st.titlebar = 0;
         st.buttons = NULL;
         st.n_buttons = 0;
+        st.button_size = 0;
+        st.title_align = 0;
+        st.resize_grip = 0;
     }
     return st;
 }

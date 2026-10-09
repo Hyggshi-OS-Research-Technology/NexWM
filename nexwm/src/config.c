@@ -9,6 +9,11 @@
  *   titlebar-text 0xffffff 0xb0b0b0     the title: focused, and the others
  *   titlebar-buttons min,max,close      the buttons of the bar, left to right ("none" for no buttons)
  *   titlebar-font fixed                 the X core font of the title (Latin-1: see frame.c)
+ *   button-size 18                      px diameter of each title-bar button (0 = auto: titlebar - 6)
+ *   title-align centre                  title position: centre (default), left, or right
+ *   resize-grip 6                       px of resize zone at window corners (default 6)
+ *   snap-distance 32                    px from edge that triggers snap on drag-drop (default 32)
+ *   animation-ms 0                      window animation duration in ms (0 = off, max 2000)
  *   focus click                   click to focus (the default) or "mouse" to follow the pointer
  *   desktops 4                    how many workspaces (1 .. 16)
  *   colors 0x2a2a2a 0x3a86ff      the frame of a window that is not focused, and of the focused one
@@ -337,6 +342,13 @@ void nexwm_config_defaults(HdeNexwmConfig *cfg)
     cfg->n_buttons = 3;
     snprintf(cfg->font, sizeof cfg->font, "fixed");
 
+    /* defaults for the extended customisation knobs */
+    cfg->button_size    = 0;    /* auto */
+    cfg->title_align    = 0;    /* centre */
+    cfg->resize_grip    = 6;
+    cfg->snap_distance  = 32;
+    cfg->animation_ms   = 0;    /* animations off */
+
     /* the keys the README promises; the same table on Wayland */
     binding_add(cfg, "Super+Return", NEXWM_ACTION_SPAWN, 0, "hde-choose terminal");
     binding_add(cfg, "Super+E", NEXWM_ACTION_SPAWN, 0, "hde-files");
@@ -375,8 +387,20 @@ char *nexwm_config_path(void)
     const char *home = getenv("HOME");
     char *path = malloc(4096);
     if (!path) return NULL;
-    if (xdg && *xdg) snprintf(path, 4096, "%s/hde/nexwm.conf", xdg);
-    else snprintf(path, 4096, "%s/.config/hde/nexwm.conf", home && *home ? home : "/tmp");
+    char inipath[4096];
+    if (xdg && *xdg) {
+        snprintf(inipath, sizeof inipath, "%s/hde/nexwm.ini", xdg);
+        snprintf(path, 4096, "%s/hde/nexwm.conf", xdg);
+    } else {
+        const char *h = home && *home ? home : "/tmp";
+        snprintf(inipath, sizeof inipath, "%s/.config/hde/nexwm.ini", h);
+        snprintf(path, 4096, "%s/.config/hde/nexwm.conf", h);
+    }
+    FILE *fi = fopen(inipath, "r");
+    if (fi) {
+        fclose(fi);
+        snprintf(path, 4096, "%s", inipath);
+    }
     return path;
 }
 
@@ -480,13 +504,31 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
         line++;
 
         char *s = trim(buf);
-        if (!*s || *s == '#') continue;
+        if (!*s || *s == '#' || *s == ';') continue;
+        if (*s == '[' && s[strlen(s) - 1] == ']') continue; /* INI section header like [nexwm] */
 
+        char *eq = strchr(s, '=');
         char *word = s;
-        char *rest = s;
-        while (*rest && *rest != ' ' && *rest != '\t') rest++;
-        if (*rest) *rest++ = '\0';
-        rest = trim(rest);
+        char *rest = NULL;
+        if (eq) {
+            *eq = '\0';
+            word = trim(s);
+            rest = trim(eq + 1);
+        } else {
+            rest = s;
+            while (*rest && *rest != ' ' && *rest != '\t') rest++;
+            if (*rest) *rest++ = '\0';
+            rest = trim(rest);
+        }
+
+        /* Normalize key names: convert '_' to '-' (e.g. button_size -> button-size) */
+        char norm_key[64];
+        size_t ki = 0;
+        for (; word[ki] && ki < sizeof(norm_key) - 1; ki++) {
+            norm_key[ki] = (word[ki] == '_') ? '-' : word[ki];
+        }
+        norm_key[ki] = '\0';
+        word = norm_key;
 
         if (!strcmp(word, "border")) {
             char *end = NULL;
@@ -631,9 +673,54 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
             }
             (void)mods;
             (void)key;         /* both were the check above; binding_add writes them down again, with the key's keysym */
+        } else if (!strcmp(word, "button-size")) {
+            char *end = NULL;
+            long v = strtol(rest, &end, 10);
+            if (!*rest || (end && *trim(end)) || v < 0 || v > 64) {
+                snprintf(err, err_n, "line %d: button-size takes a number of pixels between 0 and 64 (not '%s')",
+                         line, rest);
+                return -1;
+            }
+            cfg->button_size = (int)v;
+        } else if (!strcmp(word, "title-align")) {
+            if (!strcmp(rest, "centre") || !strcmp(rest, "center")) cfg->title_align = 0;
+            else if (!strcmp(rest, "left")) cfg->title_align = 1;
+            else if (!strcmp(rest, "right")) cfg->title_align = 2;
+            else {
+                snprintf(err, err_n, "line %d: title-align is 'centre', 'left' or 'right' (not '%s')", line, rest);
+                return -1;
+            }
+        } else if (!strcmp(word, "resize-grip")) {
+            char *end = NULL;
+            long v = strtol(rest, &end, 10);
+            if (!*rest || (end && *trim(end)) || v < 0 || v > 32) {
+                snprintf(err, err_n, "line %d: resize-grip takes a number of pixels between 0 and 32 (not '%s')",
+                         line, rest);
+                return -1;
+            }
+            cfg->resize_grip = (int)v;
+        } else if (!strcmp(word, "snap-distance")) {
+            char *end = NULL;
+            long v = strtol(rest, &end, 10);
+            if (!*rest || (end && *trim(end)) || v < 0 || v > 256) {
+                snprintf(err, err_n, "line %d: snap-distance takes a number of pixels between 0 and 256 (not '%s')",
+                         line, rest);
+                return -1;
+            }
+            cfg->snap_distance = (int)v;
+        } else if (!strcmp(word, "animation") || !strcmp(word, "animation-ms")) {
+            char *end = NULL;
+            long v = strtol(rest, &end, 10);
+            if (!*rest || (end && *trim(end)) || v < 0 || v > 2000) {
+                snprintf(err, err_n, "line %d: animation-ms takes a duration in ms between 0 and 2000 "
+                                     "(0 = off, not '%s')", line, rest);
+                return -1;
+            }
+            cfg->animation_ms = (int)v;
         } else {
             snprintf(err, err_n, "line %d: '%s' is not a setting (border, titlebar, titlebar-colors, titlebar-text, "
-                                 "titlebar-buttons, titlebar-font, focus, desktops, colors, key)", line, word);
+                                 "titlebar-buttons, titlebar-font, button-size, title-align, resize-grip, "
+                                 "snap-distance, animation-ms, focus, desktops, colors, key)", line, word);
             return -1;
         }
     }
@@ -643,6 +730,17 @@ int nexwm_config_parse(HdeNexwmConfig *cfg, const char *text, char *err, size_t 
 int nexwm_config_load(HdeNexwmConfig *cfg, const char *path, char *err, size_t err_n)
 {
     FILE *f = fopen(path, "r");
+    if (!f && path) {
+        char alt[4096];
+        size_t plen = strlen(path);
+        if (plen > 5 && !strcmp(path + plen - 5, ".conf")) {
+            snprintf(alt, sizeof alt, "%.*s.ini", (int)(plen - 5), path);
+            f = fopen(alt, "r");
+        } else if (plen > 4 && !strcmp(path + plen - 4, ".ini")) {
+            snprintf(alt, sizeof alt, "%.*s.conf", (int)(plen - 4), path);
+            f = fopen(alt, "r");
+        }
+    }
     if (!f) return 0;                       /* no file: the defaults; the caller decides whether to say so */
     char *text = NULL;
     size_t cap = 0, len = 0;

@@ -704,12 +704,44 @@ static void test_frame_title_icon_colours(void)
           "and a transparent pixel shows the bar under it (blue: %d %d %d)", out[0], out[1], out[2]);
 }
 
+static void test_ini_and_custom(void)
+{
+    HdeNexwmConfig cfg;
+    char err[256] = "";
+    nexwm_config_defaults(&cfg);
+    const char *ini_text =
+        "[nexwm]\n"
+        "border = 4\n"
+        "titlebar = 28\n"
+        "button_size = 20\n"
+        "title_align = left\n"
+        "resize_grip = 8\n"
+        "snap_distance = 48\n"
+        "animation_ms = 200\n"
+        "buttons = min,max,close\n"
+        "; a comment\n";
+    int rc = parse(&cfg, ini_text, err, sizeof err);
+    CHECK(rc == 0, "INI-style config is parsed successfully (%s)", err);
+    CHECK(cfg.border == 4, "border is 4 px (got %d)", cfg.border);
+    CHECK(cfg.titlebar == 28, "titlebar is 28 px (got %d)", cfg.titlebar);
+    CHECK(cfg.button_size == 20, "button_size is 20 px (got %d)", cfg.button_size);
+    CHECK(cfg.title_align == 1, "title_align is left (got %d)", cfg.title_align);
+    CHECK(cfg.resize_grip == 8, "resize_grip is 8 px (got %d)", cfg.resize_grip);
+    CHECK(cfg.snap_distance == 48, "snap_distance is 48 px (got %d)", cfg.snap_distance);
+    CHECK(cfg.animation_ms == 200, "animation_ms is 200 (got %d)", cfg.animation_ms);
+    CHECK(cfg.n_buttons == 3 && cfg.buttons[0] == NEXWM_BUTTON_MINIMIZE &&
+          cfg.buttons[1] == NEXWM_BUTTON_MAXIMIZE && cfg.buttons[2] == NEXWM_BUTTON_CLOSE,
+          "buttons parsed correctly: min, max, close");
+    nexwm_config_free(&cfg);
+}
+
 int main(void)
 {
     test_defaults();
     test_keynames();
     test_actions();
     test_parse();
+    test_ini_and_custom();
     test_errors();
     test_load();
     test_hde_sound_keys();

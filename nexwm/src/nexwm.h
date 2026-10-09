@@ -91,6 +91,13 @@ typedef struct {
     int  n_buttons;
     char font[64];                            /* the X core font of the title ("fixed"): see frame.c */
 
+    /* Extended customization (all read from nexwm.conf / nexwm.ini, backward-compatible defaults) */
+    int  button_size;             /* px diameter of each title-bar button (0 = auto: titlebar - 6) */
+    int  title_align;             /* 0 = centre (default), 1 = left, 2 = right */
+    int  resize_grip;             /* px of resize zone at window corners (default 6) */
+    int  snap_distance;           /* px from screen edge that triggers a snap on drag-drop (default 32) */
+    int  animation_ms;            /* ms for window open/close animation (0 = off, default 0) */
+
     HdeNexwmBinding *keys;
     size_t n_keys, cap_keys;
 } HdeNexwmConfig;
