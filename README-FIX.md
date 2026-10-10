@@ -1004,7 +1004,36 @@ wlroots"), which is how the list could sit there untouched while the distributio
 * `tests/arch-test.sh --deps` checks it with a stand-in pacman that has moved on to a series the list does not name
   (`wlroots0.22`): the test fails if `deps.sh` goes back to trusting the names it wrote down.
 
+### What was behind it
+
+Fixing the names only uncovered the next wall, two lines further down the same step:
+
+```
+pacman -Q gtk3 libwnck3 gtk-layer-shell wlroots | sed 's/^/::notice::Arch package: /'
+```
+
+`pacman -Q` exits 1 when a name it is asked about is not installed, and the step runs under GitHub's
+`bash -eo pipefail`, so asking for `wlroots` — the very name Arch dropped — failed the job *after* `deps.sh` had
+succeeded. The install step now finds the installed wlroots by pattern (`pacman -Qsq '^wlroots'`), and the Build step
+asks the `wlroots-0.21 … wlroots` ladder one name at a time instead of handing `pkg-config` a list it exits non-zero
+on as soon as one entry is unknown. Arch answered `Arch wlroots: wlroots-0.20 0.20.2`: NexWM's compositor builds
+against the current series again, which is what that job exists to check.
+
+**How it was read.** The job log is a download nobody could open from here, but GitHub turns every `::notice::` and
+`::warning::` a step prints into an annotation of its check run, and those are readable
+(`gh api repos/<repo>/check-runs/<id>/annotations`). That is how the three `Arch package:` lines above gave the answer
+away. Every line `packaging/arch/deps.sh` writes is now shown again as one, so the next install failure names its
+package in the Checks tab instead of hiding at the bottom of a log.
+
+With the packages there, the Arch build compiled everything for the first time in a while and pointed at two leftovers
+of the Settings rewrite: `combo_with` and `cb_int_combo` in `src/hde-settings.c`, the helpers of the old
+`screen_timeout` combo, were defined but not used any more. The same scan found two more in `src/hde-automount.c` —
+`on_unmounted` and `on_ejected`, written and never called, which is why nothing ever said *It is now safe to remove
+the drive.* Both `--unmount` and `--eject` go through them now, and the eject button of the Files sidebar sends the
+same sentence as a notification instead of logging it.
+
 ### Tests
 
-`sh tests/arch-test.sh --deps` (13 checks, all of them without pacman or Arch). The Arch job of CI is the one that
-really runs `packaging/arch/deps.sh` against today's repositories.
+`sh tests/arch-test.sh --deps` (13 checks, all of them without pacman or Arch) and the Arch job of CI, which is the
+one that really runs `packaging/arch/deps.sh` against today's repositories — it is green, and the compiler warnings
+of the whole build are down to five, all of them in files this work never touched (`hde-panel.c`, `hde-cmd`).
