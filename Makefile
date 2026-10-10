@@ -448,8 +448,9 @@ install: all
 	 else echo "NOTE: hde-automount was not built (needs libglib2.0-dev for GIO): USB sticks are not mounted automatically"; fi
 	@if [ -x $(BUILD)/hde-keyring ]; then install -m755 $(BUILD)/hde-keyring $(DESTDIR)$(PREFIX)/bin/hde-keyring; \
 	 else echo "NOTE: hde-keyring was not built (needs libglib2.0-dev for GIO)"; fi
+	install -d $(DESTDIR)$(PREFIX)/share/hde/pam
 	install -m644 packaging/pam/hde-keyring $(DESTDIR)$(PREFIX)/share/hde/pam/hde-keyring
-	@echo "NOTE: to have the login password open the keyring as well, add packaging/pam/hde-keyring to the PAM file of the display manager (/etc/pam.d/sddm)"
+	@echo "NOTE: to have the login password open the keyring as well, add $(PREFIX)/share/hde/pam/hde-keyring to the PAM file of the display manager (/etc/pam.d/sddm)"
 	install -m755 $(BUILD)/nexwm $(DESTDIR)$(PREFIX)/bin/nexwm
 	install -d $(DESTDIR)$(PREFIX)/share/hde/logos $(DESTDIR)$(WLSESSIONS) $(DESTDIR)$(PORTALS_DIR)
 	install -m644 data/logos/*.svg data/logos/LICENSES.md $(DESTDIR)$(PREFIX)/share/hde/logos/
