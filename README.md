@@ -15,6 +15,9 @@ manager), a session manager and a system-hotkeys daemon.
 | **Notifications** | Built-in `org.freedesktop.Notifications` 1.2 daemon (actions, images, urgency, sounds, history) — `notify-send` and every app work |
 | **Hotkeys** | Super = Start menu, **F1/F2/F3 = mute / volume down / volume up**, **F4 = play/pause (`playerctl`)**, **F6/F7 = screen darker / brighter**, **F8 (or Super+P, or the display key of a laptop) = Project**, media + brightness keys with an on-screen display, screenshots, lock, terminal, files, run |
 | **Lock screen** | **HDE's own lock screen** (`hde-lock`): the clock, the date, your name and a password field — the password is checked through **PAM**, the same one you log in and `sudo` with, and while the screen is locked nothing else can be used. On the **HDE** (X11) session it is a window of its own that no window manager can move, draw over or take the keyboard from (the keyboard and the mouse are held, the pointer is hidden); on the **HDE (Wayland)** session it is the compositor's **session lock** (`ext-session-lock-v1`, labwc), so the compositor itself stops showing and feeding input to every other program — a lock screen killed from outside does not give the session back. `Super+L` (or `hde-hotkeys --action lock`, `hde-session lock`, the Power menu of the panel) runs it first, on both sessions; where it cannot lock (built without PAM, a compositor without the session lock protocol) HDE falls back to the lockers the machine has (swaylock, gtklock, i3lock, slock, …). `hde-lock --check` says whether this session can be locked, 0 = yes |
+| **While you are away** | HDE's own `hde-idle`: *Settings → Power → Screen and sleep* sets, on their own for the battery and while plugged in, **when the screen turns off**, **when the session locks** and **when the computer goes to sleep** (1 minute to 2 hours, or never). A video that is playing holds all of it off for as long as it plays (`org.freedesktop.ScreenSaver.Inhibit` — Firefox, mpv, VLC and every other player use it; the panel and `hde-idle --status` say who is holding). The screen never sleeps while it is locked, and the computer always locks before it sleeps. On X11 the X Screen Saver extension says how long nobody has touched the keyboard or the mouse and DPMS turns the screen off; on Wayland `hde-idle` asks the compositor (`ext-idle-notify-v1`) and turns the screen off through it — `hde-idle --check` says which one this session can do (exit 0 = it can). Where HDE cannot measure the time (no extension, a compositor without the protocol) it hands the screen back to the power manager already installed (`xfce4-power-manager`, `xfsettingsd`, `mate-screensaver`, `cinnamon-settings-daemon`) and says so in Settings, so the screen is never left on by a setting nothing follows |
+| **Drives** | Plug in a USB stick, a card or an external disk: `hde-automount` mounts it and says so with a notification (*Open* runs Hyggshi Files on it). It is in the **Drives** list of the Files sidebar right away (and a disc, whether or not it has media in it), where clicking it mounts it and opens it, and the button beside it **ejects it safely** — you get *It is now safe to remove the drive.* when it is done. HDE talks to **udisks2** over D-Bus itself (`src/hde-udisks.c`), so no GVfs volume monitor and no udisks2 client library is needed; without udisks2 the list simply stays empty and the rest of Files is untouched |
+| **Keyring** | `gnome-keyring-daemon` is started as the first thing of the session, before any program that could ask for a password, and HDE exports the socket it answers on (`GNOME_KEYRING_CONTROL`, `SSH_AUTH_SOCK`) into the D-Bus activation environment, so the browser, Git, NetworkManager's Wi-Fi passwords and `hde-choose` all find the **one** Secret Service and keep what they saved. With the two PAM lines above, the password of the login screen opens the keyring too and nothing asks again. `hde-keyring --status` says whether the Secret Service is there and which daemon is behind it; `hde-keyring --check` only answers yes or no |
 | **Screens (Project)** | **F8** opens a *Project* window like Windows + P: **PC screen only · Duplicate · Extend · Second screen only** for a projector, TV or second monitor (F8 again = next choice, Enter applies). Built on XRandR — no `xrandr`/`arandr` needed. *Second screen only* goes back by itself after 15 s unless kept (in case the other screen shows nothing). Plugging in a screen opens the window (or extends / duplicates, as chosen); unplugging the screen in use turns the computer's screen back on; the choice comes back at the next login for the same screens. The panel and desktop follow every change; each screen gets the whole wallpaper. **Resolution, refresh rate and orientation** of each screen in *Settings → Display* (the screens beside it move along; *Keep these display settings?* goes back by itself after 15 s), kept for the next logins |
 | **Brightness** | **F6 / F7** and the brightness keys, with an OSD, **without brightnessctl**: the laptop backlight (directly or through systemd-logind); on desktop monitors **the monitor's own brightness over DDC/CI** when `ddcutil` is installed; else software dimming of every screen (virtual machines), kept for the next login. Slider in *Settings → Display* and the Control Center; *Night Light* (warmer colours) works too |
 | **Screenshots** | Built-in `hde-screenshot` (no scrot or other tool needed): whole screen, drag an area, or the active window; saved to `~/Pictures/Screenshots`, copied to the clipboard, announced with a notification (Open / Show in Folder). Hold `Ctrl` to only copy to the clipboard. **Start menu → Screenshot** opens the *Screenshot* window: choose whole screen / window / area, a delay and whether the **mouse pointer** is in the picture, then Copy, Save As, Open or Show in Folder |
@@ -35,18 +38,25 @@ manager), a session manager and a system-hotkeys daemon.
 
 ```sh
 # build dependencies (libgtk-layer-shell-dev: for the Wayland session; libxcb1-dev: NexWM, HDE's own window manager;
-# libpam0g-dev: the password check of HDE's own lock screen, hde-lock)
+# libpam0g-dev: the password check of HDE's own lock screen, hde-lock; libxext-dev: how long you have been away and
+# turning the screen off, hde-idle)
 sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libgtk-layer-shell-dev \
-                 libxcb1-dev libpam0g-dev
-# recommended runtime packages
+                 libxcb1-dev libpam0g-dev libxext-dev
+# recommended runtime packages (udisks2: mounting a USB stick when you plug it in; gnome-keyring: the one place the
+# session keeps the passwords of Wi-Fi, the browser and Git)
 sudo apt install metacity network-manager bluez pipewire-pulse policykit-1-gnome \
-                 gnome-themes-extra libnotify-bin playerctl
+                 gnome-themes-extra libnotify-bin playerctl udisks2 gnome-keyring
 # for the HDE (Wayland) session: the compositor and screenshots (the screen lock is HDE's own hde-lock; a swaylock or
 # gtklock is only the fallback for a build without PAM or on a compositor without ext-session-lock-v1)
 sudo apt install labwc grim slurp
 make
 sudo make install          # PREFIX=/usr/local by default
 ```
+
+To have the keyring opened by the password you type at the login screen (instead of once more by the first program that
+needs it), add the two lines of `packaging/pam/hde-keyring` — which `make install` puts in
+`$(PREFIX)/share/hde/pam/hde-keyring` — to the PAM file of your display manager (`/etc/pam.d/sddm` on SDDM, HDE's own
+login screen; `gdm-password` on GDM; `lightdm` on LightDM). Without them HDE still starts a keyring, only a locked one.
 
 Log out and choose the **HDE** session on the login screen — **HDE (Wayland)** (shown once `labwc` is installed) or **NexWM**, which is the same HDE session with HDE's own window manager (`nexwm/README.md`).
 Logs: `~/.cache/hde/session.log`.
@@ -117,6 +127,9 @@ new tab, `F5` reload, `F10` the menu, `Ctrl+?` all of them.
 |---------|------|
 | `hde-session` | Session manager. `hde-session wm` switches the window manager live, `hde-session restart` restarts panel + desktop, `hde-session {logout,reboot,shutdown,suspend,lock}` |
 | `hde-lock` | HDE's own lock screen, on both of HDE's sessions (see the **Lock screen** row above): `hde-lock [--x11\|--wayland]` locks the session in front of it (the session is picked from `WAYLAND_DISPLAY`/`DISPLAY`), `--check` takes no lock and says whether it could (exit 0 = yes, 3 = no), `--version` names the backends this build got. The password is checked by PAM: `/etc/pam.d/hde-lock` when that file exists (a system can say there what locking means, and the file that ships the program does not have to), `login` otherwise. TERM, INT, HUP and USR1 do not unlock it |
+| `hde-idle` | Keeps up with how long nobody has touched the computer and does what *Settings → Power → Screen and sleep* says: turn the screen off, lock (through `hde-lock`), and put the computer to sleep, each with its own time and separately for battery and plugged in. `hde-idle --status` prints the times, how long you have been away and who is holding it off; `--check` takes no action and says whether the time away can be measured here (exit 0 = yes); `--lock`, `--suspend`, `--blank`, `--unblank`, `--activate` do that one thing now (the one-shot commands wait for the first look, so a script does not race it). It is also the `org.freedesktop.ScreenSaver` and `org.freedesktop.PowerManagement` of the session: an application that asks to stay awake (a player, a presentation) is given a cookie and holds the sleep off for as long as it lives. The settings file is watched: change a time in Settings and it applies at once, no restart. `HDE_NO_IDLE=1` (or `hde-session --no-panel`) starts no `hde-idle` |
+| `hde-automount` | Mounts a USB stick, a card or an external disk as soon as udisks2 has it, announces it and offers to open it in Hyggshi Files; unmounting it (the eject button in Files, or elsewhere) is left alone until it is plugged in again. `hde-automount --mount-all` mounts what is there now, `--unmount-all` gets every removable drive out, `--list` prints them, `--check` says whether udisks2 answers (exit 0 = yes). Notifications are sent to the session's own `org.freedesktop.Notifications`, so no `notify-send` is needed |
+| `hde-keyring` | Starts `gnome-keyring-daemon` and prints what the session has to export (`hde-keyring --export` prints it with `export` in front, for a shell). `--unlock` reads the login password on its standard input and opens the keyring with it — this is what PAM runs. `--wait SECONDS` (2 by default) waits for `org.freedesktop.secrets` to be on D-Bus, so nothing races the daemon; `--check` just says yes or no, `--status` says which daemon is behind it and whether it is unlocked |
 | `nexwm` | HDE's own window manager (`nexwm/`, in this repository). `nexwm [--x11\|--wayland] [--replace] [--config FILE]`, `--version`, `--help`. The X11 side is a window manager of its own (XCB only, no libX11, no toolkit): frames, focus, workspaces, snap / maximize / full screen, `_NET_WM_STRUT` of the panel, `_NET_SUPPORTING_WM_CHECK`, `--replace` to take over from another window manager without logging out. Keys and settings in `~/.config/hde/nexwm.conf`; what the running one listens to is `xprop -root _NEXWM_KEYS`. The Wayland side is a wlroots compositor (`nexwm --wayland`) when wlroots is available at build time; both sides are optional and `nexwm --version` names the ones this build got (a build without `libxcb` still compiles; `nexwm --x11` then says what to install) |
 | `hde-panel` | Panel, Start menu, Control Center, battery panel, app search, notifications, OSD. `hde-panel --menu/--search/--run/--power/--show-desktop/--osd-volume/--osd-brightness N/--control-center[=wifi\|bluetooth\|sound\|notifications]/--notifications/--battery` control the running panel (X11 ClientMessage or D-Bus `org.hyggshi.HDE.Panel`); `hde-panel --measure` has the panel measure the screen again and put itself right, then prints the screen, the panel window, the space reserved for it and the room windows get (exit status 0 = it fits) |
 | `hde-files` | Hyggshi Files, the file manager (`hde-files/`, which has its own Makefile too): `hde-files [FOLDER\|FILE\|URI…]` (a file: its folder with the file selected; `trash:///`, `recent:///`), `--select PATH…` (the folders with these items selected), `--new-window`, `--quit`. One process; while it runs it answers `org.freedesktop.FileManager1` (*Show in Folder*). In HDE sessions folders open in it (`hde-mimeapps.list`; a choice of your own in *Open With* wins). Its settings: `~/.config/hde/files.ini` |
@@ -138,7 +151,8 @@ GTK theme — or `#rrggbb`), `icon_theme_name`, `font`,
 `super_menu`, `fkeys_sound` (F1–F4), `fkeys_display` (F6/F7/F8), `media_keys`, `system_shortcuts`, `screenshot_tool` (`builtin` or an installed
 `gnome-screenshot`, `xfce4-screenshooter`, `mate-screenshot`, `flameshot`, `spectacle`, `maim`, `scrot`), `screenshot_pointer`
 (the mouse pointer in screenshots, default `false`), `dnd`, `notification_popups`,
-`notification_sounds`, `scale`, `keyboard_layout`, `repeat_rate`, `repeat_delay`, `screen_timeout`,
+`notification_sounds`, `scale`, `keyboard_layout`, `repeat_rate`, `repeat_delay`, `screen_timeout` (kept: if you have never opened the new *Screen and sleep* page, it is what the four `idle_*`
+times below are read from),
 `natural_scroll` (touchpad: `true` = like a phone, the default; `false` = like a mouse wheel),
 `touchpad_direction_chosen` (set once a direction was picked: the *Touchpad scrolling* window no longer opens at
 login), `treat_as_touchpad` (names of touchpads that X sees as a mouse, e.g. inside a virtual machine: they follow
@@ -146,6 +160,11 @@ login), `treat_as_touchpad` (names of touchpads that X sees as a mouse, e.g. ins
 `pointer_speed` (0–1), `pointer_acceleration`, `display_connect` (when a screen is plugged in: `ask` = the F8 window,
 `extend`, `duplicate`, `second`, `nothing`), `display_mode` + `display_outputs` (the last F8 choice and for which
 screens), `display_modes` (resolution / rotation per screen: `HDMI-1=1920x1080@74.97/normal,eDP-1=1280x800@59.91/left`),
+`idle_blank` (minutes until the screen turns off, 0 = never; default 10), `idle_lock` (minutes until the session
+locks, 0 = never; default 15), `idle_suspend_battery` (minutes until the computer sleeps on battery, 0 = never; default
+20) and `idle_suspend_ac` (the same while plugged in, default 0 = never) — the four combos of *Screen and sleep* —, and
+`idle_lock_before_suspend` (default `true`: the computer locks before it sleeps, even while a video is holding the
+screen on),
 `night_light`, `night_light_temperature` (kelvin, default 4000), `battery_saver` (default `false`), `battery_saver_level`
 (10, 15, 20 — the default —, 30, 50 %, or 100 = always on battery), `battery_saver_dim` (default `true`),
 `battery_warnings` (default `true`), …
@@ -188,6 +207,12 @@ Restore, the right-click menus, Properties, search in subfolders, tabs, *Show in
 mode, a folder on the desktop opening in it), live window manager switching and crash recovery; `power-test` checks the
 battery numbers (µWh / µAh, time left, health, two batteries, a mouse) and the battery saver's decisions without X;
 `measure-test` where the panel belongs and what is wrong when it is not there (one or two screens, scale 2).
+`make check-unit` builds and runs the display-free unit tests — `idle-test` (the times, the order screen off → locked →
+asleep, the two kinds of inhibitor and what each one holds off, the cookies, the battery and plugged-in switch,
+`hde_idle_minutes_text`), `disks-test` (what a drive is called, what is shown from it, what of it is mounted and
+what can be taken out — loop devices, encrypted volumes, an empty optical drive — and the sizes) and `keyring-test`
+(the environment the keyring daemon prints, and what of it HDE exports). `make check-tree` fails the check when a
+built file (`.o`, `.a`, `.so`, `.pyc`, …) has been committed by mistake.
 `tests/display-test.sh` (real Xorg with several dummy screens) also checks resolutions (Settings and
 `--display-set`, the screens beside moving along, kept or reverted, back at login) and DDC/CI with a simulated `ddcutil`;
 `scripts/test-nexde --check` starts a nested session in Xephyr; `packaging/hyggshi-os/build-nexwm.sh` runs in a Debian 13
@@ -251,6 +276,13 @@ line of `~/.cache/hde/session.log` show the commit HDE was built from.
 - `hde-files/`: Hyggshi Files, the file manager (`src/files.h` describes its parts).
 - `hde-cmd/`: HDE Cmd, the terminal emulator (`src/vt.c` is the built-in VT engine; `src/ui.c` is the GTK/PTTY frontend).
 - `apps/hde-session.c`: session manager. `src/hde-wm.h`: window-manager table shared with Settings.
+- `src/hde-idle-core.h/.c` (what happens when nobody is at the computer, and the rules of the inhibitors) +
+  `src/hde-idle.c` (the daemon: X Screen Saver + DPMS, or `ext-idle-notify-v1` on Wayland, and D-Bus);
+  `src/hde-udisks.h/.c` (the talk with udisks2 over D-Bus) + `src/hde-disks.h/.c` (the drives: what is shown, mounted
+  and ejected) + `src/hde-automount.c` (mounting when plugged in) and `hde-files/src/disks.c` (the *Drives* list of
+  Files); `src/hde-keyring-core.h/.c` (the environment the keyring daemon prints) + `src/hde-keyring.c` (starting it).
+  Each of the three has a unit test in `tests/`; sharing the core between the program and the test is how they are
+  tested without a display, a drive or a keyring.
 - `src/hde-choose.h` / `src/hde-choose.c` (the table of *which program for this?*, what is installed, what was
   remembered) and `apps/hde-choose.c` (the question, the running of the program); `tests/choose-stub/` is a stand-in
   for GTK3, built only for `tests/choose-run-test.sh`.

@@ -914,3 +914,65 @@ exist, the installer now reports that explicitly rather than passing a stale pac
 
 On that same run, Fedora's build and Fedora-specific session test succeeded; its full smoke test was still running at the
 last status check. No Fedora-only source or dependency change was indicated by those results.
+
+## Idle to sleep, USB drives and the keyring (fix 23)
+
+The three things a desktop is expected to do on its own were left to something else: the screen when nobody is at the
+computer went to `xfce4-power-manager`, a USB stick was mounted by whatever GVfs the file manager happened to have, and
+there was no keyring at all — so the Wi-Fi password, the browser's and Git's were asked for again at every login. This
+is HDE's own answer to all three, in the same style as the rest of HDE: one small program each, no new dependency that
+the distribution does not already ship, and usable on the Wayland session as well as on the X11 one.
+
+### Added
+
+* **`hde-idle`** — `src/hde-idle.c`, with the rules in `src/hde-idle-core.h/.c`. Four times, set in
+  *Settings → Power → Screen and sleep*: when the screen turns off, when the session locks, and when the computer
+  sleeps — the last one separately for battery and while plugged in (1 minute to 2 hours, or never). The order is
+  always screen off, then locked, then asleep, and the computer locks before it sleeps even while a video is holding
+  the screen on. A player that asks to stay awake (`org.freedesktop.ScreenSaver.Inhibit`, which is what Firefox, mpv
+  and VLC send) holds off the screen and the lock but **not** the sleep; a program that asks not to be suspended
+  (`org.freedesktop.PowerManagement.Inhibit`, a presentation, a long download) holds off the sleep only. Both are
+  dropped when the program that asked disappears, so a crashed player cannot keep the screen on forever.
+  On X11 the time away comes from the X Screen Saver extension and the screen is turned off with DPMS; on Wayland it
+  asks the compositor (`ext-idle-notify-v1`) — `WAYLAND_DISPLAY` is tried first and X11 is the fallback.
+  `hde-idle --check` is what `hde-settings` asks: when the time away cannot be measured here (no extension, a
+  compositor without the protocol), Settings hands the screen back to the power manager that is already installed and
+  says so on the page, so a setting that nothing follows can no longer leave the screen on.
+* **`hde-automount`** and the **Drives** list — `src/hde-udisks.h/.c` (the talk with **udisks2** over D-Bus, written
+  here: no GVfs volume monitor, no libudisks2), `src/hde-disks.h/.c` (which drives are shown, which of them are
+  mounted, which can be taken out), `src/hde-automount.c` (mounting when a drive is plugged in) and
+  `hde-files/src/disks.c` (the list in the sidebar of Hyggshi Files). Plugging in a stick mounts it and says so with a
+  notification whose *Open* runs Files on it; in Files it is in the sidebar, and the button beside it safely removes
+  it ("It is now safe to remove the drive."). Loop devices, the system disk, encrypted volumes that need a password
+  and an optical drive with no disc in it are not shown; the same list works from a script (`hde-automount --list`).
+* **`hde-keyring`** — `src/hde-keyring.c`, with the environment parsing in `src/hde-keyring-core.h/.c`.
+  `gnome-keyring-daemon` is started by `hde-session` **before** anything that could ask for a password, on both the
+  X11 and the Wayland session, and the socket it answers on (`GNOME_KEYRING_CONTROL`, `SSH_AUTH_SOCK`) is exported
+  into the D-Bus activation environment. With the two lines of `packaging/pam/hde-keyring` in the PAM file of the
+  display manager, the password typed at the login screen opens the keyring as well and nothing asks a second time;
+  without them the keyring is there but locked, which is why the note is printed by `make install` and explained in
+  the README.
+* **Unit tests** for all three — `tests/idle-test.c`, `tests/disks-test.c`, `tests/keyring-test.c`, in `UNIT_TESTS`
+  and run by `make check-unit`. This is the shape the other new pieces of HDE follow from now on: the decisions live
+  in a `src/hde-*-core.c` that the program and the test both use, so they can be checked without a display, a drive
+  or a keyring.
+
+### Fixed
+
+* **The committed object file.** `hde-core/notifications/notifications.o` was in the repository (a build result, not
+  source). It is `git rm`'d, `hde-core/**/*.o|*.a|*.so` is in `.gitignore`, and `make check-tree` — now part of
+  `make check` — fails when any built file has been committed again.
+* ***Settings → Power*** mixed the three times into one `screen_timeout` with only 0/5/10/15/30/60 to choose from, and
+  asked for `xfce4-power-manager` when it was not installed. It now has the four combos above (1 minute to 2 hours),
+  the *Lock before sleeping* switch, and only mentions a power manager when this machine actually has one. An old
+  `screen_timeout` is read as the new times the first time, so nobody's setting is lost.
+* **Build and packaging:** the Wayland session needs `wayland-scanner` and `libwayland-dev` (the CI job did not have
+  them), and `udisks2` / `gnome-keyring` / `libxext` are in the dependency lists (`packaging/arch/deps.sh`,
+  `packaging/fedora/deps.sh`, `hde-settings --deps`).
+
+### Tests
+
+`make check-unit` runs the 148 checks of the three new tests (67 idle, 48 disks, 33 keyring); `make check-tree`
+verifies that no build result is tracked. The programs themselves are compiled but not linked in this sandbox (there
+is no GLib, GIO, X11-ext or Wayland header here), so the first real compile and link is the CI job — that is what the
+dependency additions above are for.

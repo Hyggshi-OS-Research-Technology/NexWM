@@ -168,7 +168,7 @@ void        pane_item_geometry(Pane *p);         /* HDE_DEBUG: log where the ite
 /* ------------------------------------------------------------------ window.c */
 struct _FilesWindow {
     GtkWidget *window;
-    GtkWidget *sidebar, *paned, *notebook;
+    GtkWidget *sidebar, *sidebar_box, *drives, *paned, *notebook;
     GtkWidget *back_btn, *fwd_btn, *up_btn;
     GtkWidget *path_stack, *pathbar_scroll, *pathbar, *location_entry, *search_entry;
     GtkWidget *search_btn, *view_btn, *view_img, *menu_btn;
@@ -200,6 +200,12 @@ void        files_windows_jobs_changed(void);
 void        files_windows_job_done(GFile *dest_dir, GList *created);
 void        files_windows_icons_changed(void);
 void        files_windows_cut_changed(void);
+
+/* ------------------------------------------------------------------ disks.c */
+/* The "Drives" list of the sidebar: the USB sticks, the cards and the discs, from udisks2 (src/hde-udisks.c).
+ * Hidden while no drive is plugged in. Mounts a drive when the user clicks it, and gets it out again safely
+ * with the button next to it. */
+GtkWidget  *files_drives_new(void);
 
 /* ------------------------------------------------------------------ ops.c */
 typedef enum { JOB_COPY, JOB_MOVE, JOB_LINK, JOB_TRASH, JOB_DELETE, JOB_RESTORE, JOB_EMPTY_TRASH } JobKind;

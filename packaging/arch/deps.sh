@@ -44,6 +44,7 @@ libinput
 pixman
 cairo
 pam
+libxext
 libxcb
 xcb-util-wm
 wlroots|wlroots0.18|wlroots0.17
@@ -80,6 +81,8 @@ labwc
 grim
 slurp
 sddm
+udisks2
+gnome-keyring
 "
 
 TEST="

@@ -27,6 +27,7 @@
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
@@ -491,6 +492,21 @@ static void run_quiet(const char *script)
         g_clear_error(&e);
 }
 
+/* The same as run_quiet, but says whether the command worked (exit status 0). A program that could not be
+ * started at all is no: whatever asked wanted to know whether it said yes. */
+static gboolean run_quiet_status(const char *script)
+{
+    gchar *argv[] = { (gchar *)"/bin/sh", (gchar *)"-c", (gchar *)script, NULL };
+    GError *e = NULL;
+    gint status = 0;
+    if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                      NULL, NULL, NULL, NULL, &status, &e)) {
+        g_clear_error(&e);
+        return FALSE;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 void apply_keyboard_settings(void)
 {
     static const char *const layouts[] = { "us", "vn", "gb", "jp" };
@@ -512,9 +528,30 @@ void apply_keyboard_settings(void)
     }
 }
 
+/* Can hde-idle look after the screen of this session? It says so itself (`hde-idle --check`: it needs the
+ * XScreenSaver extension on X11, or a compositor that speaks ext-idle-notify-v1 on Wayland). Where it can, the
+ * X server's own blanking is switched off, so that the two do not fight over the screen; where it cannot, the X
+ * server is left to do what it can, and the session is not left with a screen that never turns off at all.
+ * Asked once per program: the answer does not change while the session runs. */
+static gboolean idle_handled_by_hde(void)
+{
+    static int cached = -1;
+    if (cached < 0)
+        cached = (have_program("hde-idle") && run_quiet_status("hde-idle --check")) ? 1 : 0;
+    return cached == 1;
+}
+
 void apply_power_settings(void)
 {
-    if (!cfg_has_key("screen_timeout") || !have_program("xset")) return;
+    if (!have_program("xset")) return;
+    if (idle_handled_by_hde()) {
+        /* hde-idle owns the screen from here on (Settings > Power: "Turn the screen off after", "Lock the
+         * screen after", "Sleep after"). */
+        run_quiet("xset s off; xset -dpms");
+        return;
+    }
+    /* No hde-idle that can measure this session: the X server's own timeout, as it always was. */
+    if (!cfg_has_key("screen_timeout")) return;
     static const int mins[] = { 0, 5, 10, 15, 30, 60 };
     int i = CLAMP(cfg_get_int("screen_timeout", 2), 0, 5);
     int s = mins[i] * 60;

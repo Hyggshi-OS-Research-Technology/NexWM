@@ -18,6 +18,14 @@ WNCK_CFLAGS:=$(shell pkg-config --cflags libwnck-3.0 x11 2>/dev/null)
 WNCK_LIBS:=$(shell pkg-config --libs libwnck-3.0 x11 2>/dev/null)
 GLIBX_CFLAGS:=$(shell pkg-config --cflags glib-2.0 x11 2>/dev/null)
 GLIBX_LIBS:=$(shell pkg-config --libs glib-2.0 x11 2>/dev/null || echo "-lglib-2.0 -lX11")
+# GIO (the D-Bus half of GLib, libglib2.0-dev): hde-idle, hde-automount and hde-keyring talk to the session bus
+# and to udisks2 through it. Without it none of the three is built (the rest of HDE does not need it).
+GIO_CFLAGS:=$(shell pkg-config --cflags gio-2.0 2>/dev/null)
+GIO_LIBS:=$(shell pkg-config --libs gio-2.0 2>/dev/null)
+# XScreenSaver and DPMS (libxext-dev, pulled in by libgtk-3-dev): how long nobody has touched the computer
+# (hde-idle, on the "HDE" X11 session) and turning the screen off. Without it hde-idle measures nothing there.
+XSS_CFLAGS:=$(shell pkg-config --exists xext 2>/dev/null && echo "-DHAVE_XSS `pkg-config --cflags xext`")
+XSS_LIBS:=$(shell pkg-config --libs xext x11 2>/dev/null)
 # XInput2 (libxi-dev, pulled in by libgtk-3-dev): needed for the Super key to open the Start menu and for the touchpad /
 # mouse settings (natural scrolling, tap to click). Without it everything still builds, just without those.
 XI_CFLAGS:=$(shell pkg-config --exists xi 2>/dev/null && echo "-DHAVE_XI2 `pkg-config --cflags xi`")
@@ -104,6 +112,18 @@ HDE_LOCK_DEPS=$(BUILD)/$(LOCKXML)-client-protocol.h $(BUILD)/$(LOCKXML)-protocol
 endif
 endif
 
+# hde-idle (src/hde-idle.c) on the "HDE (Wayland)" session: ext-idle-notify-v1, the protocol a compositor uses to
+# say "nobody has touched the computer for N milliseconds". Generated from protocols/ext-idle-notify-v1.xml the
+# same way as the lock screen's session lock and the panel's Wayland taskbar. labwc and NexWM both offer it.
+IDLEXML=ext-idle-notify-v1
+IDLE_WL:=$(shell [ -n "$(WAYLAND_SCANNER)" ] && pkg-config --exists wayland-client 2>/dev/null && echo yes)
+ifeq ($(IDLE_WL),yes)
+IDLE_WL_CFLAGS=-DHAVE_WAYLAND_IDLE -I$(BUILD) $(shell pkg-config --cflags wayland-client)
+IDLE_WL_LIBS=$(shell pkg-config --libs wayland-client)
+IDLE_WL_SRC=$(BUILD)/$(IDLEXML)-protocol.c
+IDLE_WL_DEPS=$(BUILD)/$(IDLEXML)-client-protocol.h $(BUILD)/$(IDLEXML)-protocol.c
+endif
+
 # Flags for the GTK programs in src/
 GUI_CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE -DHDE_DATADIR=\"$(PREFIX)/share/hde\"
@@ -120,9 +140,11 @@ SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-blue
              src/hde-theme.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-sysinfo.c \
              src/hde-settings-panel.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c src/hde-wl.c \
              src/hde-settings-wayland.c src/hde-settings-power.c src/hde-power.c src/hde-profiles.c src/hde-run.c \
-             src/hde-settings-peripherals.c src/hde-measure.c
-# Hyggshi Files, the file manager (its own folder: hde-files/, which also has a Makefile to build it alone)
-FILES_SRC=$(wildcard hde-files/src/*.c) src/hde-theme.c
+             src/hde-settings-peripherals.c src/hde-measure.c src/hde-idle-core.c
+# Hyggshi Files, the file manager (its own folder: hde-files/, which also has a Makefile to build it alone).
+# src/hde-udisks.c + src/hde-disks.c are the "Drives" list in its sidebar: the USB sticks, the cards and the
+# discs, read from udisks2 instead of through a GVfs volume monitor.
+FILES_SRC=$(wildcard hde-files/src/*.c) src/hde-theme.c src/hde-udisks.c src/hde-disks.c
 # Hyggshi Media, the pictures (its own folder: hde-media/, which also has a Makefile to build it alone); the media
 # player and the recorder join it there
 MEDIA_SRC=$(wildcard hde-media/src/*.c) src/hde-theme.c
@@ -139,7 +161,7 @@ NEXWM_SRC=$(wildcard nexwm/src/*.c)
 NEXWM_HEADERS=$(wildcard nexwm/src/*.h)
 
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media \
-         hde-choose hde-cmd nexwm hde-lock
+         hde-choose hde-cmd nexwm hde-lock hde-idle hde-automount hde-keyring
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
@@ -147,7 +169,32 @@ all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
             $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd $(BUILD)/nexwm \
-            $(HDE_LOCK_TARGET)
+            $(HDE_LOCK_TARGET) $(IDLE_TARGET) $(AUTOMOUNT_TARGET) $(KEYRING_TARGET)
+
+# hde-idle: turns the screen off, locks the session and puts the computer to sleep when the user is away
+# (src/hde-idle.c; the rules are in src/hde-idle-core.c and are tested by build/idle-test). Needs GIO for the two
+# D-Bus interfaces programs ask for; on X11 it measures the idle time with the XScreenSaver extension and turns the
+# screen off with DPMS (libxext-dev), on Wayland with ext-idle-notify-v1 (wayland-client). With neither it is not
+# built and `hde-idle --check` would have nothing to check, so the target is skipped then.
+IDLE_TARGET:=$(shell [ -n "$(GIO_LIBS)" ] && { [ -n "$(XSS_CFLAGS)" ] || [ -n "$(IDLE_WL_CFLAGS)" ]; } && echo $(BUILD)/hde-idle)
+$(BUILD)/hde-idle: src/hde-idle.c src/hde-idle-core.c src/hde-idle-core.h src/hde-power.c src/hde-power.h \
+                   src/hde-commands.h src/hde-build.h $(VERSION_H) $(IDLE_WL_DEPS) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) -std=c11 $(GIO_CFLAGS) $(XSS_CFLAGS) $(IDLE_WL_CFLAGS) -o $@ \
+	    src/hde-idle.c src/hde-idle-core.c src/hde-power.c $(IDLE_WL_SRC) \
+	    $(GIO_LIBS) $(XSS_LIBS) $(IDLE_WL_LIBS) -lm
+# hde-automount: mounts a USB stick, an SD card or a disc as soon as it is plugged in (src/hde-automount.c,
+# src/hde-udisks.c for the talk with udisks2 and src/hde-disks.c for what is shown and what is mounted).
+AUTOMOUNT_TARGET:=$(shell [ -n "$(GIO_LIBS)" ] && echo $(BUILD)/hde-automount)
+$(BUILD)/hde-automount: src/hde-automount.c src/hde-udisks.c src/hde-udisks.h src/hde-disks.c src/hde-disks.h \
+                        src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) -std=c11 $(GIO_CFLAGS) -o $@ \
+	    src/hde-automount.c src/hde-udisks.c src/hde-disks.c $(GIO_LIBS) -lm
+# hde-keyring: the Secret Service of the session (src/hde-keyring.c, src/hde-keyring-core.c). Started by
+# hde-session before anything else, so that the browser, Git and NetworkManager all find the one keyring.
+KEYRING_TARGET:=$(shell [ -n "$(GIO_LIBS)" ] && echo $(BUILD)/hde-keyring)
+$(BUILD)/hde-keyring: src/hde-keyring.c src/hde-keyring-core.c src/hde-keyring-core.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) -std=c11 $(GIO_CFLAGS) -o $@ \
+	    src/hde-keyring.c src/hde-keyring-core.c $(GIO_LIBS)
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -163,6 +210,10 @@ $(BUILD)/$(FTM)-protocol.c: protocols/$(FTM).xml | $(BUILD)
 $(BUILD)/$(LOCKXML)-client-protocol.h: protocols/$(LOCKXML).xml | $(BUILD)
 	$(WAYLAND_SCANNER) client-header $< $@
 $(BUILD)/$(LOCKXML)-protocol.c: protocols/$(LOCKXML).xml | $(BUILD)
+	$(WAYLAND_SCANNER) private-code $< $@
+$(BUILD)/$(IDLEXML)-client-protocol.h: protocols/$(IDLEXML).xml | $(BUILD)
+	$(WAYLAND_SCANNER) client-header $< $@
+$(BUILD)/$(IDLEXML)-protocol.c: protocols/$(IDLEXML).xml | $(BUILD)
 	$(WAYLAND_SCANNER) private-code $< $@
 $(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) $(VERSION_H) | $(BUILD)
 	@[ -n "$(XRANDR_CFLAGS)" ] || echo "WARNING: libxrandr-dev (pkg-config xrandr) not found: no F8 screen layouts, no software brightness"
@@ -257,6 +308,18 @@ $(BUILD)/hde-lock: src/hde-lock.c src/hde-lock-core.c src/hde-lock-core.h $(HDE_
 # and no session to lock, so `make check-unit` runs it everywhere
 $(BUILD)/lock-core-test: tests/lock-core-test.c src/hde-lock-core.c src/hde-lock-core.h | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -o $@ tests/lock-core-test.c src/hde-lock-core.c
+# What hde-idle does at every minute of being away (tests/idle-test.c): the ladder screen off -> locked -> asleep,
+# the two kinds of inhibitor, and the table of programs holding the computer back. No display, no bus, no clock
+$(BUILD)/idle-test: tests/idle-test.c src/hde-idle-core.c src/hde-idle-core.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/idle-test.c src/hde-idle-core.c
+# What hde-automount decides about a disk (tests/disks-test.c): a USB stick, the system disk, an encrypted
+# container, an empty card reader, a loop device. No udisks2, no message bus, no screen
+$(BUILD)/disks-test: tests/disks-test.c src/hde-disks.c src/hde-disks.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/disks-test.c src/hde-disks.c
+# Reading what `gnome-keyring-daemon --start` prints (tests/keyring-test.c): the variables the session is given,
+# the ones it is not, and the shapes the output comes in. No keyring on the machine
+$(BUILD)/keyring-test: tests/keyring-test.c src/hde-keyring-core.c src/hde-keyring-core.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/keyring-test.c src/hde-keyring-core.c
 # NexWM (nexwm/): the window manager of HDE, built into build/nexwm — the X11 side (nexwm/src/x11.c: a real window
 # manager, EWMH/ICCCM, XCB alone) and the Wayland side (nexwm/src/wayland.c: the compositor, wlroots), told apart by
 # --x11 and --wayland. Neither library is required to build it: a build without libxcb has no window manager inside, a
@@ -288,7 +351,10 @@ $(VERSION_H): FORCE | $(BUILD)
 FORCE:
 $(BUILD)/hde-core-demo: apps/hde-core-demo.c $(CORE_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^
-$(BUILD)/hde-session: apps/hde-session.c src/hde-wm.h src/hde-build.h $(VERSION_H) $(CORE_OBJ) | $(BUILD)
+# src/hde-keyring-core.c: reading what `gnome-keyring-daemon --start` prints (plain C, so that
+# tests/keyring-test.c can check it without a keyring on the machine)
+$(BUILD)/hde-session: apps/hde-session.c src/hde-keyring-core.c src/hde-keyring-core.h src/hde-wm.h \
+                      src/hde-build.h $(VERSION_H) $(CORE_OBJ) | $(BUILD)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(BUILD) -o $@ $(filter-out %.h,$^)
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
@@ -299,6 +365,7 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
 UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/lock-core-test \
+            $(BUILD)/idle-test $(BUILD)/disks-test $(BUILD)/keyring-test \
             $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test $(BUILD)/cmd-vt-test \
             tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh tests/arch-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
@@ -341,8 +408,20 @@ check-nexwm: $(BUILD)/nexwm $(NEXWM_WAYLAND_PROBE_TARGET)
 endif
 
 # Smoke test: runs a whole HDE session in Xvfb (needs xvfb, xdotool, dbus-x11). See tests/smoke.sh
-check: all check-unit
+check: all check-unit check-tree
 	BUILD=$(BUILD) sh tests/smoke.sh
+
+# Repo hygiene: a build object is not source and must never be committed (hde-core/notifications/notifications.o
+# was, once). `make check` runs this; nothing is said where there is no git checkout (a source tarball).
+check-tree:
+	@if git rev-parse --show-toplevel >/dev/null 2>&1; then \
+	  bad=`git ls-files | grep -E '(^|/)[^/]*\.(o|a|so|lo|la|pyc)$$'`; \
+	  if [ -n "$$bad" ]; then \
+	    echo "ERROR: build artifacts are tracked in git:"; echo "$$bad" | sed 's/^/  /'; \
+	    echo "  fix:      git rm --cached <file>"; \
+	    echo "  avoid:    git add -f (or committing a build/ directory)"; exit 1; \
+	  else echo "check-tree: no build artifacts are tracked in git"; fi; \
+	else echo "check-tree: not a git checkout, skipped"; fi
 
 clean:
 	rm -rf $(BUILD) $(CORE_OBJ)
@@ -363,6 +442,14 @@ install: all
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
 	@if [ -x $(BUILD)/hde-lock ]; then install -m755 $(BUILD)/hde-lock $(DESTDIR)$(PREFIX)/bin/hde-lock; \
 	 else echo "NOTE: hde-lock was not built (needs pkg-config cairo and libxcb1-dev, or wayland-client + xkbcommon, and libpam0g-dev for the password check)"; fi
+	@if [ -x $(BUILD)/hde-idle ]; then install -m755 $(BUILD)/hde-idle $(DESTDIR)$(PREFIX)/bin/hde-idle; \
+	 else echo "NOTE: hde-idle was not built (needs libglib2.0-dev for GIO, and either libxext-dev or wayland-client): the screen, the lock and the sleep after a while are left to a power manager of another desktop"; fi
+	@if [ -x $(BUILD)/hde-automount ]; then install -m755 $(BUILD)/hde-automount $(DESTDIR)$(PREFIX)/bin/hde-automount; \
+	 else echo "NOTE: hde-automount was not built (needs libglib2.0-dev for GIO): USB sticks are not mounted automatically"; fi
+	@if [ -x $(BUILD)/hde-keyring ]; then install -m755 $(BUILD)/hde-keyring $(DESTDIR)$(PREFIX)/bin/hde-keyring; \
+	 else echo "NOTE: hde-keyring was not built (needs libglib2.0-dev for GIO)"; fi
+	install -m644 packaging/pam/hde-keyring $(DESTDIR)$(PREFIX)/share/hde/pam/hde-keyring
+	@echo "NOTE: to have the login password open the keyring as well, add packaging/pam/hde-keyring to the PAM file of the display manager (/etc/pam.d/sddm)"
 	install -m755 $(BUILD)/nexwm $(DESTDIR)$(PREFIX)/bin/nexwm
 	install -d $(DESTDIR)$(PREFIX)/share/hde/logos $(DESTDIR)$(WLSESSIONS) $(DESTDIR)$(PORTALS_DIR)
 	install -m644 data/logos/*.svg data/logos/LICENSES.md $(DESTDIR)$(PREFIX)/share/hde/logos/

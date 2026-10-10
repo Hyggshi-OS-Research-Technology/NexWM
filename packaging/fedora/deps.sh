@@ -41,6 +41,7 @@ libinput-devel
 pixman-devel
 cairo-devel
 pam-devel
+libXext-devel
 libxcb-devel
 xcb-util-wm-devel
 wlroots-devel|wlroots0.21-devel|wlroots0.20-devel|wlroots0.19-devel|wlroots0.18-devel|wlroots0.17-devel
@@ -78,6 +79,8 @@ labwc
 grim
 slurp
 sddm
+udisks2
+gnome-keyring
 "
 
 TEST="
