@@ -145,13 +145,40 @@ available() {
 installed() {
     rpm -q --quiet "$1" 2>/dev/null
 }
-# the first alternative that exists here
+# The alternatives above cover the names other RPM systems use — and the packages whose name follows the release,
+# wlroots above all: Fedora keeps wlroots0.19-devel, wlroots0.20-devel … next to wlroots-devel and drops the oldest of
+# them, so a list written down here goes stale. `pick` therefore asks dnf which of them it really has before it gives
+# up (see dnf_newest below).
+#
+# The newest numbered flavour of a package the repositories have ("" when there is none).
+# An entry like "wlroots-devel|wlroots0.21-devel|..." is widened from the first alternative that carries a number:
+# wlroots0.21-devel -> 'wlroots*-devel', which dnf answers whether the number is 0.19, 0.23 or one after that. The
+# plain name is not used for the glob: 'wlroots-devel' matches one package and nothing more.
+dnf_newest() {
+    p_num=$(printf '%s\n' "$1" | tr '|' '\n' | grep -m1 '[0-9]' || true)
+    [ -n "$p_num" ] || return 1
+    p_glob=$(printf '%s\n' "$p_num" | sed 's/[0-9][0-9.]*/*/')
+    [ "$p_glob" != "$p_num" ] || return 1
+    p_best=$(dnf -q list --available "$p_glob" 2>/dev/null |
+             # strip the ".x86_64" dnf prints, and only that: the name itself has a dot in it (wlroots0.23-devel)
+             awk 'NF && $1 !~ /^(Available|Installed|Last|Updating|Upgraded)/ { sub(/\.[^.]*$/, "", $1); print $1 }' |
+             sort -V | tail -n 1)
+    [ -n "$p_best" ] || return 1
+    echo "note: none of '$1' is in the repositories, but dnf has '$p_best': using that" >&2
+    echo "$p_best"
+}
+
+# the first alternative that exists here; when none does, the newest one dnf has of the same package
 pick() {
     p_ifs=$IFS; IFS='|'
     for cand in $1; do
         if available "$cand"; then IFS=$p_ifs; echo "$cand"; return 0; fi
     done
     IFS=$p_ifs
+    if p_newest=$(dnf_newest "$1"); then
+        echo "$p_newest"
+        return 0
+    fi
     return 1
 }
 

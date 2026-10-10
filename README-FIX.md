@@ -976,3 +976,35 @@ the distribution does not already ship, and usable on the Wayland session as wel
 verifies that no build result is tracked. The programs themselves are compiled but not linked in this sandbox (there
 is no GLib, GIO, X11-ext or Wayland header here), so the first real compile and link is the CI job — that is what the
 dependency additions above are for.
+
+## Arch has no package called `wlroots` any more (fix 24)
+
+The Arch job stopped before it built anything:
+
+```
+packaging/arch/deps.sh: none of 'wlroots|wlroots0.18|wlroots0.17' is available in the pacman sync databases
+Error: Process completed with exit code 1.
+```
+
+`pacman -Syu` had run fine, so nothing was wrong with the repositories or with HDE: the three names
+`packaging/arch/deps.sh` had written down for wlroots were simply not the names pacman has today. Arch **dropped the
+plain `wlroots`** package in 2025 in favour of numbered flavours, and it retires the oldest of them as a new series
+comes out — the repositories now carry `wlroots0.18`, `wlroots0.19` and `wlroots0.20`, and `wlroots0.17` is gone too.
+The comment at the top of the script still said the opposite ("Arch has one rolling repository, no wlroots0.18 next to
+wlroots"), which is how the list could sit there untouched while the distribution moved.
+
+* `packaging/arch/deps.sh`: the entry is now `wlroots0.21|wlroots0.20|wlroots0.19|wlroots0.18|wlroots0.17|wlroots` —
+  newest first, the plain name last for the Arch-based systems that kept one (Artix, Manjaro).
+* More to the point, the list no longer has to be kept up to date by hand: when **none** of the names of an entry is in
+  the databases, `pick` asks pacman which numbered flavours it does have (`pacman -Ssq '^wlroots[0-9]'`, newest first)
+  and takes that. wlroots 0.21 will not break the job when it lands. It only ever runs where the script used to give up,
+  so a name that is simply wrong still fails, with the same message as before.
+* `packaging/fedora/deps.sh` had the same shape of list (`wlroots-devel|wlroots0.21-devel|…`) and would have gone stale
+  the same way; it asks dnf the same question now.
+* `tests/arch-test.sh --deps` checks it with a stand-in pacman that has moved on to a series the list does not name
+  (`wlroots0.22`): the test fails if `deps.sh` goes back to trusting the names it wrote down.
+
+### Tests
+
+`sh tests/arch-test.sh --deps` (13 checks, all of them without pacman or Arch). The Arch job of CI is the one that
+really runs `packaging/arch/deps.sh` against today's repositories.

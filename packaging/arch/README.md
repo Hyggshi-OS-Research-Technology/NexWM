@@ -53,7 +53,7 @@ disappears from every name. Otherwise the same list.
 | `libcairo2-dev`              | `cairo`                     |
 | `libpam0g-dev`               | `pam` (PAM is in `base`)    |
 | `libxcb1-dev`                | `libxcb`                    |
-| `libwlroots-dev`             | `wlroots` (rolling: `wlroots0.18` exists side by side when needed) |
+| `libwlroots-dev`             | `wlroots0.20` (Arch keeps only numbered flavours; see below) |
 | `libvte-2.91-dev` (optional) | `vte3`                      |
 | `metacity` / `openbox`       | `metacity` / `openbox`      |
 | `x11-xserver-utils`          | `xorg-xset xorg-xsetroot xorg-xrandr` |
@@ -72,7 +72,14 @@ disappears from every name. Otherwise the same list.
 Arch is rolling, so it carries the newest wlroots (0.19, 0.20, 0.21 …). `nexwm/src/wayland.c` supports 0.17 and newer
 (`-DNEXWM_WLROOTS_MINOR`, chosen in the Makefile from the version `pkg-config` reports) and the CI job builds the
 compositor against Arch's current wlroots, so a wlroots release that breaks the source is found there first — and if
-Arch ever lands a release the source cannot support, `wlroots0.18` from the AUR keeps the compositor buildable.
+Arch ever lands a release the source cannot support, a `wlroots0.1x` from the AUR keeps the compositor buildable.
+
+**Arch no longer has a package called `wlroots`.** It keeps a handful of numbered flavours — `wlroots0.18`,
+`wlroots0.19`, `wlroots0.20` at the time of writing — and retires the oldest of them as a new series comes out; the
+plain name was dropped in 2025. `packaging/arch/deps.sh` therefore lists the numbered names newest first and, when
+none of them is in the databases any more, asks pacman which ones it does have (`pacman -Ssq '^wlroots[0-9]'`) and
+takes the newest instead of failing on a name written down here months ago. `sh packaging/arch/deps.sh missing build`
+and the CI job will keep working when wlroots 0.21 lands.
 
 ## Test it
 
