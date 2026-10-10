@@ -47,12 +47,45 @@ static void open_in(FilesWindow *w, const char *path)
 
 /* ---------------------------------------------------------------- clicking a drive */
 
+/* A bubble of the session's notification daemon (HDE's own, or whatever answers
+ * org.freedesktop.Notifications). Ejecting is not a dialog in a window: the drive is gone from the list by the
+ * time udisks2 answers, and "it is safe to pull it out now" is worth saying out loud. */
+static GDBusConnection *files_bus(void)
+{
+    static GDBusConnection *bus = NULL;
+    static gboolean tried = FALSE;
+    if (!tried) { tried = TRUE; bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL); }
+    return bus;
+}
+
+static void files_notify(const char *icon, const char *summary, const char *body, guchar urgency)
+{
+    GDBusConnection *bus = files_bus();
+    if (!bus) return;
+    GVariantBuilder acts, hints;
+    g_variant_builder_init(&acts, G_VARIANT_TYPE("as"));
+    g_variant_builder_init(&hints, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&hints, "{sv}", "urgency", g_variant_new_byte(urgency));
+    g_variant_builder_add(&hints, "{sv}", "category", g_variant_new_string("device"));
+    g_dbus_connection_call(bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                           "org.freedesktop.Notifications", "Notify",
+                           g_variant_new("(susssasa{sv}i)", "Hyggshi Files", 0, icon, summary, body,
+                                         &acts, &hints, -1),
+                           G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL, NULL);
+}
+
 static void on_drive_done(HdeDisks *d, const char *object_path, gboolean ok, const char *message,
                           const char *mount_point, gpointer data)
 {
     (void)d; (void)object_path; (void)mount_point; (void)data;
-    if (ok) return;
-    files_log("drives: %s", message ? message : "that did not work");
+    if (!ok) {
+        files_log("drives: %s", message ? message : "the drive could not be ejected");
+        files_notify("dialog-error", "The drive is still in use",
+                     "Close the files that are open on it and try again.", 2);
+        return;
+    }
+    files_log("drives: ejected");
+    files_notify("drive-removable-media", "Safe to remove", "It is now safe to remove the drive.", 1);
 }
 
 static void on_mounted(HdeDisks *d, const char *object_path, gboolean ok, const char *message,

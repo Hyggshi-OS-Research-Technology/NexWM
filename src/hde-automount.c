@@ -395,6 +395,22 @@ static void one_shot_done(HdeDisks *d, const char *object_path, gboolean ok, con
     if (loop) g_main_loop_quit(loop);
 }
 
+/* The one-shot --unmount / --eject: what the daemon would say (for an eject, the one sentence that makes pulling
+ * the stick out safe to do) and then the end of the wait. */
+static void one_shot_unmounted(HdeDisks *d, const char *object_path, gboolean ok, const char *message,
+                               const char *mount_point, gpointer data)
+{
+    on_unmounted(d, object_path, ok, message, mount_point, data);
+    one_shot_done(d, object_path, ok, message, mount_point, data);
+}
+
+static void one_shot_ejected(HdeDisks *d, const char *object_path, gboolean ok, const char *message,
+                             const char *mount_point, gpointer data)
+{
+    on_ejected(d, object_path, ok, message, mount_point, data);
+    one_shot_done(d, object_path, ok, message, mount_point, data);
+}
+
 int main(int argc, char **argv)
 {
     gboolean do_list = FALSE, do_check = FALSE, help = FALSE, version = FALSE;
@@ -445,8 +461,8 @@ int main(int argc, char **argv)
         loop = g_main_loop_new(NULL, FALSE);
         g_timeout_add_seconds(30, wait_timed_out, NULL);
         if (one.mount) hde_disks_mount_async(disks, path, one_shot_done, NULL);
-        else if (one.unmount) hde_disks_unmount_async(disks, path, one_shot_done, NULL);
-        else hde_disks_eject_async(disks, path, one_shot_done, NULL);
+        else if (one.unmount) hde_disks_unmount_async(disks, path, one_shot_unmounted, NULL);
+        else hde_disks_eject_async(disks, path, one_shot_ejected, NULL);
         g_main_loop_run(loop);
         g_free(path);
         return one_shot_ok ? 0 : 1;

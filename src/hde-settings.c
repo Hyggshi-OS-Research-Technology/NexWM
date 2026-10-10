@@ -575,21 +575,11 @@ void apply_input_settings(void)
 }
 
 /* ================= simple pages ================= */
-static void cb_int_combo(GtkComboBox *c, gpointer key) { cfg_set_int(key, gtk_combo_box_get_active(c)); }
-
 static gboolean cb_bool(GtkSwitch *s, gboolean v, gpointer key)
 {
     (void)s;
     cfg_set_bool(key, v);
     return FALSE;
-}
-
-static GtkWidget *combo_with(const char *const *labels, int n, int active)
-{
-    GtkWidget *c = gtk_combo_box_text_new();
-    for (int i = 0; i < n; i++) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(c), labels[i]);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(c), CLAMP(active, 0, n - 1));
-    return c;
 }
 
 static GtkWidget *switch_with(const char *key, gboolean def)
