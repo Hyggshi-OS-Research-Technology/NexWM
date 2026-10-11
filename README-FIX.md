@@ -1140,9 +1140,15 @@ processes that are really running.
 ### Tests
 
 `sh -n` on both scripts. The helpers were run here against a real zombie (a child process that had ended and was not
-reaped) and against a live process: no pid for the zombie alone, the live pid when both are in the table. The Fedora
-job of the next CI run is the test that counts: nine FAILs should come back as nine PASSes, and the Ubuntu, Debian
-and Arch jobs keep theirs.
+reaped) and against a live process: no pid for the zombie alone, the live pid when both are in the table.
+
+The run that followed (`22bb414`) is the proof. The Fedora job, which had ended with those 9 failures every time
+before, came back **241 passed, 0 failed**: the six F6/F7/F8 checks, "crashed panel is restarted by hde-session (after
+1200 ms)", "logout stops hde-panel", "logout stops hde-hotkeys", and the three Project checks that only run once F8
+really opens the window. Its results carry the line the new INFO writes, and it says what was guessed here: "7
+process(es) of an earlier session are zombies in this container". The others kept their passes: Ubuntu 24.04 runs the
+same script through `make check` (F1/F2/F3 included, they are the volume keys), Arch runs it too, and
+`screens (ubuntu-24.04)` runs `tests/display-test.sh` — the same F6/F7/F8 on a real X server with two screens.
 
 ### A note on this checkout
 
