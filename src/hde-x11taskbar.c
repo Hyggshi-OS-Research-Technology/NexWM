@@ -100,9 +100,19 @@ static void on_window_signal(WnckWindow *w, gpointer d)
 {
     (void)w;
     Task *t = d;
-    if (!t->win) return;
+    if (!t || !t->win) return;
     task_sync(t);
     schedule_refresh();
+}
+
+/* WnckWindow::state-changed is the one window signal that hands its handler more than its data: the mask of what
+ * changed and the new state come first, and the data of g_signal_connect() last. A handler that takes
+ * (window, data) would be given the mask where it expects its Task — so this one takes the arguments apart in the
+ * order they come, and throws the two extra ones away. */
+static void on_window_state(WnckWindow *w, WnckWindowState changed, WnckWindowState new_state, gpointer d)
+{
+    (void)changed; (void)new_state;
+    on_window_signal(w, d);
 }
 
 static void on_window_opened(WnckScreen *s, WnckWindow *w, gpointer d)
@@ -114,7 +124,7 @@ static void on_window_opened(WnckScreen *s, WnckWindow *w, gpointer d)
     tasks = g_list_append(tasks, t);
     task_sync(t);
     g_signal_connect(w, "name-changed", G_CALLBACK(on_window_signal), t);
-    g_signal_connect(w, "state-changed", G_CALLBACK(on_window_signal), t);
+    g_signal_connect(w, "state-changed", G_CALLBACK(on_window_state), t);
     g_signal_connect(w, "icon-changed", G_CALLBACK(on_window_signal), t);
     g_signal_connect(w, "workspace-changed", G_CALLBACK(on_window_signal), t);
     DBG("+ %s", t->title);
@@ -129,6 +139,7 @@ static void on_window_closed(WnckScreen *s, WnckWindow *w, gpointer d)
     DBG("- %s", t->title);
     tasks = g_list_remove(tasks, t);
     task_free(t);
+    DBG("gone: %d window(s) left", g_list_length(tasks));
     schedule_refresh();
 }
 
@@ -152,6 +163,7 @@ static Group *group_new(const char *key, const char *name)
 static void group_free(Group *g)
 {
     if (g->button) {
+        DBG("drop button %s", g->name);
         /* the pointer may have been on the button when the window it stood for closed: GDK can still have a
          * crossing event for it in flight, and that event must not reach a group that is about to be freed */
         g_signal_handlers_disconnect_by_data(g->button, g);
@@ -430,7 +442,7 @@ static GtkWidget *group_button(Group *g)
  * (tests/smoke.sh: pwidget task-1) rests the pointer on it to open the preview. */
 static void log_button(Group *g)
 {
-    if (!debug_on || !g->button || !gtk_widget_get_mapped(g->button)) return;
+    if (!debug_on || !g->button || !gtk_widget_get_window(g->button)) return;
     GtkWidget *top = gtk_widget_get_toplevel(g->button);
     GdkWindow *gw = gtk_widget_get_window(top);
     int ox = 0, oy = 0, x = 0, y = 0;
@@ -537,6 +549,7 @@ static gboolean refresh_now(gpointer d)
             group_free(ng);                      /* it never had a button: only the group itself goes */
             groups = g_list_append(groups, og);
         } else {
+            DBG("new button %s", ng->name);
             ng->button = group_button(ng);
             gtk_box_pack_start(GTK_BOX(bar), ng->button, FALSE, FALSE, 0);
             groups = g_list_append(groups, ng);
@@ -552,6 +565,7 @@ static gboolean refresh_now(gpointer d)
         group_update(g);
         log_button(g);
     }
+    DBG("refresh: %d button(s) for %d window(s)", g_list_length(groups), g_list_length(tasks));
     return G_SOURCE_REMOVE;
 }
 

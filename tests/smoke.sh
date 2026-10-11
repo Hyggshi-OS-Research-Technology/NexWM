@@ -453,7 +453,7 @@ fi
 # how often has the panel been started? it logs its taskbar once every time it comes up, so more than one line
 # means hde-session had to start it again (it died): the notification daemon goes with it, and so does the list of
 # the notifications it had. Printed here to tell a broken daemon from a panel that is simply not there.
-grep -c "hde-panel: taskbar: " "$OUT/session.log" | sed 's/^/INFO:   the panel started /;s/$/ time(s)/' \
+grep -c "hde-panel: taskbar: X11 (libwnck)" "$OUT/session.log" | sed 's/^/INFO:   the panel started /;s/$/ time(s)/' \
     | tee -a "$OUT/results.txt"
 if command -v gdbus >/dev/null 2>&1; then
     info=$(gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
