@@ -1246,6 +1246,8 @@ if [ -n "${2:-}" ]; then
              "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: peek: //'))"
     else
         fail "resting the pointer on a taskbar button opens the preview ($(tail -n 3 "$OUT/session.log" | tr '\n' ';'))"
+        grep -F "hde-panel: peek: " "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        grep -F "hde-panel: taskbar: " "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
     fi
     hid0=$(nlog "hde-panel: peek: hidden")
     xdotool mousemove 640 400; sleep 1

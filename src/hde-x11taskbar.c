@@ -37,7 +37,10 @@ typedef struct {
     char *name;                     /* the name of the application */
     GPtrArray *tasks;               /* Task*, borrowed from `tasks` */
     gboolean grouped;               /* this button stands for more than one window */
-    GtkWidget *button, *image, *label;
+    GtkWidget *button;              /* the event box around the button: it has a window of its own, and so it
+                                     * hears the pointer coming and going (a GtkButton has no window: it is drawn
+                                     * on the window behind it, and gtk_widget_add_events() cannot reach it) */
+    GtkWidget *btn, *image, *label;
 } Group;
 
 static GtkWidget *bar;
@@ -166,6 +169,7 @@ static void group_free(Group *g)
         DBG("drop button %s", g->name);
         /* the pointer may have been on the button when the window it stood for closed: GDK can still have a
          * crossing event for it in flight, and that event must not reach a group that is about to be freed */
+        if (g->btn) g_signal_handlers_disconnect_by_data(g->btn, g);
         g_signal_handlers_disconnect_by_data(g->button, g);
         gtk_widget_destroy(g->button);
     }
@@ -307,6 +311,7 @@ static gboolean on_enter(GtkWidget *w, GdkEventCrossing *e, gpointer d)
         items[i].icon = t->icon;
         items[i].handle = t->win;
     }
+    DBG("hover on %s (%d window(s)), the preview in %d ms", g->name, (int)n, preview_delay);
     hde_peek_hover(w, g->tasks->len > 1 ? g->name : NULL, items, (int)n, &peek_ops, NULL, preview_delay);
     g_free(items);
     return FALSE;
@@ -324,7 +329,7 @@ static gboolean on_leave(GtkWidget *w, GdkEventCrossing *e, gpointer d)
 static void on_clicked(GtkButton *b, gpointer d)
 {
     Group *g = d;
-    if (!g || g->button != GTK_WIDGET(b)) return;
+    if (!g || g->btn != GTK_WIDGET(b)) return;
     hde_peek_hide();
     group_activate(g);
 }
@@ -381,7 +386,7 @@ static GtkWidget *window_item(Task *t)
 static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
 {
     Group *g = d;
-    if (!g || g->button != w || e->type != GDK_BUTTON_PRESS) return FALSE;
+    if (!g || g->btn != w || e->type != GDK_BUTTON_PRESS) return FALSE;
     if (e->button == 2) { group_close_all(g); return TRUE; }
     if (e->button != 3) return FALSE;
     hde_peek_hide();
@@ -417,7 +422,9 @@ static GtkWidget *group_button(Group *g)
 {
     GtkWidget *b = gtk_button_new();
     gtk_button_set_relief(GTK_BUTTON(b), GTK_RELIEF_NONE);
+    gtk_widget_set_can_focus(b, FALSE);
     gtk_style_context_add_class(gtk_widget_get_style_context(b), "task-btn");
+    g->btn = b;
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     g->image = gtk_image_new_from_icon_name("application-x-executable", GTK_ICON_SIZE_MENU);
     gtk_image_set_pixel_size(GTK_IMAGE(g->image), 16);
@@ -428,14 +435,19 @@ static GtkWidget *group_button(Group *g)
     gtk_box_pack_start(GTK_BOX(box), g->image, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), g->label, TRUE, TRUE, 0);
     gtk_container_add(GTK_CONTAINER(b), box);
-    gtk_widget_add_events(b, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
     g_signal_connect(b, "clicked", G_CALLBACK(on_clicked), g);
     g_signal_connect(b, "button-press-event", G_CALLBACK(on_button_press), g);
-    g_signal_connect(b, "enter-notify-event", G_CALLBACK(on_enter), g);
-    g_signal_connect(b, "leave-notify-event", G_CALLBACK(on_leave), g);
-    g_signal_connect_after(b, "map", G_CALLBACK(on_button_map), g);
-    gtk_widget_show_all(b);
-    return b;
+
+    /* the pointer comes and goes on the event box: it is the one thing here with a window of its own */
+    GtkWidget *eb = gtk_event_box_new();
+    gtk_widget_add_events(eb, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
+    gtk_container_add(GTK_CONTAINER(eb), b);
+    g_signal_connect(eb, "enter-notify-event", G_CALLBACK(on_enter), g);
+    g_signal_connect(eb, "leave-notify-event", G_CALLBACK(on_leave), g);
+    g_signal_connect_after(eb, "map", G_CALLBACK(on_button_map), g);
+    g->button = eb;
+    gtk_widget_show_all(eb);
+    return eb;
 }
 
 /* HDE_DEBUG: where a button is on the screen, as "hde-panel: widget task-1 at X,Y WxH" — the shape every other
@@ -476,7 +488,7 @@ static void group_update(Group *g)
         if (t->active && !t->minimized) active = TRUE;
         if (!t->minimized) minimized = FALSE;
     }
-    GtkStyleContext *sc = gtk_widget_get_style_context(g->button);
+    GtkStyleContext *sc = gtk_widget_get_style_context(g->btn ? g->btn : g->button);
     if (active) gtk_style_context_add_class(sc, "active");
     else gtk_style_context_remove_class(sc, "active");
     if (minimized) gtk_style_context_add_class(sc, "minimized");

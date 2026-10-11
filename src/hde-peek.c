@@ -40,6 +40,9 @@ static char *group_title;
 static guint show_id, hide_id;
 
 static gboolean debug_on(void) { return g_getenv("HDE_DEBUG") != NULL; }
+/* what it does, for the session log (HDE_DEBUG=1): the test rests the pointer on a button and waits for the
+ * "shown" line, so every step that can keep it from appearing says so */
+#define DBG(...) do { if (debug_on()) { g_printerr("hde-panel: peek: " __VA_ARGS__); g_printerr("\n"); } } while (0)
 
 /* ---------------------------------------------------------------- the list of windows */
 
@@ -309,8 +312,8 @@ static gboolean show_now(gpointer d)
 {
     (void)d;
     show_id = 0;
-    if (!win || !anchor || !items) return G_SOURCE_REMOVE;
-    if (!gtk_widget_get_visible(anchor)) return G_SOURCE_REMOVE;   /* the button went away while we waited */
+    if (!win || !anchor || !items) { DBG("not shown: no popup or no window(s) left"); return G_SOURCE_REMOVE; }
+    if (!gtk_widget_get_visible(anchor)) { DBG("not shown: the button went away while we waited"); return G_SOURCE_REMOVE; }
     rebuild();
     place();
     mute_tip(anchor);
@@ -353,6 +356,7 @@ void hde_peek_hover(GtkWidget *a, const char *gtitle, const HdePeekItem *its, in
         it->handle = its[i].handle;
         items = g_list_append(items, it);
     }
+    DBG("hover: %d window(s), %s in %d ms", n, already ? "a preview is open: at once" : "waited for", delay_ms);
     /* already open for another button: show the new windows at once, as Windows does */
     if (already || delay_ms <= 0) show_now(NULL);
     else show_id = g_timeout_add(delay_ms, show_now, NULL);
@@ -360,9 +364,9 @@ void hde_peek_hover(GtkWidget *a, const char *gtitle, const HdePeekItem *its, in
 
 void hde_peek_leave(void)
 {
-    if (show_id) { g_source_remove(show_id); show_id = 0; }
+    if (show_id) { g_source_remove(show_id); show_id = 0; DBG("left before it opened"); }
     if (!hde_peek_visible()) { items_free(); return; }
-    if (!hide_id) hide_id = g_timeout_add(HIDE_GRACE_MS, hide_now, NULL);
+    if (!hide_id) { hide_id = g_timeout_add(HIDE_GRACE_MS, hide_now, NULL); DBG("left: closing in %d ms", HIDE_GRACE_MS); }
 }
 
 void hde_peek_hide(void)
