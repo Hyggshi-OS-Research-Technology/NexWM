@@ -176,6 +176,14 @@ static void build(void)
     GtkWidget *grid = gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(grid), HDE_SWITCH_GAP);
     gtk_grid_set_column_spacing(GTK_GRID(grid), HDE_SWITCH_GAP);
+    /* every cell exactly as wide as every other one: a long name must not push its picture out of line with the
+     * pictures above and below it */
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
+    int cell_w = with_pictures ? l.thumb_w : NO_PIC_W;
+    /* the last row of a grid that is not full stands in the middle of it, as it does in Windows */
+    int last_row = (n_items - 1) / l.cols;
+    int in_last = n_items - last_row * l.cols;
+    int shift = (in_last > 0 && in_last < l.cols) ? (l.cols - in_last) / 2 : 0;
     for (int i = 0; i < n_items; i++) {
         Item *it = &items[i];
         it->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
@@ -187,14 +195,18 @@ static void build(void)
         gtk_style_context_add_class(gtk_widget_get_style_context(it->label), "switch-name");
         gtk_box_pack_start(GTK_BOX(it->box), it->image, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(it->box), it->label, FALSE, FALSE, 0);
-        if (with_pictures) gtk_widget_set_size_request(it->image, l.thumb_w, l.thumb_h);
+        /* the picture fills its box (a picture narrower than the box stands in the middle of it), and the name
+         * under it is not allowed to be wider than the picture: that is what keeps the grid square */
+        gtk_widget_set_size_request(it->image, cell_w, with_pictures ? l.thumb_h : NO_PIC_H);
+        gtk_widget_set_size_request(it->label, cell_w, -1);
 
         GtkWidget *ev = gtk_event_box_new();
         gtk_widget_add_events(ev, GDK_BUTTON_PRESS_MASK | GDK_ENTER_NOTIFY_MASK);
         gtk_container_add(GTK_CONTAINER(ev), it->box);
         g_signal_connect(ev, "enter-notify-event", G_CALLBACK(on_item_enter), GINT_TO_POINTER(i));
         g_signal_connect(ev, "button-press-event", G_CALLBACK(on_item_press), GINT_TO_POINTER(i));
-        gtk_grid_attach(GTK_GRID(grid), ev, i % l.cols, i / l.cols, 1, 1);
+        int col = i % l.cols, row = i / l.cols;
+        gtk_grid_attach(GTK_GRID(grid), ev, col + (row == last_row ? shift : 0), row, 1, 1);
     }
     gtk_container_add(GTK_CONTAINER(content), grid);
     gtk_widget_show_all(content);
