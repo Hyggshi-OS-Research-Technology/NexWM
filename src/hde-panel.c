@@ -1328,9 +1328,9 @@ static void load_css(void)
                               "  border: 2px solid transparent; }"
                               ".hde-switch .switch-item.picked { background: %s;"
                               "  border-color: %s; }"
-                              ".hde-switch .switch-picture { border: 1px solid %s; background: %s; }"
+                              ".hde-switch .switch-picture { background: %s; }"
                               ".hde-switch .switch-name { font-size: 11px; }",
-                           popbg, fg, popbd, hover, ti.accent, popbd, popbg);
+                           popbg, fg, popbd, hover, ti.accent, popbg);
     g_string_append(s, ".hde-panel .clock-btn { padding: 0 8px; }");
     g_string_append_printf(s, ".hde-panel .clock-box { min-width: %dpx; }", pcfg.clock_seconds || !pcfg.clock_24h ? 120 : 100);
     g_string_append_printf(s, ".hde-panel .clock-time { font-weight: 700; font-size: %dpx; }", big ? 14 : 12);
