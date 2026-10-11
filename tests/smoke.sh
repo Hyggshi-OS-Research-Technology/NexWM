@@ -1361,8 +1361,9 @@ if [ -n "${2:-}" ]; then
         grep -E "hde-panel: (taskbar: menu|pinned apps)" "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' \
             | tee -a "$OUT/results.txt"
     fi
-    # The pinned button has the same app menu and can take itself off the panel again.
-    set -- $(pwidget launcher-1)
+    # The smoke test already has HDE Test App pinned; Hyggshi Files is the next button in the same row.
+    # Its own button has the same app menu and can take itself off the panel again.
+    set -- $(pwidget launcher-2)
     if [ -n "${2:-}" ]; then
         appmenu0=$(nlog "hde-panel: app menu: _New window")
         action0=$(nlog "hde-panel: app menu: Open the Trash")
