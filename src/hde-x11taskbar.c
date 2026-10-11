@@ -438,8 +438,9 @@ static GtkWidget *group_button(Group *g)
     return b;
 }
 
-/* HDE_DEBUG: where a button is on the screen, as "hde-panel: widget task-1 (Firefox) at X,Y WxH" — the GUI test
- * (tests/smoke.sh: pwidget task-1) rests the pointer on it to open the preview. */
+/* HDE_DEBUG: where a button is on the screen, as "hde-panel: widget task-1 at X,Y WxH" — the shape every other
+ * widget of the panel reports itself in, and the one the GUI test reads (tests/smoke.sh: pwidget task-1) to rest
+ * the pointer on a button. Nothing may come between `task-N` and `at`: the test greps for the two together. */
 static void log_button(Group *g)
 {
     if (!debug_on || !g->button || !gtk_widget_get_window(g->button)) return;
@@ -448,11 +449,8 @@ static void log_button(Group *g)
     int ox = 0, oy = 0, x = 0, y = 0;
     if (!gw || !gtk_widget_translate_coordinates(g->button, top, 0, 0, &x, &y)) return;
     gdk_window_get_origin(gw, &ox, &oy);
-    Task *t = g->tasks->len ? g_ptr_array_index(g->tasks, 0) : NULL;
-    g_printerr("hde-panel: widget task-%d (%s) at %d,%d %dx%d\n", g_list_index(groups, g) + 1,
-               g->tasks->len > 1 ? g->name : (t && t->title ? t->title : "?"),
-               ox + x, oy + y, gtk_widget_get_allocated_width(g->button),
-               gtk_widget_get_allocated_height(g->button));
+    g_printerr("hde-panel: widget task-%d at %d,%d %dx%d\n", g_list_index(groups, g) + 1, ox + x, oy + y,
+               gtk_widget_get_allocated_width(g->button), gtk_widget_get_allocated_height(g->button));
 }
 
 static void on_button_map(GtkWidget *w, gpointer d)

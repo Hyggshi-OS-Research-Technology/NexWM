@@ -1253,6 +1253,10 @@ if [ -n "${2:-}" ]; then
     else fail "... and moving the pointer away closes it"; fi
 else
     fail "the taskbar has a button for the open window (no 'widget task-1' in the log)"
+    # what the taskbar did (HDE_DEBUG): which windows it saw, and which buttons it made for them
+    grep -F "hde-panel: taskbar: " "$OUT/session.log" | tail -n 12 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    grep -F "hde-panel: widget " "$OUT/session.log" | tail -n 5 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    tail -n 5 "$OUT/files-peek.log" 2>/dev/null | sed 's/^/INFO:   hde-files: /' | tee -a "$OUT/results.txt"
 fi
 kill "$FPK" 2>/dev/null; wait "$FPK" 2>/dev/null
 if command -v notify-send >/dev/null 2>&1; then
