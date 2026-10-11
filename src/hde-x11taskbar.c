@@ -49,7 +49,7 @@ static GList *tasks;                /* Task*, in the order the windows appeared 
 static GList *groups;               /* Group*, in the order the buttons stand */
 static gboolean show_labels = TRUE, debug_on, preview_on = TRUE;
 static int group_mode = 1, preview_delay = HDE_PEEK_DELAY_DEFAULT;
-static guint refresh_id;
+static guint refresh_id, log_id;
 
 /* ---------------------------------------------------------------- the windows */
 
@@ -230,7 +230,6 @@ static int button_index(GtkWidget *b)
 /* ---------------------------------------------------------------- the buttons */
 
 static void log_button(Group *g);                /* where a button is, for the GUI tests (HDE_DEBUG) */
-static void on_button_map(GtkWidget *w, gpointer d);
 
 static void task_activate(Task *t)
 {
@@ -444,7 +443,6 @@ static GtkWidget *group_button(Group *g)
     gtk_container_add(GTK_CONTAINER(eb), b);
     g_signal_connect(eb, "enter-notify-event", G_CALLBACK(on_enter), g);
     g_signal_connect(eb, "leave-notify-event", G_CALLBACK(on_leave), g);
-    g_signal_connect_after(eb, "map", G_CALLBACK(on_button_map), g);
     g->button = eb;
     gtk_widget_show_all(eb);
     return eb;
@@ -465,10 +463,20 @@ static void log_button(Group *g)
                gtk_widget_get_allocated_width(g->button), gtk_widget_get_allocated_height(g->button));
 }
 
-static void on_button_map(GtkWidget *w, gpointer d)
+static gboolean log_buttons_now(gpointer d)
 {
-    (void)w;
-    log_button((Group *)d);
+    (void)d;
+    log_id = 0;
+    for (GList *l = groups; l; l = l->next) log_button((Group *)l->data);
+    return G_SOURCE_REMOVE;
+}
+
+/* Not straight from the refresh: a button that has just been packed has no size yet (GTK gives it one the next
+ * time it lays the bar out, from its own idle — which runs before this one), so asking there and then would write
+ * down a place no pointer could be put on. */
+static void log_buttons_soon(void)
+{
+    if (!log_id) log_id = g_idle_add_full(G_PRIORITY_LOW, log_buttons_now, NULL, NULL);
 }
 
 static void group_update(Group *g)
@@ -573,8 +581,8 @@ static gboolean refresh_now(gpointer d)
         Group *g = l->data;
         if (button_index(g->button) != i) gtk_box_reorder_child(GTK_BOX(bar), g->button, i);
         group_update(g);
-        log_button(g);
     }
+    log_buttons_soon();
     DBG("refresh: %d button(s) for %d window(s)", g_list_length(groups), g_list_length(tasks));
     return G_SOURCE_REMOVE;
 }
@@ -596,6 +604,7 @@ static void on_bar_destroy(GtkWidget *w, gpointer d)
         scr = NULL;
     }
     if (refresh_id) { g_source_remove(refresh_id); refresh_id = 0; }
+    if (log_id) { g_source_remove(log_id); log_id = 0; }
     for (GList *l = tasks; l; l = l->next) task_free((Task *)l->data);
     g_list_free(tasks);
     tasks = NULL;
