@@ -1313,6 +1313,10 @@ kill "$FSW" "$SSW" 2>/dev/null; wait "$FSW" "$SSW" 2>/dev/null
 # first, then what it can start (a new window, the actions of its .desktop file, the files it was last used on),
 # then keeping it on the panel, putting it on another workspace, and at the end its windows. Every line the menu
 # offers is written into the log, so this is what is read here.
+# Which .desktop file a window belongs to is found from the class X11 knows (WM_CLASS), so the application
+# has to be installed for the menu to know anything about it: the last section of this test does the same.
+sed "s|@PREFIX@/bin/hde-files|$B/hde-files|g" "$HERE/../hde-files/hde-files.desktop" \
+    > "$XDG_DATA_HOME/applications/hde-files.desktop"
 "$B/hde-files" "$HOME" > "$OUT/files-menu.log" 2>&1 &
 FMN=$!
 sleep 3
@@ -1337,13 +1341,20 @@ if [ -n "${2:-}" ]; then
         grep -F "hde-panel: taskbar: menu" "$OUT/session.log" | tail -n 10 | sed 's/^/INFO:   /' \
             | tee -a "$OUT/results.txt"
     fi
-    check "... and the workspace it stands on and its windows at the end of it" \
-          grep -q "hde-panel: taskbar: menu: Always on _visible workspace" "$OUT/session.log"
+    if grep -q "hde-panel: taskbar: menu: Always on _visible workspace" "$OUT/session.log" &&
+       grep -q "hde-panel: taskbar: menu: New Window" "$OUT/session.log"; then
+        pass "... and the workspace it stands on, the actions of its .desktop file, its windows at the end"
+    else
+        fail "... and the workspace it stands on, the actions of its .desktop file, its windows at the end"
+        grep -F "hde-panel: taskbar: menu" "$OUT/session.log" | tail -n 10 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
     # "Pin to Panel" is chosen with its mnemonic (p): the menu holds the keyboard while it is open
     pin0=$(nlog "hde-panel: pinned apps:")
     xdotool key p; sleep 1.5
     pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
-    if [ "$(nlog "hde-panel: pinned apps:")" -gt "$pin0" ] && echo "$pinned" | grep -q "hde-files"; then
+    if [ "$(nlog "hde-panel: pinned apps:")" -gt "$pin0" ] &&
+       { echo "$pinned" | grep -q "Hyggshi Files" || grep -q "hde-files" "$OUT/home/.config/hde/settings.ini"; }; then
         pass "... and choosing it puts the application on the panel ($pinned)"
     else
         fail "... and choosing it puts the application on the panel ($pinned)"
@@ -1353,7 +1364,8 @@ if [ -n "${2:-}" ]; then
     xdotool mousemove "$1" "$2" click 3; sleep 1.2        # and off the panel again: the menu says "Unpin" now
     xdotool key p; sleep 1.5
     pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
-    if [ -n "$pinned" ] && ! echo "$pinned" | grep -q "hde-files"; then
+    if [ -n "$pinned" ] && ! echo "$pinned" | grep -q "Hyggshi Files" &&
+       ! grep -q "hde-files" "$OUT/home/.config/hde/settings.ini"; then
         pass "... and it can be taken off the panel again ($pinned)"
     else
         fail "... and it can be taken off the panel again ($pinned)"
