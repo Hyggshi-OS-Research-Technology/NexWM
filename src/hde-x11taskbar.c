@@ -443,6 +443,7 @@ static GtkWidget *group_button(Group *g)
     gtk_container_add(GTK_CONTAINER(eb), b);
     g_signal_connect(eb, "enter-notify-event", G_CALLBACK(on_enter), g);
     g_signal_connect(eb, "leave-notify-event", G_CALLBACK(on_leave), g);
+    g_signal_connect_after(eb, "size-allocate", G_CALLBACK(on_button_allocate), g);
     g->button = eb;
     gtk_widget_show_all(eb);
     return eb;
@@ -454,6 +455,12 @@ static GtkWidget *group_button(Group *g)
 static void log_button(Group *g)
 {
     if (!debug_on || !g->button || !gtk_widget_get_window(g->button)) return;
+    if (gtk_widget_get_allocated_width(g->button) < 2) {
+        /* nothing to point at yet: GTK has not given the button its size (and so not its place) */
+        DBG("button %s: no size yet (visible %d, mapped %d)", g->name, gtk_widget_get_visible(g->button),
+            gtk_widget_get_mapped(g->button));
+        return;
+    }
     GtkWidget *top = gtk_widget_get_toplevel(g->button);
     GdkWindow *gw = gtk_widget_get_window(top);
     int ox = 0, oy = 0, x = 0, y = 0;
@@ -461,6 +468,14 @@ static void log_button(Group *g)
     gdk_window_get_origin(gw, &ox, &oy);
     g_printerr("hde-panel: widget task-%d at %d,%d %dx%d\n", g_list_index(groups, g) + 1, ox + x, oy + y,
                gtk_widget_get_allocated_width(g->button), gtk_widget_get_allocated_height(g->button));
+}
+
+/* the size GTK has given the button is the moment to write its place down: it is the only one at which a
+ * button that has just been packed really is where it will be */
+static void on_button_allocate(GtkWidget *w, GtkAllocation *a, gpointer d)
+{
+    (void)w; (void)a;
+    log_button((Group *)d);
 }
 
 static gboolean log_buttons_now(gpointer d)
