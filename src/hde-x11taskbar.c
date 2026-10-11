@@ -473,8 +473,19 @@ static char *desktop_id_for_class(const char *cls)
     return found;
 }
 
-static void on_menu_pin(GtkMenuItem *i, gpointer d) { (void)i; hde_cfg_list_add("panel_launchers", d); }
-static void on_menu_unpin(GtkMenuItem *i, gpointer d) { (void)i; hde_cfg_list_remove("panel_launchers", d); }
+static void on_menu_pin(GtkMenuItem *i, gpointer d)
+{
+    (void)i;
+    hde_cfg_list_add("panel_launchers", d);
+    hde_launchers_refresh();                 /* the button has to appear while the menu is still on the screen */
+}
+
+static void on_menu_unpin(GtkMenuItem *i, gpointer d)
+{
+    (void)i;
+    hde_cfg_list_remove("panel_launchers", d);
+    hde_launchers_refresh();
+}
 
 static void on_menu_workspace(GtkMenuItem *i, gpointer d)
 {

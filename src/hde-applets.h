@@ -15,6 +15,9 @@ gboolean   hde_app_menu_append(GtkMenuShell *menu, const char *desktop_id);
 GtkWidget *hde_launchers_new(void);
 /* rebuild the buttons for these desktop file ids (icon_size: pixels) */
 void       hde_launchers_update(GtkWidget *box, char **ids, int icon_size);
+/* the pinned apps were changed by someone else (the menu of a taskbar button): read them again and build the
+ * box from them at once */
+void       hde_launchers_refresh(void);
 
 GtkWidget *hde_applets_new(void);
 /* rebuild from settings.ini (panel_applets + [applet:ID] groups) */

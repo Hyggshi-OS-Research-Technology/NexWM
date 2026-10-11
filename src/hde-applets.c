@@ -192,15 +192,34 @@ static gboolean on_launcher_button(GtkWidget *b, GdkEventButton *e, gpointer d)
     return TRUE;
 }
 
+/* the box of pinned apps, and the size its icons were last made: the menu of a taskbar button can pin an
+ * application, and nothing tells the panel about it, so the box has to be built again by the one that knows */
+static GtkWidget *launchers_box;
+static int launchers_icon_size = 24;
+
 GtkWidget *hde_launchers_new(void)
 {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 1);
     gtk_style_context_add_class(gtk_widget_get_style_context(box), "launchers");
+    launchers_box = box;
     return box;
+}
+
+/* Read the pinned apps again and build the box from them: after the menu of a taskbar button pinned one or took
+ * one off (hde_cfg_list_add / hde_cfg_list_remove), which would otherwise be seen the next time the panel reads
+ * its settings. */
+void hde_launchers_refresh(void)
+{
+    if (!launchers_box) return;
+    char **ids = hde_cfg_get_list("panel_launchers");
+    hde_launchers_update(launchers_box, ids, launchers_icon_size);
+    gtk_widget_set_visible(launchers_box, hde_cfg_get_bool("panel_show_launchers", TRUE) && ids && ids[0]);
+    g_strfreev(ids);
 }
 
 void hde_launchers_update(GtkWidget *box, char **ids, int icon_size)
 {
+    if (box == launchers_box) launchers_icon_size = icon_size;
     GList *ch = gtk_container_get_children(GTK_CONTAINER(box));
     for (GList *l = ch; l; l = l->next) gtk_widget_destroy(l->data);
     g_list_free(ch);
