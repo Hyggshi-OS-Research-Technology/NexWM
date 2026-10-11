@@ -173,7 +173,10 @@ The software brightness of the last session (no backlight, no DDC/CI) is kept in
 Panel: `panel_position` (`bottom`/`top`), `panel_size`, `panel_opacity`, `panel_floating`, `panel_inset` (8–48 px),
 `panel_spacing` (0–16 px), `panel_shadow`, `panel_rounded`, `panel_hover`, `panel_show_menu` / `_desktop` / `_run` /
 `_launchers` / `_taskbar` / `_workspaces` / `_tray` / `_status` / `_notifications` / `_clock`, `panel_taskbar_labels`,
-`panel_taskbar_group`, `clock_24h`, `clock_show_date`, `clock_show_seconds`, `panel_launchers` (pinned apps),
+`panel_taskbar_group`, `panel_taskbar_preview` (resting the pointer on a taskbar button opens a small picture of
+the window; on Wayland the icon and the title instead — no program can read what another window shows) and
+`panel_taskbar_preview_delay` (ms, default 400, 0 = at once), `clock_24h`, `clock_show_date`, `clock_show_seconds`,
+`panel_launchers` (pinned apps),
 `panel_applets` + one `[applet:ID]` group each (`type=cpu|memory|command|separator`, `label`, `command`, `interval`,
 `click`). Start menu: `menu_style` (`modern`, `kickoff`, `classic`), `menu_show_sidebar` / `_places` / `_favorites` /
 `_recent` / `_descriptions`, `menu_hover_switch`, `menu_icon_size`, `menu_size`, `menu_favorites`, `menu_button_label`,

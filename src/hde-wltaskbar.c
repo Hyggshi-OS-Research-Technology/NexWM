@@ -1,5 +1,7 @@
 /* hde-wltaskbar.c — see hde-wltaskbar.h */
 #include "hde-wltaskbar.h"
+#include "hde-peek-core.h"           /* HDE_PEEK_DELAY_*: how long the pointer rests before the preview opens */
+#include "hde-peek.h"                /* the preview itself: src/hde-peek.c */
 #include <gdk/gdkwayland.h>
 #include <gio/gdesktopappinfo.h>
 #include <wayland-client.h>
@@ -17,6 +19,8 @@ static struct zwlr_foreign_toplevel_manager_v1 *manager;
 static GtkWidget *bar;
 static GList *tasks;                  /* Task*, oldest first */
 static gboolean show_labels = TRUE, debug_on, desktop_shown;
+static gboolean preview_on = TRUE;           /* the preview on hover (Settings > Panel) */
+static int preview_delay = HDE_PEEK_DELAY_DEFAULT;
 
 #define DBG(...) do { if (debug_on) { g_printerr("hde-panel: taskbar: " __VA_ARGS__); g_printerr("\n"); } } while (0)
 
@@ -67,10 +71,64 @@ static void task_activate(Task *t)
     if (s) zwlr_foreign_toplevel_handle_v1_activate(t->handle, s);
 }
 
+/* ---------------------------------------------------------------- the preview */
+static GdkPixbuf *icon_pixbuf(const char *app_id)
+{
+    GIcon *gi = icon_for(app_id);
+    if (!gi) return NULL;
+    GdkPixbuf *pb = NULL;
+    GtkIconInfo *info = gtk_icon_theme_lookup_by_gicon(gtk_icon_theme_get_default(), gi, 48,
+                                                       GTK_ICON_LOOKUP_USE_BUILTIN);
+    if (info) {
+        pb = gtk_icon_info_load_icon(info, NULL);
+        g_object_unref(info);
+    }
+    g_object_unref(gi);
+    return pb;
+}
+
+/* No picture: on Wayland no program may read what another window shows, so the preview is the icon of the
+ * application and the title of the window (see src/hde-peek.c). */
+static void peek_activate(gpointer handle, gpointer data)
+{
+    (void)data;
+    Task *t = handle;
+    if (t) task_activate(t);
+}
+
+static void peek_close(gpointer handle, gpointer data)
+{
+    (void)data;
+    Task *t = handle;
+    if (t) zwlr_foreign_toplevel_handle_v1_close(t->handle);
+}
+
+static const HdePeekOps peek_ops = { NULL, peek_activate, peek_close };
+
+static gboolean on_enter(GtkWidget *w, GdkEventCrossing *e, gpointer d)
+{
+    (void)e;
+    Task *t = d;
+    if (!preview_on || !t) return FALSE;
+    GdkPixbuf *icon = icon_pixbuf(t->app_id);
+    HdePeekItem item = { t->title, icon, t };
+    hde_peek_hover(w, NULL, &item, 1, &peek_ops, NULL, preview_delay);
+    if (icon) g_object_unref(icon);
+    return FALSE;
+}
+
+static gboolean on_leave(GtkWidget *w, GdkEventCrossing *e, gpointer d)
+{
+    (void)w; (void)e; (void)d;
+    hde_peek_leave();
+    return FALSE;
+}
+
 static void on_clicked(GtkButton *b, gpointer d)
 {
     (void)b;
     Task *t = d;
+    hde_peek_hide();
     if (t->activated && !t->minimized) {
         zwlr_foreign_toplevel_handle_v1_set_minimized(t->handle);
         DBG("minimize %s", t->title ? t->title : "?");
@@ -137,8 +195,11 @@ static void task_update(Task *t)
         gtk_box_pack_start(GTK_BOX(box), t->image, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(box), t->label, TRUE, TRUE, 0);
         gtk_container_add(GTK_CONTAINER(t->button), box);
+        gtk_widget_add_events(t->button, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
         g_signal_connect(t->button, "clicked", G_CALLBACK(on_clicked), t);
         g_signal_connect(t->button, "button-press-event", G_CALLBACK(on_button_press), t);
+        g_signal_connect(t->button, "enter-notify-event", G_CALLBACK(on_enter), t);
+        g_signal_connect(t->button, "leave-notify-event", G_CALLBACK(on_leave), t);
         gtk_box_pack_start(GTK_BOX(bar), t->button, FALSE, FALSE, 0);
         gtk_widget_show_all(t->button);
         DBG("+ %s (%s)", t->title ? t->title : "?", t->app_id ? t->app_id : "?");
@@ -204,7 +265,7 @@ static void h_closed(void *d, struct zwlr_foreign_toplevel_handle_v1 *h)
     Task *t = d;
     DBG("- %s", t->title ? t->title : "?");
     tasks = g_list_remove(tasks, t);
-    if (t->button) gtk_widget_destroy(t->button);
+    if (t->button) gtk_widget_destroy(t->button);      /* the preview closes with its button, if it was this one */
     zwlr_foreign_toplevel_handle_v1_destroy(h);
     g_free(t->title);
     g_free(t->app_id);
@@ -280,6 +341,14 @@ void hde_wl_taskbar_set_labels(GtkWidget *taskbar, gboolean labels)
         Task *t = l->data;
         if (t->label) gtk_widget_set_visible(t->label, labels);
     }
+}
+
+void hde_wl_taskbar_set_preview(GtkWidget *taskbar, gboolean on, int delay_ms)
+{
+    (void)taskbar;
+    preview_on = on != FALSE;
+    preview_delay = CLAMP(delay_ms, HDE_PEEK_DELAY_MIN, HDE_PEEK_DELAY_MAX);
+    if (!preview_on) hde_peek_hide();
 }
 
 void hde_wl_taskbar_show_desktop(void)
