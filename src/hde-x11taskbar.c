@@ -230,6 +230,7 @@ static int button_index(GtkWidget *b)
 /* ---------------------------------------------------------------- the buttons */
 
 static void log_button(Group *g);                /* where a button is, for the GUI tests (HDE_DEBUG) */
+static void on_button_allocate(GtkWidget *w, GtkAllocation *a, gpointer d);
 
 static void task_activate(Task *t)
 {
