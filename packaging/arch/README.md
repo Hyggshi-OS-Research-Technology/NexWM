@@ -52,6 +52,7 @@ disappears from every name. Otherwise the same list.
 | `libpixman-1-dev`            | `pixman`                    |
 | `libcairo2-dev`              | `cairo`                     |
 | `libpam0g-dev`               | `pam` (PAM is in `base`)    |
+| `libpam0g` (run time)        | `pam` — already installed: `login`, `su` and `sudo` use it |
 | `libxcb1-dev`                | `libxcb`                    |
 | `libwlroots-dev`             | `wlroots0.20` (Arch keeps only numbered flavours; see below) |
 | `libvte-2.91-dev` (optional) | `vte3`                      |

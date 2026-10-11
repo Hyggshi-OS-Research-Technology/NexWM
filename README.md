@@ -38,8 +38,9 @@ manager), a session manager and a system-hotkeys daemon.
 
 ```sh
 # build dependencies (libgtk-layer-shell-dev: for the Wayland session; libxcb1-dev: NexWM, HDE's own window manager;
-# libpam0g-dev: the password check of HDE's own lock screen, hde-lock; libxext-dev: how long you have been away and
-# turning the screen off, hde-idle)
+# libpam0g-dev: the password check of HDE's own lock screen, hde-lock, build-time only — at run time hde-lock needs
+# nothing but libpam0g, which every system has because login, su and sudo use it; libxext-dev: how long you have been
+# away and turning the screen off, hde-idle)
 sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libgtk-layer-shell-dev \
                  libxcb1-dev libpam0g-dev libxext-dev
 # recommended runtime packages (udisks2: mounting a USB stick when you plug it in; gnome-keyring: the one place the

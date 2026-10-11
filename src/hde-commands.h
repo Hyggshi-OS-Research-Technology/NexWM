@@ -66,11 +66,25 @@
  * session with a window of its own the window manager cannot touch, and the "HDE (Wayland)" session through the
  * compositor's session lock protocol; the password is checked through PAM either way. Where it cannot lock (a
  * compositor without ext-session-lock-v1, a build without PAM, no display at all) hde-lock says so in the log and
- * exits 3, and this shell goes on to the lockers of other desktops. The lockers below are the fallback for a machine
- * where HDE's own lock screen is not built or cannot lock that session; `loginctl lock-session` comes last, because it
- * only works when some program listens to logind. */
+ * exits 3, and this shell goes on to the lockers of other desktops.
+ *
+ * The order of the fallbacks after hde-lock is **Qt first, then GTK**: a machine that has a Qt locker has a Qt
+ * desktop behind it (KDE Plasma, LXQt), and a locker drawn in Qt is the one that fits what the user's session already
+ * looks like — the same reason HDE's Settings tell Qt to follow the GTK theme
+ * (QT_QPA_PLATFORMTHEME=gtk3, apps/hde-session.c). It is also the one that is really there: the GTK lockers in this
+ * list belong to other desktops' sessions, which are not running when this is an HDE session.
+ *
+ * Two notes on the Qt entries. `qdbus6` before `qdbus`: KDE Plasma 6 (Qt 6) names its D-Bus tool that way, and a
+ * Plasma 5 `qdbus` left over from an upgrade answers for the wrong Qt. And the name they both call
+ * (org.freedesktop.ScreenSaver) is the one hde-idle takes for its inhibitors while an HDE session runs, so on such a
+ * session this entry finds hde-idle, which has no Lock to call, and the chain moves on — which is what should happen:
+ * HDE's own lock screen is tried first and this is only reached when it could not lock.
+ *
+ * `loginctl lock-session` comes last, because it only works when some program listens to logind. */
 #define HDE_SH_LOCK \
     "if command -v hde-lock >/dev/null 2>&1 && hde-lock; then :; " \
+    "elif command -v qdbus6 >/dev/null 2>&1 && qdbus6 org.freedesktop.ScreenSaver /ScreenSaver Lock >/dev/null 2>&1; then :; " \
+    "elif command -v qdbus >/dev/null 2>&1 && qdbus org.freedesktop.ScreenSaver /ScreenSaver Lock >/dev/null 2>&1; then :; " \
     "elif [ -n \"$WAYLAND_DISPLAY\" ] && command -v swaylock >/dev/null 2>&1; then swaylock -f -c 1e222a; " \
     "elif [ -n \"$WAYLAND_DISPLAY\" ] && command -v gtklock >/dev/null 2>&1; then gtklock -d; " \
     "elif command -v light-locker-command >/dev/null 2>&1 && light-locker-command -l >/dev/null 2>&1; then :; " \

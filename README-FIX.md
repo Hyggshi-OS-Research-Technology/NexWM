@@ -1037,3 +1037,50 @@ same sentence as a notification instead of logging it.
 `sh tests/arch-test.sh --deps` (13 checks, all of them without pacman or Arch) and the Arch job of CI, which is the
 one that really runs `packaging/arch/deps.sh` against today's repositories — it is green, and the compiler warnings
 of the whole build are down to five, all of them in files this work never touched (`hde-panel.c`, `hde-cmd`).
+
+## Qt before GTK in the lock fallback, and `libpam0g` where it belongs (fix 25)
+
+`hde-lock` was built here without PAM, which is not a problem for anybody but this machine: `libpam0g-dev` is a
+*build* dependency (it carries `security/pam_appl.h`), and at run time hde-lock needs nothing but `libpam0g`, which
+every Debian and Ubuntu has because `login`, `su` and `sudo` use it. CI installs the `-dev` package, and
+`packaging/hyggshi-os/build-nexwm.sh` installs it to build and takes it out again when the ISO is closed. So the
+`NOTE: libpam0g-dev ... not found` of a local `make` says something about this checkout and nothing about a release.
+
+* `libpam0g` is now in the **runtime** lists (`packaging/arch/deps.sh` and `packaging/fedora/deps.sh` as `pam`,
+  `src/hde-distro.h` for `hde-settings --deps runtime`, translated per family), kept apart from the `libpam0g-dev` /
+  `pam-devel` of the build lists. `hde-settings --deps runtime` prints `libpam0g` on Debian and `pam` on Fedora, Arch
+  and openSUSE.
+* The install instructions and the Arch table say which of the two is which.
+
+**The fallback order of `HDE_SH_LOCK` (`src/hde-commands.h`) is now Qt first, then GTK.** HDE's own `hde-lock` is
+still first of all and is what runs on both of HDE's sessions; the list below it is what happens on a machine where
+HDE's lock screen is not built or cannot lock that session, and there it is the Qt locker that belongs in front:
+
+* a machine with a Qt locker has a Qt desktop behind it (KDE Plasma, LXQt), and a locker drawn in Qt is the one that
+  fits what that session already looks like — the same thought behind `QT_QPA_PLATFORMTHEME=gtk3` in `hde-session`,
+  which makes Qt applications follow the GTK theme;
+* the GTK lockers in the list belong to other desktops' *sessions* (Xfce, MATE, Cinnamon), which are not running when
+  this is an HDE session, so they are the longer shot.
+
+Two entries were added, in this order: `qdbus6 org.freedesktop.ScreenSaver /ScreenSaver Lock` (Plasma 6 / Qt 6) and
+`qdbus org.freedesktop.ScreenSaver /ScreenSaver Lock` (Plasma 5 / Qt 5) — `qdbus6` first, because a `qdbus` left over
+from an upgrade answers for the wrong Qt. They come before `swaylock` (Wayland, no toolkit) and before `gtklock`,
+`light-locker-command`, `xfce4-` / `mate-` / `cinnamon-screensaver-command`.
+
+One thing worth knowing about them: the bus name they call, `org.freedesktop.ScreenSaver`, is the one `hde-idle` takes
+for its inhibitors while an HDE session runs, and hde-idle has no `Lock` to answer, so on an HDE session the call
+fails and the chain moves on — which is the right thing, since `hde-lock` is tried first and this entry is only
+reached when it could not lock.
+
+### Tests
+
+Compiled the macro and ran the resulting string through `sh -n` (it is a shell chain, so that is the check that
+matters); `make check-unit`, `sh tests/arch-test.sh --deps`, and `hde-settings --deps runtime` on a fake os-release
+of each of the four families.
+
+### A note on this checkout
+
+The sandbox was rebuilt while this was being written: a fresh clone, HEAD back at the base commit `cecf2a9`, and the
+six commits of this work only on the remote. `git fetch` + `git reset --mixed origin/arena/4b57e028-nexwm` put the
+branch back on `3d961e4` without touching a single file (`check-tree`, all five unit tests and `arch-test --deps`
+agree), and the two changes above are what follows it.

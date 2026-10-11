@@ -51,6 +51,7 @@ vte291-devel|vte291-gtk4-devel
 RUNTIME_MIN="
 metacity|marco|xfwm4|openbox
 dbus-daemon
+pam
 dbus-tools|dbus-x11
 xset|xorg-x11-server-utils
 xsetroot|xorg-x11-server-utils

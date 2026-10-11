@@ -214,6 +214,10 @@ static inline const char *hde_distro_pkg(const char *pkg)
         { "x11-xserver-utils",       "xset xsetroot xrandr",    "xorg-xset xorg-xsetroot xorg-xrandr", "xset xsetroot" },
         { "x11-utils",               "xprop xwininfo",          "xorg-xprop xorg-xwininfo", "xprop xwininfo" },
         { "xwayland",                "xorg-x11-server-Xwayland", "xorg-xwayland",       "xwayland" },
+        /* hde-lock checks the password through PAM: libpam0g-dev / pam-devel is only needed to *build* it
+           (security/pam_appl.h), while the library itself (libpam0g / pam) is on every system already —
+           login, su and sudo use it — and is what a .deb of HDE declares as a runtime dependency. */
+        { "libpam0g",                "pam",                      "pam",                 "pam" },
         { "dbus-x11",                "dbus-tools",              "dbus",                 "dbus-1-tools" },
         { "python3",                 "python3",                 "python",               "python3" },
         { "xsltproc",                "libxslt",                 "libxslt",              "libxslt-tools" },
@@ -270,7 +274,9 @@ static inline char *hde_deps_hint(const char *what)
                                                "labwc", "grim", "slurp",
                                                /* udisks2: mounting a USB stick when it is plugged in;
                                                   gnome-keyring: the one place the session keeps its passwords */
-                                               "udisks2", "gnome-keyring", NULL };
+                                               "udisks2", "gnome-keyring",
+                                               /* libpam0g: the library hde-lock checks the password with */
+                                               "libpam0g", NULL };
     static const char *const test_deb[] = { "xvfb", "xdotool", "dbus-x11", "python3", "imagemagick", "xsltproc", NULL };
     const char *const *list = NULL;
     if (!strcmp(what, "build")) list = build_deb;

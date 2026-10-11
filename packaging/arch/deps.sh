@@ -56,6 +56,7 @@ vte3
 RUNTIME_MIN="
 metacity|marco|xfwm4|openbox
 dbus
+pam
 xorg-xset
 xorg-xsetroot
 xorg-xrandr
