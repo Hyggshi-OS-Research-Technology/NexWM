@@ -47,6 +47,7 @@
 #include "hde-measure.h"
 #include "hde-x11taskbar.h"
 #include "hde-peek.h"
+#include "hde-switch.h"
 #ifdef HAVE_WAYLAND_TASKBAR
 #include "hde-wltaskbar.h"
 #endif
@@ -744,6 +745,7 @@ static void close_popups(void)
     if (hde_startmenu_visible()) hde_startmenu_hide();
     if (cal_win && gtk_widget_get_visible(cal_win)) gtk_widget_hide(cal_win);
     hde_peek_hide();                 /* the preview of the taskbar: nothing else is being pointed at any more */
+    hde_switch_hide();               /* and the switcher: Alt was let go, or something else took the screen */
 }
 
 /* toggle: a second click (or Super+A) closes it; else it switches to the page */
@@ -809,6 +811,12 @@ static gboolean run_panel_cmd(gpointer p)
         place_id = 0;
         g_clear_pointer(&last_measured, g_free);    /* write the measurement even if nothing changed */
         panel_place((gpointer)"asked to measure again");
+        break;
+    case HDE_CMD_SWITCH:                        /* Alt+Tab (hde-hotkeys holds the keyboard while it is open) */
+        hde_switch_step(c->arg < 0 ? -1 : 1, c->time);
+        break;
+    case HDE_CMD_SWITCH_DONE:
+        hde_switch_end(c->arg != 0, c->time);
         break;
     default: break;
     }
@@ -1311,6 +1319,18 @@ static void load_css(void)
                               "  min-height: 0; border-radius: 50%%; box-shadow: none; }"
                               ".hde-peek .peek-close:hover { background: %s; }",
                            popbg, fg, popbd, hover, popbd, popbg, hover);
+    /* the window switcher (src/hde-switch.c): a window of its own in the middle of the screen, so it is not
+       inside .hde-panel either */
+    g_string_append_printf(s, ".hde-switch { background: %s; color: %s; border: 1px solid %s; border-radius: 0;"
+                              "  padding: 0; box-shadow: none; }"
+                              ".hde-switch.rounded { border-radius: 12px; }"
+                              ".hde-switch .switch-item { padding: 4px; border-radius: 8px;"
+                              "  border: 2px solid transparent; }"
+                              ".hde-switch .switch-item.picked { background: %s;"
+                              "  border-color: %s; }"
+                              ".hde-switch .switch-picture { border: 1px solid %s; background: %s; }"
+                              ".hde-switch .switch-name { font-size: 11px; }",
+                           popbg, fg, popbd, hover, ti.accent, popbd, popbg);
     g_string_append(s, ".hde-panel .clock-btn { padding: 0 8px; }");
     g_string_append_printf(s, ".hde-panel .clock-box { min-width: %dpx; }", pcfg.clock_seconds || !pcfg.clock_24h ? 120 : 100);
     g_string_append_printf(s, ".hde-panel .clock-time { font-weight: 700; font-size: %dpx; }", big ? 14 : 12);
@@ -1985,6 +2005,8 @@ int main(int argc, char **argv)
     tasks = make_taskbar();
     gtk_style_context_add_class(gtk_widget_get_style_context(tasks), "taskbar");
     gtk_box_pack_start(GTK_BOX(box), tasks, TRUE, TRUE, 0);
+    if (hde_is_x11())       /* the window switcher (Alt+Tab) asks the taskbar which windows there are */
+        hde_switch_set_provider(hde_x11_taskbar_switch_list, hde_x11_taskbar_switch_ops(), NULL);
 
     if (hde_is_x11()) {
         pager = wnck_pager_new();

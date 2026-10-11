@@ -298,6 +298,44 @@ static void peek_close(gpointer handle, gpointer data)
 
 static const HdePeekOps peek_ops = { peek_grab, peek_activate, peek_close };
 
+/* ---- the same two, for the window switcher (Alt+Tab, src/hde-switch.c) ----
+ * It walks through the windows as they are stacked: the one in front is the one that was used last, and that is
+ * the order Alt+Tab means. libwnck reads the stack from the bottom up, so the list is turned round. */
+static void switch_activate(gpointer handle, gpointer data, guint32 timestamp)
+{
+    (void)data;
+    WnckWindow *w = handle;
+    if (!w) return;
+    guint32 t = timestamp ? timestamp : gtk_get_current_event_time();
+    if (wnck_window_is_minimized(w)) wnck_window_unminimize(w, t);
+    wnck_window_activate(w, t);
+}
+
+static const HdeSwitchOps switch_ops = { peek_grab, switch_activate };
+
+int hde_x11_taskbar_switch_list(HdeSwitchItem *out, int max)
+{
+    if (!out || max <= 0 || !scr) return 0;
+    int n = 0;
+    for (GList *l = wnck_screen_get_windows_stacked(scr); l; l = l->next) {
+        WnckWindow *w = l->data;
+        if (!window_wanted(w)) continue;
+        Task *t = task_find(w);
+        out[n].title = t && t->title ? t->title : wnck_window_get_name(w);
+        out[n].icon = t ? t->icon : NULL;
+        out[n].handle = w;
+        if (++n >= max) break;
+    }
+    for (int i = 0, j = n - 1; i < j; i++, j--) {          /* the window in front first */
+        HdeSwitchItem tmp = out[i];
+        out[i] = out[j];
+        out[j] = tmp;
+    }
+    return n;
+}
+
+const HdeSwitchOps *hde_x11_taskbar_switch_ops(void) { return &switch_ops; }
+
 static gboolean on_enter(GtkWidget *w, GdkEventCrossing *e, gpointer d)
 {
     (void)e;

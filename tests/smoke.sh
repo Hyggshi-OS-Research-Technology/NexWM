@@ -1262,6 +1262,48 @@ else
     tail -n 5 "$OUT/files-peek.log" 2>/dev/null | sed 's/^/INFO:   hde-files: /' | tee -a "$OUT/results.txt"
 fi
 kill "$FPK" 2>/dev/null; wait "$FPK" 2>/dev/null
+
+# ---------- 6d3. the window switcher (Alt+Tab): a picture of every window, the picked one comes to the front -----
+# hde-hotkeys holds Alt+Tab (it takes the keyboard while Alt is down) and tells the panel over its command channel
+# which way to move and when Alt went up; src/hde-switch.c is the window in the middle of the screen, and
+# tests/switch-test.c checks the sums behind it without a screen.
+sw0=$(nlog "hde-panel: switcher: shown")
+"$B/hde-files" "$HOME" > "$OUT/files-sw.log" 2>&1 &
+FSW=$!
+sleep 3
+"$B/hde-settings" display > "$OUT/settings-sw.log" 2>&1 &
+SSW=$!
+sleep 3.5
+before=$(xdotool getactivewindow 2>/dev/null)
+xdotool keydown alt; sleep 0.4
+xdotool key Tab; sleep 1.2
+if [ "$(nlog "hde-panel: switcher: shown")" -gt "$sw0" ]; then
+    pass "Alt+Tab opens the window switcher ($(grep "hde-panel: switcher: .* picked" "$OUT/session.log" | tail -n 1 \
+         | sed 's/^hde-panel: switcher: //'))"
+else
+    fail "Alt+Tab opens the window switcher ($(tail -n 3 "$OUT/session.log" | tr '\\n' ';'))"
+    grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+        | tee -a "$OUT/results.txt"
+fi
+shot 16l-window-switcher
+tab0=$(nlog "hde-panel: switcher: Tab")
+xdotool key Tab; sleep 0.8
+if [ "$(nlog "hde-panel: switcher: Tab")" -gt "$tab0" ]; then
+    pass "... Tab moves the mark on to the next window ($(grep "hde-panel: switcher: Tab" "$OUT/session.log" | \
+         tail -n 1 | sed 's/^hde-panel: switcher: //'))"
+else fail "... Tab moves the mark on to the next window"; fi
+xdotool keyup alt; sleep 1.5
+after=$(xdotool getactivewindow 2>/dev/null)
+if [ -n "$before" ] && [ -n "$after" ] && [ "$after" != "$before" ]; then
+    pass "... and letting Alt go brings that window to the front (a different one than before)"
+else
+    fail "... and letting Alt go brings that window to the front ($before -> $after)"
+    grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+        | tee -a "$OUT/results.txt"
+fi
+check "... the switcher is closed again" grep -q "hde-panel: switcher: hidden" "$OUT/session.log"
+kill "$FSW" "$SSW" 2>/dev/null; wait "$FSW" "$SSW" 2>/dev/null
+
 if command -v notify-send >/dev/null 2>&1; then
     notify-send -a "Smoke test" -i mail-unread "Two new messages" "For the Control Center test"
     notify-send -a "Calendar" -i x-office-calendar "Meeting at 15:00" "Room 2, with the HDE team"

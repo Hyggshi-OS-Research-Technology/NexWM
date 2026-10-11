@@ -328,7 +328,8 @@ enum {
     A_SHOT_FULL, A_SHOT_AREA, A_SHOT_WIN, A_CLIP_FULL, A_CLIP_AREA, A_CLIP_WIN,
     A_VOL_MUTE, A_VOL_DOWN, A_VOL_UP, A_MIC_MUTE, A_BRIGHT_UP, A_BRIGHT_DOWN,
     A_PLAY, A_NEXT, A_PREV, A_STOP,
-    A_LOCK, A_FILES, A_TERMINAL, A_DESKTOP, A_RUN, A_SEARCH, A_POWER, A_PROJECT, A_CONTROL, A_NOTIFY, A_BATTERY
+    A_LOCK, A_FILES, A_TERMINAL, A_DESKTOP, A_RUN, A_SEARCH, A_POWER, A_PROJECT, A_CONTROL, A_NOTIFY, A_BATTERY,
+    A_SWITCH, A_SWITCH_BACK                 /* Alt+Tab: the window switcher of hde-panel (src/hde-switch.c) */
 };
 enum { G_ALWAYS, G_FKEYS, G_FKEYS_DISPLAY, G_MEDIA, G_SHORTCUTS };
 
@@ -375,6 +376,10 @@ static const Binding bindings[] = {
     { XK_F2, Mod1Mask, A_RUN, G_SHORTCUTS, "Alt+F2" },
     { XK_t, ControlMask | Mod1Mask, A_TERMINAL, G_SHORTCUTS, "Ctrl+Alt+T" },
     { XK_Delete, ControlMask | Mod1Mask, A_POWER, G_SHORTCUTS, "Ctrl+Alt+Delete" },
+    /* Alt+Tab: the window switcher. While Alt is held the keyboard is grabbed (see switch_key), so that Tab and
+     * the release of Alt come to us and not to the windows or to the window manager. */
+    { XK_Tab, Mod1Mask, A_SWITCH, G_SHORTCUTS, "Alt+Tab" },
+    { XK_Tab, Mod1Mask | ShiftMask, A_SWITCH_BACK, G_SHORTCUTS, "Alt+Shift+Tab" },
 };
 #define N_BINDINGS (sizeof bindings / sizeof bindings[0])
 static KeyCode codes[N_BINDINGS];
@@ -525,12 +530,76 @@ static void toggle_show_desktop(void)
     XFlush(dpy);
 }
 
-static void panel_cmd(long cmd, Time t)
+static void panel_cmd_arg(long cmd, long arg, Time t)
 {
-    int rc = dpy ? hde_ipc_send(dpy, cmd, 0, t) : -1;
-    if (rc != 0) rc = panel_dbus(cmd, 0);
+    int rc = dpy ? hde_ipc_send(dpy, cmd, arg, t) : -1;
+    if (rc != 0) rc = panel_dbus(cmd, arg);
     if (rc != 0) fprintf(stderr, "hde-hotkeys: hde-panel is not running (command %ld ignored)\n", cmd);
     else if (debug_on) fprintf(stderr, "hde-hotkeys: sent command %ld to hde-panel (time %lu)\n", cmd, (unsigned long)t);
+}
+
+static void panel_cmd(long cmd, Time t) { panel_cmd_arg(cmd, 0, t); }
+
+/* ---------------- Alt+Tab: the window switcher ----------------
+ * The first press takes the keyboard: from then on every key comes to us, so that Tab (move on), Escape (call it
+ * off) and the release of Alt (bring the window that is picked up) are all ours, and neither the window manager's
+ * own switcher nor the window that had the focus sees any of it. The keyboard is given back as soon as Alt goes
+ * up. Which windows there are and how they look is the panel's business (src/hde-switch.c): we only say which way
+ * to move, and when to stop.
+ * If the keyboard cannot be taken (another client holds it), nothing happens and the window manager's own
+ * switcher does the work instead — which is exactly what should happen on a session where that is wanted. */
+static int switch_open;                 /* the keyboard is ours, the switcher is on the screen */
+static KeyCode alt_l, alt_r, tab_code, esc_code;
+
+static void switch_codes(void)
+{
+    alt_l = XKeysymToKeycode(dpy, XK_Alt_L);
+    alt_r = XKeysymToKeycode(dpy, XK_Alt_R);
+    tab_code = XKeysymToKeycode(dpy, XK_Tab);
+    esc_code = XKeysymToKeycode(dpy, XK_Escape);
+}
+
+static void switch_end(Time t, int cancel)
+{
+    if (!switch_open) return;
+    switch_open = 0;
+    XUngrabKeyboard(dpy, t);
+    XSync(dpy, False);
+    panel_cmd_arg(HDE_CMD_SWITCH_DONE, cancel ? 1 : 0, t);
+    if (debug_on) fprintf(stderr, "hde-hotkeys: Alt+Tab: %s, the keyboard is free again\n",
+                          cancel ? "called off" : "Alt let go");
+}
+
+static void switch_step(int step, Time t)
+{
+    if (!switch_open) {
+        g_quiet_errors = 1;                     /* another client holding the keyboard is not an error to print */
+        int r = XGrabKeyboard(dpy, root, False, GrabModeAsync, GrabModeAsync, t);
+        XSync(dpy, False);
+        g_quiet_errors = 0;
+        if (r != GrabSuccess) {
+            fprintf(stderr, "hde-hotkeys: Alt+Tab: another program holds the keyboard (XGrabKeyboard: %d): the "
+                            "window manager's own switcher does it\n", r);
+            return;
+        }
+        switch_open = 1;
+        if (debug_on) fprintf(stderr, "hde-hotkeys: Alt+Tab: the keyboard is ours\n");
+    }
+    panel_cmd_arg(HDE_CMD_SWITCH, step, t);
+}
+
+/* every key while the switcher is open (the keyboard is grabbed, so all of them come here) */
+static void switch_event(XKeyEvent *k)
+{
+    if (k->type == KeyRelease) {
+        if (k->keycode == alt_l || k->keycode == alt_r) { switch_end(k->time, 0); return; }
+        /* A key released without Alt: Alt went up while we were not looking (a console switch, a screen lock),
+         * and the keyboard must not stay taken. */
+        if (!(k->state & Mod1Mask)) switch_end(k->time, 0);
+        return;
+    }
+    if (k->keycode == tab_code) switch_step(k->state & ShiftMask ? -1 : 1, k->time);
+    else if (k->keycode == esc_code) switch_end(k->time, 1);
 }
 
 static void do_action(int act, Time t)
@@ -559,6 +628,8 @@ static void do_action(int act, Time t)
     case A_CONTROL: panel_cmd(HDE_CMD_CONTROL_CENTER, t); break;
     case A_NOTIFY: panel_cmd(HDE_CMD_NOTIFICATIONS, t); break;
     case A_BATTERY: panel_cmd(HDE_CMD_BATTERY, t); break;
+    case A_SWITCH:      switch_step(+1, t); break;
+    case A_SWITCH_BACK: switch_step(-1, t); break;
     default: break;
     }
 }
@@ -920,8 +991,11 @@ int main(int argc, char **argv)
 #else
     fprintf(stderr, "hde-hotkeys: built without XInput2 (libxi-dev); Super key will not open the menu\n");
 #endif
-    XSelectInput(dpy, root, KeyPressMask);
+    /* KeyRelease as well: while Alt+Tab is held the keyboard is grabbed, and then the release of Alt has to
+     * reach us. Without a grab the root window sees no key events at all, so this costs nothing. */
+    XSelectInput(dpy, root, KeyPressMask | KeyReleaseMask);
     XSync(dpy, False);
+    switch_codes();
     /* Tell hde-session that our keys are grabbed: only now does it start the window manager. */
     const char *ready = getenv("HDE_READY_FD");
     if (ready && *ready) {
@@ -941,7 +1015,9 @@ int main(int argc, char **argv)
         while (XPending(dpy)) {
             XEvent ev;
             XNextEvent(dpy, &ev);
-            if (ev.type == KeyPress) {
+            if (switch_open && (ev.type == KeyPress || ev.type == KeyRelease)) {
+                switch_event(&ev.xkey);          /* Alt is held: every key belongs to the switcher */
+            } else if (ev.type == KeyPress) {
                 handle_key(&ev.xkey);
             } else if (ev.type == DestroyNotify) {
                 /* StructureNotify is only selected on WM selection windows: a window manager exited / was replaced
@@ -960,6 +1036,7 @@ int main(int argc, char **argv)
                     super_l = XKeysymToKeycode(dpy, XK_Super_L);
                     super_r = XKeysymToKeycode(dpy, XK_Super_R);
 #endif
+                    switch_codes();
                 }
             }
 #ifdef HAVE_XI2

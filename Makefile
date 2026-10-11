@@ -133,11 +133,14 @@ HDE_HEADERS=$(wildcard src/*.h)
 # so that it can answer the pointer, which libwnck's own tasklist cannot. src/hde-peek.c is the preview that opens
 # when the pointer rests on one of those buttons, and src/hde-peek-core.c the sums behind it (tested by
 # tests/peek-test.c without a screen: sizes, the grid, where the popup goes, when windows are put together).
+# src/hde-switch.c is the window switcher (Alt+Tab): the key is held by src/hde-hotkeys.c, which takes the
+# keyboard while Alt is down and tells the panel over its command channel (src/hde-ipc.h) which way to move;
+# src/hde-switch-core.c has the sums behind it (tests/switch-test.c: which window is picked, the layout, the size).
 PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-notify.c src/hde-search.c src/hde-theme.c \
           src/hde-input.c src/hde-startmenu.c src/hde-applets.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c \
           src/hde-wl.c src/hde-run.c src/hde-flyout.c src/hde-control.c src/hde-battery.c src/hde-power.c \
           src/hde-profiles.c src/hde-powersave.c src/hde-measure.c src/hde-x11taskbar.c src/hde-peek.c \
-          src/hde-peek-core.c $(WLTASK_SRC)
+          src/hde-peek-core.c src/hde-switch.c src/hde-switch-core.c $(WLTASK_SRC)
 DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c src/hde-panel-config.c src/hde-wl.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
@@ -326,6 +329,10 @@ $(BUILD)/disks-test: tests/disks-test.c src/hde-disks.c src/hde-disks.h | $(BUIL
 # no window at all
 $(BUILD)/peek-test: tests/peek-test.c src/hde-peek-core.c src/hde-peek-core.h | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -o $@ tests/peek-test.c src/hde-peek-core.c
+# The sums behind the window switcher (tests/switch-test.c): which window Alt+Tab picks, how they are laid out,
+# how big the popup is, where it stands and which one the pointer is on. No screen, no keyboard, no Alt
+$(BUILD)/switch-test: tests/switch-test.c src/hde-switch-core.c src/hde-switch-core.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ tests/switch-test.c src/hde-switch-core.c
 # Reading what `gnome-keyring-daemon --start` prints (tests/keyring-test.c): the variables the session is given,
 # the ones it is not, and the shapes the output comes in. No keyring on the machine
 $(BUILD)/keyring-test: tests/keyring-test.c src/hde-keyring-core.c src/hde-keyring-core.h | $(BUILD)
@@ -375,7 +382,7 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # batteries, the panel measurement and the package manager of the system. `make check-unit` runs them on their own
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
 UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/lock-core-test \
-            $(BUILD)/idle-test $(BUILD)/disks-test $(BUILD)/keyring-test $(BUILD)/peek-test \
+            $(BUILD)/idle-test $(BUILD)/disks-test $(BUILD)/keyring-test $(BUILD)/peek-test $(BUILD)/switch-test \
             $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test $(BUILD)/cmd-vt-test \
             tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh tests/arch-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
