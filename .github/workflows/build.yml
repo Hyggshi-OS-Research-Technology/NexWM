@@ -54,7 +54,7 @@ jobs:
         echo "compiler warnings: $n"
         grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::/' || true
 
-    - name: Smoke test in Xvfb (Start menu layouts, panel settings, About logos, Super key, F1-F3, F6-F8, notifications, screenshots, Wi-Fi, Dark mode, Hyggshi Files, WM switch)
+    - name: Smoke test in Xvfb (Start menu layouts, panel settings, running and pinned taskbar menus, notifications, screenshots, WM switch)
       run: make check
 
     - name: Try it in a window (scripts/test-nexde --check, a nested HDE session in Xephyr)

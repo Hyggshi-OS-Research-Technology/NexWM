@@ -1309,8 +1309,8 @@ check "... the switcher is closed again" grep -q "hde-panel: switcher: hidden" "
 kill "$FSW" "$SSW" 2>/dev/null; wait "$FSW" "$SSW" 2>/dev/null
 
 # ---------- 6d4. the menu of a taskbar button: the application, the panel, the workspaces, the windows ----------
-# The right button on the button of a running application (src/hde-x11taskbar.c): the name of the application
-# first, then what it can start (a new window, the actions of its .desktop file, the files it was last used on),
+# The right button on a running application (src/hde-x11taskbar.c), and on the pinned button (src/hde-applets.c):
+# the name first, then what it can start (a new window, the actions of its .desktop file, the files it was last used on),
 # then keeping it on the panel, putting it on another workspace, and at the end its windows. Every line the menu
 # offers is written into the log, so this is what is read here.
 # Which .desktop file a window belongs to is found from the class X11 knows (WM_CLASS), so the application
@@ -1333,7 +1333,7 @@ if [ -n "${2:-}" ]; then
         grep -E "hde-panel: taskbar: (menu|widget)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
             | tee -a "$OUT/results.txt"
     fi
-    if grep -q "hde-panel: taskbar: menu: _New window" "$OUT/session.log" &&
+    if grep -q "hde-panel: app menu: _New window" "$OUT/session.log" &&
        grep -q "hde-panel: taskbar: menu: _Pin to Panel" "$OUT/session.log"; then
         pass "... it offers a new window of the application and to keep it on the panel"
     else
@@ -1342,7 +1342,7 @@ if [ -n "${2:-}" ]; then
             | tee -a "$OUT/results.txt"
     fi
     if grep -q "hde-panel: taskbar: menu: Always on _visible workspace" "$OUT/session.log" &&
-       grep -q "hde-panel: taskbar: menu: New Window" "$OUT/session.log"; then
+       grep -q "hde-panel: app menu: Open the Trash" "$OUT/session.log"; then
         pass "... and the workspace it stands on, the actions of its .desktop file, its windows at the end"
     else
         fail "... and the workspace it stands on, the actions of its .desktop file, its windows at the end"
@@ -1361,14 +1361,34 @@ if [ -n "${2:-}" ]; then
         grep -E "hde-panel: (taskbar: menu|pinned apps)" "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' \
             | tee -a "$OUT/results.txt"
     fi
-    xdotool mousemove "$1" "$2" click 3; sleep 1.2        # and off the panel again: the menu says "Unpin" now
-    xdotool key p; sleep 1.5
-    pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
-    if [ -n "$pinned" ] && ! echo "$pinned" | grep -q "Hyggshi Files" &&
-       ! grep -q "hde-files" "$OUT/home/.config/hde/settings.ini"; then
-        pass "... and it can be taken off the panel again ($pinned)"
+    # The pinned button has the same app menu and can take itself off the panel again.
+    set -- $(pwidget launcher-1)
+    if [ -n "${2:-}" ]; then
+        appmenu0=$(nlog "hde-panel: app menu: _New window")
+        action0=$(nlog "hde-panel: app menu: Open the Trash")
+        xdotool mousemove "$1" "$2" click 3; sleep 1.2
+        shot 16n-pinned-taskbar-menu
+        if [ "$(nlog "hde-panel: app menu: _New window")" -gt "$appmenu0" ] &&
+           [ "$(nlog "hde-panel: app menu: Open the Trash")" -gt "$action0" ] &&
+           grep -q "hde-panel: launcher menu: Unpin from _Panel" "$OUT/session.log"; then
+            pass "... the pinned app button opens the application's menu, too"
+        else
+            fail "... the pinned app button opens the application's menu, too"
+            grep -E "hde-panel: (app menu|launcher menu)" "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' \
+                | tee -a "$OUT/results.txt"
+        fi
+        xdotool key p; sleep 1.5
+        pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
+        if [ -n "$pinned" ] && ! echo "$pinned" | grep -q "Hyggshi Files" &&
+           ! grep -q "hde-files" "$OUT/home/.config/hde/settings.ini"; then
+            pass "... and it can be taken off the panel again ($pinned)"
+        else
+            fail "... and it can be taken off the panel again ($pinned)"
+        fi
     else
-        fail "... and it can be taken off the panel again ($pinned)"
+        fail "... the pinned app button can be found on the panel after pinning"
+        grep -F "hde-panel: widget launcher-" "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
     fi
     xdotool key Escape; sleep 0.5
 else

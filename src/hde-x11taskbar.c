@@ -462,51 +462,6 @@ static char *desktop_id_for_class(const char *cls)
     return found;
 }
 
-static void on_menu_new_window(GtkMenuItem *i, gpointer d)
-{
-    (void)d;
-    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
-    if (id) hde_launch_app(id);
-}
-
-/* one of the actions of the .desktop file: "New private window", "Compose new message", ... */
-static void on_menu_action(GtkMenuItem *i, gpointer d)
-{
-    (void)d;
-    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
-    const char *act = g_object_get_data(G_OBJECT(i), "hde-action");
-    if (!id || !act) return;
-    GDesktopAppInfo *a = g_desktop_app_info_new(id);
-    if (!a) return;
-    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
-    gdk_app_launch_context_set_timestamp(ctx, gtk_get_current_event_time());
-    g_desktop_app_info_launch_action(a, act, G_APP_LAUNCH_CONTEXT(ctx));
-    g_object_unref(ctx);
-    g_object_unref(a);
-}
-
-/* a file the application was last used on: opened again with it */
-static void on_menu_recent(GtkMenuItem *i, gpointer d)
-{
-    (void)d;
-    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
-    const char *uri = g_object_get_data(G_OBJECT(i), "hde-uri");
-    if (!id || !uri) return;
-    GDesktopAppInfo *a = g_desktop_app_info_new(id);
-    if (!a) return;
-    GList *files = g_list_append(NULL, g_file_new_for_uri(uri));
-    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
-    gdk_app_launch_context_set_timestamp(ctx, gtk_get_current_event_time());
-    GError *e = NULL;
-    if (!g_app_info_launch(G_APP_INFO(a), files, G_APP_LAUNCH_CONTEXT(ctx), &e)) {
-        g_printerr("hde-panel: taskbar: cannot open %s: %s\n", uri, e ? e->message : "?");
-        g_clear_error(&e);
-    }
-    g_object_unref(ctx);
-    g_list_free_full(files, g_object_unref);
-    g_object_unref(a);
-}
-
 static void on_menu_pin(GtkMenuItem *i, gpointer d) { (void)i; hde_cfg_list_add("panel_launchers", d); }
 static void on_menu_unpin(GtkMenuItem *i, gpointer d) { (void)i; hde_cfg_list_remove("panel_launchers", d); }
 
@@ -556,26 +511,6 @@ static GtkWidget *menu_item(GtkMenuShell *m, const char *label, GCallback cb, gp
     return it;
 }
 
-/* the files this application was last used on (what Windows calls a jump list): the six most recent ones */
-static int menu_recent(GtkMenuShell *m, const char *id)
-{
-    GtkRecentManager *rm = gtk_recent_manager_get_default();
-    if (!rm) return 0;
-    GList *items = gtk_recent_manager_get_items(rm);
-    int n = 0;
-    for (GList *l = items; l && n < 6; l = l->next) {
-        GtkRecentInfo *info = l->data;
-        if (!gtk_recent_info_has_application(info, id)) continue;
-        if (!gtk_recent_info_exists(info)) continue;                 /* it was deleted in the meantime */
-        GtkWidget *it = menu_item(m, gtk_recent_info_get_display_name(info), G_CALLBACK(on_menu_recent), NULL);
-        g_object_set_data_full(G_OBJECT(it), "hde-id", g_strdup(id), g_free);
-        g_object_set_data_full(G_OBJECT(it), "hde-uri", g_strdup(gtk_recent_info_get_uri(info)), g_free);
-        n++;
-    }
-    g_list_free_full(items, (GDestroyNotify)gtk_recent_info_unref);
-    return n;
-}
-
 static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
 {
     Group *g = d;
@@ -587,34 +522,19 @@ static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
     GtkMenuShell *sh = GTK_MENU_SHELL(m);
     char *id = desktop_id_for_class(g->key);
 
-    /* the name of the application, which cannot be chosen */
-    GtkWidget *head = gtk_menu_item_new_with_label(g->name && *g->name ? g->name : "?");
+    /* Prefer the app's display name to its window-class name ("Hyggshi Files", not "Hde-files"). */
+    GDesktopAppInfo *app = id ? g_desktop_app_info_new(id) : NULL;
+    const char *name = app ? g_app_info_get_display_name(G_APP_INFO(app)) : g->name;
+    GtkWidget *head = gtk_menu_item_new_with_label(name && *name ? name : "?");
     gtk_widget_set_sensitive(head, FALSE);
     gtk_menu_shell_append(sh, head);
     gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
-    DBG("menu: %s (grouped: %s, desktop file: %s)", g->name ? g->name : "?",
+    DBG("menu: %s (grouped: %s, desktop file: %s)", name ? name : "?",
         g->tasks->len > 1 ? "yes" : "no", id ? id : "none");
 
-    gboolean any_app = FALSE;
-    if (id) {
-        GtkWidget *nw = menu_item(sh, "_New window", G_CALLBACK(on_menu_new_window), NULL);
-        g_object_set_data_full(G_OBJECT(nw), "hde-id", g_strdup(id), g_free);
-        any_app = TRUE;
-        GDesktopAppInfo *a = g_desktop_app_info_new(id);
-        if (a) {
-            const char *const *acts = g_desktop_app_info_list_actions(a);
-            for (int k = 0; acts && acts[k]; k++) {
-                GtkWidget *ai = menu_item(sh, g_desktop_app_info_get_action_name(a, acts[k]),
-                                          G_CALLBACK(on_menu_action), NULL);
-                g_object_set_data_full(G_OBJECT(ai), "hde-id", g_strdup(id), g_free);
-                g_object_set_data_full(G_OBJECT(ai), "hde-action", g_strdup(acts[k]), g_free);
-                any_app = TRUE;
-            }
-            g_object_unref(a);
-        }
-        if (menu_recent(sh, id) > 0) any_app = TRUE;
-    }
+    gboolean any_app = id && hde_app_menu_append(sh, id);
     if (any_app) gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
+    if (app) g_object_unref(app);
 
     if (id) {                                   /* keep it on the panel, or take it off again */
         const char *label = hde_cfg_list_contains("panel_launchers", id) ? "Unpin from _Panel" : "_Pin to Panel";

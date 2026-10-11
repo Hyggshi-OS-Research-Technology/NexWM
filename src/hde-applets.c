@@ -10,6 +10,20 @@ static gboolean debug_on;
 
 void hde_applets_set_debug(gboolean on) { debug_on = on; }
 
+/* HDE_DEBUG: the place of a pinned app button, in the form tests/smoke.sh's pwidget helper can read. */
+static void log_launcher(GtkWidget *w, GtkAllocation *allocation, gpointer d)
+{
+    (void)allocation;
+    if (!debug_on || !w || !gtk_widget_get_window(w)) return;
+    GtkWidget *top = gtk_widget_get_toplevel(w);
+    GdkWindow *gw = gtk_widget_get_window(top);
+    int ox = 0, oy = 0, x = 0, y = 0;
+    if (!gw || !gtk_widget_translate_coordinates(w, top, 0, 0, &x, &y)) return;
+    gdk_window_get_origin(gw, &ox, &oy);
+    g_printerr("hde-panel: widget launcher-%d at %d,%d %dx%d\n", GPOINTER_TO_INT(d), ox + x, oy + y,
+               gtk_widget_get_allocated_width(w), gtk_widget_get_allocated_height(w));
+}
+
 /* ---------------------------------------------------------------- pinned apps */
 void hde_launch_app(const char *id)
 {
@@ -32,6 +46,116 @@ static void on_launcher_clicked(GtkButton *b, gpointer d)
     hde_launch_app(g_object_get_data(G_OBJECT(b), "hde-id"));
 }
 
+/* The application part of the right-button menu, used for both pinned apps and running windows. */
+static GtkWidget *app_menu_item(GtkMenuShell *menu, const char *label, GCallback cb)
+{
+    GtkWidget *it = gtk_menu_item_new_with_mnemonic(label);
+    g_signal_connect(it, "activate", cb, NULL);
+    gtk_menu_shell_append(menu, it);
+    DBG("app menu: %s", label);
+    return it;
+}
+
+static void on_app_menu_new_window(GtkMenuItem *i, gpointer d)
+{
+    (void)d;
+    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
+    const char *action = g_object_get_data(G_OBJECT(i), "hde-action");
+    if (!id) return;
+    if (!action) { hde_launch_app(id); return; }
+    GDesktopAppInfo *app = g_desktop_app_info_new(id);
+    if (!app) return;
+    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
+    gdk_app_launch_context_set_timestamp(ctx, gtk_get_current_event_time());
+    g_desktop_app_info_launch_action(app, action, G_APP_LAUNCH_CONTEXT(ctx));
+    g_object_unref(ctx);
+    g_object_unref(app);
+}
+
+static void on_app_menu_action(GtkMenuItem *i, gpointer d)
+{
+    (void)d;
+    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
+    const char *action = g_object_get_data(G_OBJECT(i), "hde-action");
+    if (!id || !action) return;
+    GDesktopAppInfo *app = g_desktop_app_info_new(id);
+    if (!app) return;
+    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
+    gdk_app_launch_context_set_timestamp(ctx, gtk_get_current_event_time());
+    g_desktop_app_info_launch_action(app, action, G_APP_LAUNCH_CONTEXT(ctx));
+    g_object_unref(ctx);
+    g_object_unref(app);
+}
+
+static void on_app_menu_recent(GtkMenuItem *i, gpointer d)
+{
+    (void)d;
+    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
+    const char *uri = g_object_get_data(G_OBJECT(i), "hde-uri");
+    if (!id || !uri) return;
+    GDesktopAppInfo *app = g_desktop_app_info_new(id);
+    if (!app) return;
+    GList *files = g_list_append(NULL, g_file_new_for_uri(uri));
+    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
+    gdk_app_launch_context_set_timestamp(ctx, gtk_get_current_event_time());
+    GError *e = NULL;
+    if (!g_app_info_launch(G_APP_INFO(app), files, G_APP_LAUNCH_CONTEXT(ctx), &e)) {
+        g_printerr("hde-panel: cannot open %s: %s\n", uri, e ? e->message : "?");
+        g_clear_error(&e);
+    }
+    g_object_unref(ctx);
+    g_list_free_full(files, g_object_unref);
+    g_object_unref(app);
+}
+
+gboolean hde_app_menu_append(GtkMenuShell *menu, const char *id)
+{
+    if (!menu || !id || !*id) return FALSE;
+    GDesktopAppInfo *app = g_desktop_app_info_new(id);
+    if (!app) return FALSE;
+
+    const char *const *actions = g_desktop_app_info_list_actions(app);
+    const char *new_window_action = NULL;
+    for (int k = 0; actions && actions[k]; k++) {
+        const char *name = g_desktop_app_info_get_action_name(app, actions[k]);
+        if (!g_ascii_strcasecmp(actions[k], "NewWindow") ||
+            (name && !g_ascii_strcasecmp(name, "New Window"))) {
+            new_window_action = actions[k];
+            break;
+        }
+    }
+    GtkWidget *nw = app_menu_item(menu, "_New window", G_CALLBACK(on_app_menu_new_window));
+    g_object_set_data_full(G_OBJECT(nw), "hde-id", g_strdup(id), g_free);
+    if (new_window_action)
+        g_object_set_data_full(G_OBJECT(nw), "hde-action", g_strdup(new_window_action), g_free);
+    for (int k = 0; actions && actions[k]; k++) {
+        if (actions[k] == new_window_action) continue;            /* its action is the New window row above */
+        const char *name = g_desktop_app_info_get_action_name(app, actions[k]);
+        if (!name || !*name) continue;
+        GtkWidget *it = app_menu_item(menu, name, G_CALLBACK(on_app_menu_action));
+        g_object_set_data_full(G_OBJECT(it), "hde-id", g_strdup(id), g_free);
+        g_object_set_data_full(G_OBJECT(it), "hde-action", g_strdup(actions[k]), g_free);
+    }
+    g_object_unref(app);
+
+    GtkRecentManager *recent = gtk_recent_manager_get_default();
+    GList *items = recent ? gtk_recent_manager_get_items(recent) : NULL;
+    int n = 0;
+    for (GList *l = items; l && n < 6; l = l->next) {
+        GtkRecentInfo *info = l->data;
+        if (!gtk_recent_info_has_application(info, id) || !gtk_recent_info_exists(info)) continue;
+        const char *name = gtk_recent_info_get_display_name(info);
+        const char *uri = gtk_recent_info_get_uri(info);
+        if (!name || !*name || !uri || !*uri) continue;
+        GtkWidget *it = app_menu_item(menu, name, G_CALLBACK(on_app_menu_recent));
+        g_object_set_data_full(G_OBJECT(it), "hde-id", g_strdup(id), g_free);
+        g_object_set_data_full(G_OBJECT(it), "hde-uri", g_strdup(uri), g_free);
+        n++;
+    }
+    g_list_free_full(items, (GDestroyNotify)gtk_recent_info_unref);
+    return TRUE;
+}
+
 static void unpin(GtkMenuItem *i, gpointer id) { (void)i; hde_cfg_list_remove("panel_launchers", id); }
 static void move_left(GtkMenuItem *i, gpointer id) { (void)i; hde_cfg_list_move("panel_launchers", id, -1); }
 static void move_right(GtkMenuItem *i, gpointer id) { (void)i; hde_cfg_list_move("panel_launchers", id, +1); }
@@ -42,13 +166,24 @@ static gboolean on_launcher_button(GtkWidget *b, GdkEventButton *e, gpointer d)
     if (e->type != GDK_BUTTON_PRESS || e->button != 3) return FALSE;
     const char *id = g_object_get_data(G_OBJECT(b), "hde-id");
     GtkWidget *m = gtk_menu_new();
+    GtkMenuShell *shell = GTK_MENU_SHELL(m);
+    GDesktopAppInfo *app = g_desktop_app_info_new(id);
+    const char *name = app ? g_app_info_get_display_name(G_APP_INFO(app)) : id;
+    GtkWidget *head = gtk_menu_item_new_with_label(name ? name : id);
+    gtk_widget_set_sensitive(head, FALSE);
+    gtk_menu_shell_append(shell, head);
+    gtk_menu_shell_append(shell, gtk_separator_menu_item_new());
+    if (hde_app_menu_append(shell, id)) gtk_menu_shell_append(shell, gtk_separator_menu_item_new());
+    if (app) g_object_unref(app);
+
     const struct { const char *label; GCallback cb; } items[] = {
-        { "_Unpin from Panel", G_CALLBACK(unpin) }, { "Move _Left", G_CALLBACK(move_left) },
+        { "Unpin from _Panel", G_CALLBACK(unpin) }, { "Move _Left", G_CALLBACK(move_left) },
         { "Move _Right", G_CALLBACK(move_right) } };
     for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
         GtkWidget *it = gtk_menu_item_new_with_mnemonic(items[i].label);
         g_signal_connect_data(it, "activate", items[i].cb, g_strdup(id), (GClosureNotify)(void (*)(void))g_free, 0);
-        gtk_menu_shell_append(GTK_MENU_SHELL(m), it);
+        gtk_menu_shell_append(shell, it);
+        DBG("launcher menu: %s", items[i].label);
     }
     gtk_widget_show_all(m);
     gtk_menu_attach_to_widget(GTK_MENU(m), b, NULL);
@@ -70,9 +205,11 @@ void hde_launchers_update(GtkWidget *box, char **ids, int icon_size)
     for (GList *l = ch; l; l = l->next) gtk_widget_destroy(l->data);
     g_list_free(ch);
     GString *log = g_string_new(NULL);
+    int launcher_no = 0;
     for (int i = 0; ids && ids[i]; i++) {
         GDesktopAppInfo *a = g_desktop_app_info_new(ids[i]);
         if (!a) continue;
+        launcher_no++;
         GtkWidget *b = gtk_button_new();
         gtk_button_set_relief(GTK_BUTTON(b), GTK_RELIEF_NONE);
         gtk_style_context_add_class(gtk_widget_get_style_context(b), "launcher");
@@ -85,6 +222,7 @@ void hde_launchers_update(GtkWidget *box, char **ids, int icon_size)
         g_object_set_data_full(G_OBJECT(b), "hde-id", g_strdup(ids[i]), g_free);
         g_signal_connect(b, "clicked", G_CALLBACK(on_launcher_clicked), NULL);
         g_signal_connect(b, "button-press-event", G_CALLBACK(on_launcher_button), NULL);
+        g_signal_connect_after(b, "size-allocate", G_CALLBACK(log_launcher), GINT_TO_POINTER(launcher_no));
         gtk_box_pack_start(GTK_BOX(box), b, FALSE, FALSE, 0);
         g_string_append_printf(log, "%s%s", log->len ? ", " : "", g_app_info_get_display_name(G_APP_INFO(a)));
         g_object_unref(a);
