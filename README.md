@@ -89,7 +89,7 @@ Reload a running session after rebuilding: `make dev` (from `./build`) or `sudo 
 | `Super+R`, `Alt+F2` | Run a command |
 | `Super+E` | File manager (Hyggshi Files) |
 | `Super+D` | Show desktop |
-| `Alt+Tab`, `Alt+Shift+Tab` | **Window switcher** — a picture of every window in the order they were last used, in the middle of the screen: hold `Alt` and press `Tab` for the next one, `Shift+Tab` for the one before, `Esc` to call it off, let `Alt` go to bring the one marked to the front. On Wayland the compositor's own switcher does it (there no window may read another window's contents) |
+| `Alt+Tab`, `Alt+Shift+Tab` | **Window switcher** — a picture of every window in the order they were last used, in the middle of the screen: hold `Alt` and press `Tab` for the next one, `Shift+Tab` for the one before, `Esc` to call it off, let `Alt` go to bring the one marked to the front (turns off with the other system shortcuts in *Settings → Keyboard & Shortcuts*) On Wayland the compositor's own switcher does it (there no window may read another window's contents) |
 | `Super+L` | Lock screen |
 | `Ctrl+Alt+T` | Terminal |
 | `Ctrl+Alt+Delete` | Session / Power dialog |
