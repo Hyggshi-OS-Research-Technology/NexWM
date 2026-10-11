@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="ext_idle_notifier_v1">
+  <copyright>
+    Copyright 2022 Erik De Rijcke
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <description summary="protocol for monitoring user idle time">
+    This protocol allows clients to monitor when the user is idle, that is, has
+    not used keyboard, mouse or touch for a while, so that they can blank the
+    screen, lock the session or put the computer to sleep.
+
+    The protocol is used by hde-idle (src/hde-idle.c), the part of HDE that does
+    that on the "HDE (Wayland)" session; on the "HDE" (X11) session the same
+    daemon asks the XScreenSaver extension instead.
+
+    This is the ext-idle-notify-v1 protocol as published by the wayland-protocols
+    project; the file is kept here, next to ext-session-lock-v1.xml, so that
+    wayland-scanner can generate the client header without wayland-protocols
+    being installed at build time.
+  </description>
+
+  <interface name="ext_idle_notifier_v1" version="1">
+    <description summary="allows to monitor when the user is idle">
+      This interface allows the client to monitor the user's idle state.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the idle notifier">
+        This request destroys the notifier. All notifications created by it
+        become inert.
+      </description>
+    </request>
+
+    <request name="get_idle_notification">
+      <description summary="create a new idle notification object">
+        The notification object has a minimum timeout and fires
+        ext_idle_notification_v1.idled when the seat has been idle for that
+        many milliseconds, and ext_idle_notification_v1.resumed as soon as the
+        user uses the seat again.
+      </description>
+      <arg name="id" type="new_id" interface="ext_idle_notification_v1"/>
+      <arg name="timeout" type="uint" summary="the idle timeout in milliseconds"/>
+      <arg name="seat" type="object" interface="wl_seat" summary="the seat to monitor"/>
+    </request>
+  </interface>
+
+  <interface name="ext_idle_notification_v1" version="1">
+    <description summary="notification for one idle timeout">
+      This interface is a handle to a single idle timeout.
+    </description>
+
+    <event name="idled">
+      <description summary="the user is now idle">
+        The notification is active: the seat has not been used for the timeout
+        given when this object was created.
+      </description>
+    </event>
+
+    <event name="resumed">
+      <description summary="the user is no longer idle">
+        The notification is no longer active: the seat has been used again.
+      </description>
+    </event>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the idle notification">
+        This request destroys the notification.
+      </description>
+    </request>
+  </interface>
+</protocol>

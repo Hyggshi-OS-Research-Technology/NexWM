@@ -14,9 +14,11 @@
 #   test             the test suite (Xvfb, xdotool, ImageMagick, dbusmock, ...)
 #   wayland-session  the "HDE (Wayland)" session: labwc, grim, slurp, wtype, Xwayland
 #
-# An entry "a|b|c" means: the first of these pacman has. Arch has one rolling repository (no wlroots0.18 next to
-# wlroots), so the alternatives are mostly for the window manager and for the packages other Arch-based systems
-# (Artix, Manjaro) name differently.
+# An entry "a|b|c" means: the first of these pacman has. The alternatives are for the packages other Arch-based
+# systems (Artix, Manjaro) name differently — and for the ones Arch keeps only in numbered flavours, wlroots above
+# all: Arch dropped the plain 'wlroots' for wlroots0.18 / 0.19 / 0.20 and retires the oldest of them as a new series
+# comes out, so a list written down here goes stale. `pick` therefore asks pacman which of them it really has
+# before it gives up (see pacman_newest below).
 #
 # Arch names its *development* packages like the libraries they are (gtk3, libwnck3, libxcb, pam, wlroots: no -dev,
 # no -devel), which is the one thing to remember coming from Debian or Fedora: `hde-settings --deps build` prints the
@@ -44,15 +46,17 @@ libinput
 pixman
 cairo
 pam
+libxext
 libxcb
 xcb-util-wm
-wlroots|wlroots0.18|wlroots0.17
+wlroots0.21|wlroots0.20|wlroots0.19|wlroots0.18|wlroots0.17|wlroots
 vte3
 "
 
 RUNTIME_MIN="
 metacity|marco|xfwm4|openbox
 dbus
+pam
 xorg-xset
 xorg-xsetroot
 xorg-xrandr
@@ -80,6 +84,8 @@ labwc
 grim
 slurp
 sddm
+udisks2
+gnome-keyring
 "
 
 TEST="
@@ -155,8 +161,22 @@ available() {
 installed() {
     pacman -Qq "$1" >/dev/null 2>&1
 }
-# the first alternative that exists here. If the sync databases are present but none match, stop with a useful error
-# instead of passing a stale package name to pacman. With no databases, retain the first-choice fallback.
+# Arch only keeps a few numbered flavours of a package such as wlroots and drops the oldest when a new series comes
+# out, so none of the names written in the lists above may be in the databases any more even though the package is
+# alive and well. Ask pacman which numbered ones it has and take the newest: that is the one a compositor is built
+# against. Prints a note and fails when pacman has none at all, so this never hides a name that is simply wrong.
+pacman_newest() {
+    p_base=$(printf '%s\n' "$1" | cut -d'|' -f1 | sed 's/[0-9][0-9.]*$//')
+    [ -n "$p_base" ] || return 1
+    p_best=$(pacman -Ssq "^${p_base}[0-9]" 2>/dev/null | sort -V | tail -n 1)
+    [ -n "$p_best" ] || return 1
+    echo "note: none of '$1' is in the databases, but pacman has '$p_best': using that" >&2
+    echo "$p_best"
+}
+
+# the first alternative that exists here. If the sync databases are present but none match, try pacman_newest, and
+# only when that finds nothing stop with a useful error instead of passing a stale package name to pacman. With no
+# databases, retain the first-choice fallback.
 pick() {
     p_ifs=$IFS; IFS='|'
     for cand in $1; do
@@ -164,6 +184,10 @@ pick() {
     done
     IFS=$p_ifs
     if [ -n "$(ls -A /var/lib/pacman/sync 2>/dev/null)" ]; then
+        if p_newest=$(pacman_newest "$1"); then
+            echo "$p_newest"
+            return 0
+        fi
         echo "$0: none of '$1' is available in the pacman sync databases" >&2
         return 1
     fi

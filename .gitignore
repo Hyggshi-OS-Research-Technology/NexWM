@@ -4,6 +4,11 @@ bin/
 *.d
 *.a
 *.so
+# hde-core/notifications/notifications.o used to be committed by mistake: a build object is never source.
+# `make check-tree` fails when a tracked file is one of these again (and says the `git rm --cached` line to fix it).
+hde-core/**/*.o
+hde-core/**/*.a
+hde-core/**/*.so
 # (no entry for "nexwm": nexwm/ is the source tree of HDE's own window manager and is tracked; the built program
 #  goes to $(BUILD)/nexwm — the "nexwm" entry that used to be here hid the whole source directory)
 build/

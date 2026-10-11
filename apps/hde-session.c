@@ -28,6 +28,7 @@
 #include "hde/session.h"
 #include "hde/core.h"
 #include "hde/settings.h"
+#include "hde-keyring-core.h"
 #include "hde-wm.h"
 #include "hde-build.h"
 #include <dirent.h>
@@ -310,14 +311,56 @@ typedef struct {
     time_t restart_at;
 } Component;
 
-enum { C_XSETTINGS, C_HOTKEYS, C_DESKTOP, C_PANEL, C_POLKIT, N_COMP };
+enum { C_XSETTINGS, C_HOTKEYS, C_DESKTOP, C_PANEL, C_IDLE, C_AUTOMOUNT, C_POLKIT, N_COMP };
 static Component comps[N_COMP] = {
     [C_XSETTINGS] = { "hde-xsettings", "XSETTINGS daemon (live theme / Dark mode, touchpad, screens)", "", -1, 0, 5, 0, 0, 0, 0 },
     [C_HOTKEYS]   = { "hde-hotkeys", "system hotkeys (Super, F1-F3, F6-F8, PrtSc, media keys)", "", -1, 0, 5, 0, 0, 0, 0 },
     [C_DESKTOP]   = { "hde-desktop", "desktop", "", -1, 0, 5, 0, 0, 0, 0 },
     [C_PANEL]     = { "hde-panel", "panel", "", -1, 0, 5, 0, 0, 0, 0 },
+    [C_IDLE]      = { "hde-idle", "screen off / lock / sleep when the user is away", "", -1, 0, 5, 0, 0, 0, 0 },
+    [C_AUTOMOUNT] = { "hde-automount", "mounting of USB sticks, cards and discs", "", -1, 0, 5, 0, 0, 0, 0 },
     [C_POLKIT]    = { NULL, "polkit authentication agent", "", -1, 0, 1, 0, 0, 0, 0 },
 };
+
+/* ---- the keyring (Secret Service) of this session ----
+ * `gnome-keyring-daemon --start` forks itself into the background and prints the variables the session has to
+ * export (GNOME_KEYRING_CONTROL, SSH_AUTH_SOCK, GPG_AGENT_INFO). Without them the browser asks for the Wi-Fi
+ * password again after every restart, Git asks for the passphrase of the SSH key on every push, and every
+ * program keeps its own secrets. It is started before anything else, so that every program of the session —
+ * and everything D-Bus activates later — inherits them.
+ *
+ * Only the names on the list in src/hde-keyring-core.c are exported, so that a daemon that printed something
+ * else cannot reach the session. Unlocking the login keyring with the password the user typed is PAM's job
+ * (see packaging/pam/hde-keyring), not ours: the password never reaches the session.
+ */
+static void start_keyring(void)
+{
+    char *daemon = resolve_component("gnome-keyring-daemon", NULL);
+    if (!daemon) {
+        printf("hde-session: no keyring daemon on this machine (install gnome-keyring); "
+               "passwords are not kept for this session\n");
+        return;
+    }
+    char cmd[2048];
+    snprintf(cmd, sizeof cmd, "'%s' --start --components=pkcs11,secrets,ssh", daemon);
+    free(daemon);
+
+    FILE *f = popen(cmd, "r");
+    if (!f) { fprintf(stderr, "hde-session: the keyring daemon could not be started\n"); return; }
+    char text[4096];
+    size_t len = fread(text, 1, sizeof text - 1, f);
+    text[len] = '\0';
+    pclose(f);
+
+    char names[HDE_KEYRING_MAX_VARS][HDE_KEYRING_NAME_MAX];
+    char values[HDE_KEYRING_MAX_VARS][HDE_KEYRING_VALUE_MAX];
+    int n = hde_keyring_parse_env(text, names, values);
+    for (int i = 0; i < n; ++i) {
+        setenv(names[i], values[i], 1);
+        printf("hde-session: keyring: %s=%s\n", names[i], values[i]);
+    }
+    if (n == 0) fprintf(stderr, "hde-session: the keyring daemon printed nothing to export\n");
+}
 
 static void comp_start(Component *c)
 {
@@ -807,7 +850,10 @@ int main(int argc, char **argv)
     if (argc > 1 && (!strcmp(argv[1], "--wayland") || !strcmp(argv[1], "--wayland-inner"))) {
         self_dir(g_bindir, sizeof(g_bindir), argv[0]);
         /* outside the compositor (from the login screen): start labwc, which starts us again inside */
-        if (!strcmp(argv[1], "--wayland") && !getenv("WAYLAND_DISPLAY")) return wayland_launch();
+        if (!strcmp(argv[1], "--wayland") && !getenv("WAYLAND_DISPLAY")) {
+            start_keyring();        /* before labwc: the compositor and everything it starts inherit it */
+            return wayland_launch();
+        }
         g_wayland = 1;
         setenv("HDE_BACKEND", "wayland", 1);
         config_path(g_labwc_dir, sizeof g_labwc_dir, "labwc");
@@ -872,12 +918,17 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--wayland") || !strcmp(argv[i], "--wayland-inner")) g_use_wm = 0;
     }
 
-    /* D-Bus services activated on demand (portal, keyring, ...) need to know the DISPLAY of this session. */
+    /* 0. The keyring, before anything else: every program of this session has to find the one Secret Service. */
+    start_keyring();
+
+    /* D-Bus services activated on demand (portal, keyring, ...) need to know the DISPLAY of this session — and,
+     * now that the keyring is running, where its socket is. */
     {
         const char *dua[] = { "dbus-update-activation-environment", "--systemd", "DISPLAY", "XAUTHORITY",
                               "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION", "XDG_SESSION_TYPE",
                               "GDK_BACKEND", "QT_QPA_PLATFORMTHEME", "HDE_SESSION_PID", "WAYLAND_DISPLAY",
-                              "QT_QPA_PLATFORM", "MOZ_ENABLE_WAYLAND", NULL };
+                              "QT_QPA_PLATFORM", "MOZ_ENABLE_WAYLAND",
+                              "GNOME_KEYRING_CONTROL", "SSH_AUTH_SOCK", "GPG_AGENT_INFO", NULL };
         run_wait(dua, 3000);
     }
 
@@ -908,6 +959,10 @@ int main(int argc, char **argv)
     /* 4. Desktop, panel */
     comps[C_DESKTOP].enabled = start_desktop;
     comps[C_PANEL].enabled = start_panel;
+    /* The screen going off and the screen locking are for a real session: not for a session started with
+     * --no-panel (the tests), and HDE_NO_IDLE=1 turns them off for good. Mounting of USB sticks likewise. */
+    comps[C_IDLE].enabled = start_panel && getenv("HDE_NO_IDLE") == NULL;
+    comps[C_AUTOMOUNT].enabled = start_panel;
     start_components();
 
     printf("HDE session running on backend: %s\n", hde_core_backend() ? hde_core_backend()->name : "none");
@@ -953,6 +1008,8 @@ int main(int argc, char **argv)
     stop_pid(&comps[C_DESKTOP].pid);
     stop_pid(&comps[C_HOTKEYS].pid);
     stop_pid(&comps[C_POLKIT].pid);
+    stop_pid(&comps[C_IDLE].pid);
+    stop_pid(&comps[C_AUTOMOUNT].pid);
     stop_pid(&comps[C_XSETTINGS].pid);
     stop_pid(&g_wm_old);
     stop_pid(&g_wm);

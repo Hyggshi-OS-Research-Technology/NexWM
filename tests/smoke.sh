@@ -450,10 +450,21 @@ else
 fi
 
 # ---------- 4. notifications ----------
+# how often has the panel been started? it logs its taskbar once every time it comes up, so more than one line
+# means hde-session had to start it again (it died): the notification daemon goes with it, and so does the list of
+# the notifications it had. Printed here to tell a broken daemon from a panel that is simply not there.
+grep -c "hde-panel: taskbar: X11 (libwnck)" "$OUT/session.log" | sed 's/^/INFO:   the panel started /;s/$/ time(s)/' \
+    | tee -a "$OUT/results.txt"
 if command -v gdbus >/dev/null 2>&1; then
     info=$(gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
            --method org.freedesktop.Notifications.GetServerInformation 2>&1)
-    case "$info" in *"HDE Notifications"*) pass "notification daemon answers on D-Bus" ;; *) fail "notification daemon answers on D-Bus ($info)" ;; esac
+    if printf '%s' "$info" | grep -q "HDE Notifications"; then pass "notification daemon answers on D-Bus"
+    else
+        fail "notification daemon answers on D-Bus ($info)"
+        grep -E "hde-session: .*(panel|restart|died|exit|signal)" "$OUT/session.log" | tail -n 8 \
+            | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        tail -n 15 "$OUT/session.log" | sed 's/^/INFO:   last log: /' | tee -a "$OUT/results.txt"
+    fi
 fi
 if command -v notify-send >/dev/null 2>&1; then
     n0=$(popups)
@@ -1216,6 +1227,87 @@ pwidget() {
 pclick() { set -- $(pwidget "$1"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
 cclog() { grep "hde-panel: control center: $1" "$OUT/session.log" | tail -n 1; }
 xdotool mousemove 640 400
+
+# ---------- 6d2. the taskbar preview (Windows 11 style): resting the pointer on a button opens a picture ----------
+# of the window. tests/peek-test.c checks the sums behind it (how big a picture is drawn, how many in a row, where
+# the popup goes) without a screen; here the pointer really rests on a button and the preview really opens.
+"$B/hde-files" "$HOME" > "$OUT/files-peek.log" 2>&1 &
+FPK=$!
+sleep 3
+# shellcheck disable=SC2046  # pwidget: "CX CY X W"
+set -- $(pwidget task-1)
+if [ -n "${2:-}" ]; then
+    pass "the taskbar has a button for the open window (task-1 at $3, $4 px wide)"
+    peek0=$(nlog "hde-panel: peek: shown")
+    xdotool mousemove "$1" "$2"; sleep 1.5
+    shot 16k-taskbar-preview
+    if [ "$(nlog "hde-panel: peek: shown")" -gt "$peek0" ]; then
+        pass "resting the pointer on a taskbar button opens the preview ($(grep "hde-panel: peek: .* window(s)" \
+             "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: peek: //'))"
+    else
+        fail "resting the pointer on a taskbar button opens the preview ($(tail -n 3 "$OUT/session.log" | tr '\n' ';'))"
+        grep -F "hde-panel: widget task-" "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        grep -F "hde-panel: peek: " "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        grep -F "hde-panel: taskbar: " "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    fi
+    hid0=$(nlog "hde-panel: peek: hidden")
+    xdotool mousemove 640 400; sleep 1
+    if [ "$(nlog "hde-panel: peek: hidden")" -gt "$hid0" ]; then pass "... and moving the pointer away closes it"
+    else fail "... and moving the pointer away closes it"; fi
+else
+    fail "the taskbar has a button for the open window (no 'widget task-1' in the log)"
+    # what the taskbar did (HDE_DEBUG): which windows it saw, and which buttons it made for them
+    grep -F "hde-panel: taskbar: " "$OUT/session.log" | tail -n 12 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    grep -F "hde-panel: widget " "$OUT/session.log" | tail -n 5 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    tail -n 5 "$OUT/files-peek.log" 2>/dev/null | sed 's/^/INFO:   hde-files: /' | tee -a "$OUT/results.txt"
+fi
+kill "$FPK" 2>/dev/null; wait "$FPK" 2>/dev/null
+
+# ---------- 6d3. the window switcher (Alt+Tab): a picture of every window, the picked one comes to the front -----
+# hde-hotkeys holds Alt+Tab (it takes the keyboard while Alt is down) and tells the panel over its command channel
+# which way to move and when Alt went up; src/hde-switch.c is the window in the middle of the screen, and
+# tests/switch-test.c checks the sums behind it without a screen.
+sw0=$(nlog "hde-panel: switcher: shown")
+"$B/hde-files" "$HOME" > "$OUT/files-sw.log" 2>&1 &
+FSW=$!
+sleep 3
+"$B/hde-settings" display > "$OUT/settings-sw.log" 2>&1 &
+SSW=$!
+sleep 3.5
+before=$(xdotool getactivewindow 2>/dev/null)
+bname=$(xdotool getwindowfocus getwindowname 2>/dev/null)
+xdotool keydown alt; sleep 0.4
+xdotool key Tab; sleep 1.2
+if [ "$(nlog "hde-panel: switcher: shown")" -gt "$sw0" ]; then
+    pass "Alt+Tab opens the window switcher ($(grep "hde-panel: switcher: .* picked" "$OUT/session.log" | tail -n 1 \
+         | sed 's/^hde-panel: switcher: //'))"
+else
+    fail "Alt+Tab opens the window switcher ($(tail -n 3 "$OUT/session.log" | tr '\\n' ';'))"
+    grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+        | tee -a "$OUT/results.txt"
+fi
+shot 16l-window-switcher
+tab0=$(nlog "hde-panel: switcher: Tab")
+xdotool key Tab; sleep 0.8                   # on to the next one, and once more: back to the window that was
+xdotool key Tab; sleep 0.8                   # behind the one in front, so that letting Alt go changes something
+if [ "$(nlog "hde-panel: switcher: Tab")" -gt "$tab0" ]; then
+    pass "... Tab moves the mark on to the next window ($(grep "hde-panel: switcher: Tab" "$OUT/session.log" | \
+         tail -n 1 | sed 's/^hde-panel: switcher: //'))"
+else fail "... Tab moves the mark on to the next window"; fi
+xdotool keyup alt; sleep 1.5
+after=$(xdotool getactivewindow 2>/dev/null)
+aname=$(xdotool getwindowfocus getwindowname 2>/dev/null)
+pick=$(grep "hde-panel: switcher: chosen (" "$OUT/session.log" | tail -n 1 | sed 's/.*chosen (//; s/)$//')
+if [ "$aname" = "$pick" ] || { [ -n "$before" ] && [ -n "$after" ] && [ "$after" != "$before" ]; }; then
+    pass "... and letting Alt go brings that window to the front ($bname -> $aname)"
+else
+    fail "... and letting Alt go brings that window to the front (picked $pick, $bname [$before] -> $aname [$after])"
+    grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+        | tee -a "$OUT/results.txt"
+fi
+check "... the switcher is closed again" grep -q "hde-panel: switcher: hidden" "$OUT/session.log"
+kill "$FSW" "$SSW" 2>/dev/null; wait "$FSW" "$SSW" 2>/dev/null
+
 if command -v notify-send >/dev/null 2>&1; then
     notify-send -a "Smoke test" -i mail-unread "Two new messages" "For the Control Center test"
     notify-send -a "Calendar" -i x-office-calendar "Meeting at 15:00" "Room 2, with the HDE team"

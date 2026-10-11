@@ -1,10 +1,12 @@
 /* hde-settings-power.c — Settings > Power: the battery (charge, time left, health), the power mode
  * (power-profiles-daemon), the battery saver and the low-battery warnings (both run by the panel, src/hde-powersave.c),
- * the screen timeout, and automatic suspend (left to a power manager).
+ * and what happens while the user is away: the screen going off, the session locking and the computer going to
+ * sleep (hde-idle, src/hde-idle.c — Settings writes the times, hde-idle carries them out).
  */
 #include "hde-distro.h"
 #include <stdlib.h>
 #include "hde-settings.h"
+#include "hde-idle-core.h"
 #include "hde-power.h"
 #include "hde-profiles.h"
 #include "hde-run.h"
@@ -195,12 +197,58 @@ static gboolean on_bool(GtkSwitch *s, gboolean on, gpointer key)
     return FALSE;
 }
 
-/* ---------------------------------------------------------------- screen timeout, suspend */
-static void on_screen_timeout(GtkComboBox *c, gpointer d)
+/* ---------------------------------------------------------------- while the user is away --------------------
+ * The four times below are what hde-idle (src/hde-idle.c) does its work with: it turns the screen off, locks
+ * the session and puts the computer to sleep, one after the other, and it is told the moment any of them is
+ * changed here. What has to happen in which order is decided in src/hde-idle-core.c, which this page shares
+ * the defaults with, so the drop-downs and the daemon cannot disagree about what "Never" means.
+ */
+static const int idle_minutes[] = { 0, 1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120 };
+#define N_IDLE_MINUTES ((int)G_N_ELEMENTS(idle_minutes))
+
+/* The place in the drop-down of a number of minutes: the longest one that is not longer than it. */
+static int idle_index_of(int minutes)
+{
+    int best = 0;
+    for (int i = 1; i < N_IDLE_MINUTES; i++)
+        if (idle_minutes[i] <= minutes && idle_minutes[i] > idle_minutes[best]) best = i;
+    return best;
+}
+
+/* What settings.ini says, with the way out for a machine that already had a screen timeout before HDE looked
+ * after the screen itself: the old setting was an index into its own, shorter list. */
+static int idle_value(const char *key, int dflt)
+{
+    if (cfg_has_key(key)) return cfg_get_int(key, dflt);
+    if (!strcmp(key, "idle_blank") && cfg_has_key("screen_timeout")) {
+        static const int old[] = { 0, 5, 10, 15, 30, 60 };
+        return old[CLAMP(cfg_get_int("screen_timeout", 2), 0, 5)];
+    }
+    return dflt;
+}
+
+static void on_idle_combo(GtkComboBox *c, gpointer d)
 {
     (void)d;
-    cfg_set_int("screen_timeout", gtk_combo_box_get_active(c));
-    apply_power_settings();
+    const char *key = g_object_get_data(G_OBJECT(c), "hde-idle-key");
+    int i = gtk_combo_box_get_active(c);
+    if (!key || i < 0 || i >= N_IDLE_MINUTES) return;
+    cfg_set_int(key, idle_minutes[i]);
+}
+
+static GtkWidget *idle_combo(const char *key, int dflt, const char *debug_name)
+{
+    GtkWidget *c = gtk_combo_box_text_new();
+    for (int i = 0; i < N_IDLE_MINUTES; i++) {
+        char t[32];
+        hde_idle_minutes_text(idle_minutes[i], t, sizeof t);
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(c), t);
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(c), idle_index_of(idle_value(key, dflt)));
+    g_object_set_data_full(G_OBJECT(c), "hde-idle-key", g_strdup(key), g_free);
+    g_signal_connect(c, "changed", G_CALLBACK(on_idle_combo), NULL);
+    debug_geometry_watch(c, debug_name);
+    return c;
 }
 
 static const char *const power_managers[][2] = {
@@ -337,33 +385,57 @@ GtkWidget *page_power_new(void)
     saver_sensitivity();
 
     gtk_box_pack_start(GTK_BOX(box), section("Screen and sleep"), FALSE, FALSE, 0);
-    GtkWidget *screen = gtk_combo_box_text_new();
-    static const char *const times[] = { "Never", "5 minutes", "10 minutes", "15 minutes", "30 minutes", "1 hour" };
-    for (int i = 0; i < 6; i++) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(screen), times[i]);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(screen), CLAMP(cfg_get_int("screen_timeout", 2), 0, 5));
-    g_signal_connect(screen, "changed", G_CALLBACK(on_screen_timeout), NULL);
-    gtk_box_pack_start(GTK_BOX(box), row_box("Screen timeout", "Turn off the display after this long without using the "
-                                             "mouse or the keyboard.", screen), FALSE, FALSE, 0);
+    HdeIdleConfig dflt;
+    hde_idle_config_defaults(&dflt);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Turn the screen off after",
+                       "The screen goes black, and comes back the moment you touch the mouse or the keyboard. "
+                       "Nothing else happens: your programs keep running.",
+                       idle_combo("idle_blank", dflt.blank_minutes, "power-idle-blank")), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Lock the screen after",
+                       "The lock screen comes up, and nobody can use the computer without the password.",
+                       idle_combo("idle_lock", dflt.lock_minutes, "power-idle-lock")), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Sleep when on battery after",
+                       "The computer saves its work to memory and goes quiet, so that the battery lasts. Pressing "
+                       "the power button wakes it up where you left it.",
+                       idle_combo("idle_suspend_battery", dflt.suspend_bat_minutes, "power-idle-suspend-battery")),
+                       FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Sleep when plugged in after",
+                       "Off by default: a computer that is plugged in is left alone.",
+                       idle_combo("idle_suspend_ac", dflt.suspend_ac_minutes, "power-idle-suspend-ac")),
+                       FALSE, FALSE, 0);
+    GtkWidget *lock_first = gtk_switch_new();
+    gtk_widget_set_valign(lock_first, GTK_ALIGN_CENTER);
+    gtk_switch_set_active(GTK_SWITCH(lock_first), cfg_get_bool("idle_lock_before_suspend", TRUE));
+    g_signal_connect(lock_first, "state-set", G_CALLBACK(on_bool), (gpointer)"idle_lock_before_suspend");
+    debug_geometry_watch(lock_first, "power-idle-lock-first");
+    gtk_box_pack_start(GTK_BOX(box), row_box("Lock the screen before sleeping",
+                       "So that waking the computer up does not land on an unlocked session.", lock_first),
+                       FALSE, FALSE, 0);
+
+    /* Who does all this, and what a program that is showing something can do about it. */
+    GtkWidget *idle_note = info_label(have_program("hde-idle")
+        ? "HDE watches how long you have been away and does this. A program that is playing a film or copying "
+          "files can ask HDE to wait: the screen stays on while it does, and nothing here is cut short."
+        : "hde-idle, the program of HDE that does this, is not installed: nothing happens while you are away. "
+          "Closing the lid and the power button work without it (systemd-logind), and the Power menu suspends "
+          "at any time.");
+    gtk_widget_set_margin_start(idle_note, 6);       /* in line with the rows above */
+    gtk_box_pack_start(GTK_BOX(box), idle_note, FALSE, FALSE, 0);
+
+    /* A power manager of another desktop, if one is installed, still looks after the lid and the power
+     * button; its own settings are where those are. */
     const char *pm = NULL;
     for (guint i = 0; i < G_N_ELEMENTS(power_managers) && !pm; i++)
         if (have_program(power_managers[i][0])) pm = power_managers[i][1];
-    GtkWidget *pm_btn = NULL;
-    char *sdesc;
     if (pm) {
-        pm_btn = gtk_button_new_with_label("Open…");
+        GtkWidget *pm_btn = gtk_button_new_with_label("Open…");
         gtk_widget_set_valign(pm_btn, GTK_ALIGN_CENTER);
         g_signal_connect(pm_btn, "clicked", G_CALLBACK(on_power_manager), NULL);
-        sdesc = g_strdup_printf("Set in %s, which suspends the computer after a while without use (and handles the lid "
-                                "and the power button).", pm);
-    } else {
-        char *hint = hde_install_hint("xfce4-power-manager");
-        sdesc = g_strdup_printf("HDE does not suspend the computer by itself after a while without use: install a power "
-                                "manager for that, e.g. %s. Closing the lid and the power button work without one "
-                                "(systemd-logind), and the Power menu suspends at any time.", hint);
-        free(hint);
+        char *sdesc = g_strdup_printf("%s is installed: closing the lid, the power button and the battery "
+                                      "warnings of another desktop are set there.", pm);
+        gtk_box_pack_start(GTK_BOX(box), row_box("Power manager", sdesc, pm_btn), FALSE, FALSE, 0);
+        g_free(sdesc);
     }
-    gtk_box_pack_start(GTK_BOX(box), row_box("Automatic suspend", sdesc, pm_btn), FALSE, FALSE, 0);
-    g_free(sdesc);
 
     g_signal_connect(box, "map", G_CALLBACK(on_map), NULL);
     g_signal_connect(box, "unmap", G_CALLBACK(on_unmap), NULL);
@@ -389,5 +461,17 @@ int power_cli(void)
     else if (level >= 100) printf("Battery saver: on battery%s\n", hde_power_saver_wanted(&p, TRUE, level, FALSE) ? " (on now)" : "");
     else printf("Battery saver: at %d%%%s\n", level, hde_power_saver_wanted(&p, TRUE, level, FALSE) ? " (on now)" : "");
     printf("Low battery warnings: %s\n", cfg_get_bool("battery_warnings", TRUE) ? "at 10% and 5%" : "off");
+
+    /* While the user is away (hde-idle carries this out). */
+    HdeIdleConfig dflt;
+    hde_idle_config_defaults(&dflt);
+    char blank[32], lock[32], ac[32], bat[32];
+    hde_idle_minutes_text(idle_value("idle_blank", dflt.blank_minutes), blank, sizeof blank);
+    hde_idle_minutes_text(idle_value("idle_lock", dflt.lock_minutes), lock, sizeof lock);
+    hde_idle_minutes_text(idle_value("idle_suspend_ac", dflt.suspend_ac_minutes), ac, sizeof ac);
+    hde_idle_minutes_text(idle_value("idle_suspend_battery", dflt.suspend_bat_minutes), bat, sizeof bat);
+    printf("Away: screen off after %s, locked after %s, asleep after %s on battery and %s while plugged in\n",
+           blank, lock, bat, ac);
+    printf("Away: locks before sleeping: %s\n", cfg_get_bool("idle_lock_before_suspend", TRUE) ? "yes" : "no");
     return 0;
 }

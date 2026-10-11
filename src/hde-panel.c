@@ -45,6 +45,9 @@
 #include "hde-flyout.h"
 #include "hde-run.h"
 #include "hde-measure.h"
+#include "hde-x11taskbar.h"
+#include "hde-peek.h"
+#include "hde-switch.h"
 #ifdef HAVE_WAYLAND_TASKBAR
 #include "hde-wltaskbar.h"
 #endif
@@ -741,6 +744,8 @@ static void close_popups(void)
 {
     if (hde_startmenu_visible()) hde_startmenu_hide();
     if (cal_win && gtk_widget_get_visible(cal_win)) gtk_widget_hide(cal_win);
+    hde_peek_hide();                 /* the preview of the taskbar: nothing else is being pointed at any more */
+    hde_switch_hide();               /* and the switcher: Alt was let go, or something else took the screen */
 }
 
 /* toggle: a second click (or Super+A) closes it; else it switches to the page */
@@ -806,6 +811,12 @@ static gboolean run_panel_cmd(gpointer p)
         place_id = 0;
         g_clear_pointer(&last_measured, g_free);    /* write the measurement even if nothing changed */
         panel_place((gpointer)"asked to measure again");
+        break;
+    case HDE_CMD_SWITCH:                        /* Alt+Tab (hde-hotkeys holds the keyboard while it is open) */
+        hde_switch_step(c->arg < 0 ? -1 : 1, c->time);
+        break;
+    case HDE_CMD_SWITCH_DONE:
+        hde_switch_end(c->arg != 0, c->time);
         break;
     default: break;
     }
@@ -1286,13 +1297,40 @@ static void load_css(void)
     g_string_append_printf(s, ".hde-panel .launcher { padding: %dpx 5px; }", vpad);
     g_string_append_printf(s, ".hde-panel .applet { padding: %dpx 6px; }", vpad);
     g_string_append_printf(s, ".hde-panel .icons-only button { padding: %dpx 6px; }", vpad);
-    /* the taskbar on one row: libwnck puts as many rows of buttons as fit above each other */
+    /* the taskbar on one row: the buttons stand next to each other, whatever the height of the panel is */
     g_string_append_printf(s, ".hde-panel .taskbar button { min-height: %dpx; }",
                            MAX(0, (pcfg.size - 2 * PANEL_BORDER) / 2 + 1 - 2 * vpad));
-    g_string_append_printf(s, ".hde-panel .wl-task { padding: %dpx 8px; min-width: 24px; }"
-                              ".hde-panel .wl-task.active { background: alpha(%s, 0.28); box-shadow: inset 0 %s2px %s; }"
-                              ".hde-panel .wl-task.minimized label { color: %s; }",
+    g_string_append_printf(s, ".hde-panel .wl-task, .hde-panel .task-btn { padding: %dpx 8px; min-width: 24px; }"
+                              ".hde-panel .wl-task.active, .hde-panel .task-btn.active { background: alpha(%s, 0.28);"
+                              "  box-shadow: inset 0 %s2px %s; }"
+                              ".hde-panel .wl-task.minimized label, .hde-panel .task-btn.minimized label { color: %s; }",
                            vpad, ti.accent, pcfg.top ? "" : "-", ti.accent, sub);
+    /* the preview of the taskbar (src/hde-peek.c): a window of its own above the panel, so it is not inside
+       .hde-panel and needs its colours all to itself */
+    g_string_append_printf(s, ".hde-peek { background: %s; color: %s; border: 1px solid %s; border-radius: 0;"
+                              "  padding: 0; box-shadow: none; }"
+                              ".hde-peek.rounded { border-radius: 10px; }"
+                              ".hde-peek .peek-group { font-weight: bold; }"
+                              ".hde-peek .peek-item { padding: 4px; border-radius: 6px; }"
+                              ".hde-peek .peek-item.hover { background: %s; }"
+                              ".hde-peek .peek-thumb { border: 1px solid %s; }"
+                              ".hde-peek .peek-title { font-size: 11px; }"
+                              ".hde-peek .peek-close { background: %s; border: none; padding: 2px; min-width: 0;"
+                              "  min-height: 0; border-radius: 50%%; box-shadow: none; }"
+                              ".hde-peek .peek-close:hover { background: %s; }",
+                           popbg, fg, popbd, hover, popbd, popbg, hover);
+    /* the window switcher (src/hde-switch.c): a window of its own in the middle of the screen, so it is not
+       inside .hde-panel either */
+    g_string_append_printf(s, ".hde-switch { background: %s; color: %s; border: 1px solid %s; border-radius: 0;"
+                              "  padding: 0; box-shadow: none; }"
+                              ".hde-switch.rounded { border-radius: 12px; }"
+                              ".hde-switch .switch-item { padding: 4px; border-radius: 8px;"
+                              "  border: 2px solid transparent; }"
+                              ".hde-switch .switch-item.picked { background: %s;"
+                              "  border-color: %s; }"
+                              ".hde-switch .switch-picture { border: 1px solid %s; background: %s; }"
+                              ".hde-switch .switch-name { font-size: 11px; }",
+                           popbg, fg, popbd, hover, ti.accent, popbd, popbg);
     g_string_append(s, ".hde-panel .clock-btn { padding: 0 8px; }");
     g_string_append_printf(s, ".hde-panel .clock-box { min-width: %dpx; }", pcfg.clock_seconds || !pcfg.clock_24h ? 120 : 100);
     g_string_append_printf(s, ".hde-panel .clock-time { font-weight: 700; font-size: %dpx; }", big ? 14 : 12);
@@ -1651,33 +1689,9 @@ static gboolean on_panel_button(GtkWidget *w, GdkEventButton *e, gpointer d)
 }
 
 /* ---------- taskbar ---------- */
-static WnckScreen *wnck_scr;
-
-static int wnck_buttons(void)
-{
-    if (!wnck_scr) return 0;
-    WnckWorkspace *ws = wnck_screen_get_active_workspace(wnck_scr);
-    int n = 0;
-    for (GList *l = wnck_screen_get_windows(wnck_scr); l; l = l->next) {
-        WnckWindow *w = l->data;
-        if (wnck_window_is_skip_tasklist(w)) continue;
-        if (ws && !wnck_window_is_on_workspace(w, ws)) continue;
-        n++;
-    }
-    return n;
-}
-
-/* icons only: give libwnck just enough room for the icons (it then hides the titles itself) */
-static void update_taskbar_width(void)
-{
-    if (!tasks || !hde_is_x11()) return;
-    gboolean labels = pcfg.taskbar_labels;
-    gtk_box_set_child_packing(GTK_BOX(panel_box), tasks, labels, labels, 0, GTK_PACK_START);
-    gtk_widget_set_size_request(tasks, labels ? -1 : MAX(1, wnck_buttons()) * 44, -1);
-}
-
-static void on_wnck_changed(WnckScreen *s, gpointer a, gpointer d) { (void)s; (void)a; (void)d; update_taskbar_width(); }
-
+/* The buttons are ours, not libwnck's tasklist's: only then can they answer the pointer, and it is the pointer
+ * resting on one of them that opens the preview (src/hde-peek.c). src/hde-x11taskbar.c asks libwnck which
+ * windows there are and keeps a button for each of them (or for each application, when they are grouped). */
 static GtkWidget *make_taskbar(void)
 {
 #ifdef HAVE_WAYLAND_TASKBAR
@@ -1691,30 +1705,29 @@ static GtkWidget *make_taskbar(void)
         gtk_widget_set_tooltip_text(l, "No taskbar: this HDE was built without Wayland support (libgtk-layer-shell-dev)");
         return l;
     }
-    GtkWidget *t = wnck_tasklist_new();
-    wnck_tasklist_set_grouping(WNCK_TASKLIST(t), WNCK_TASKLIST_AUTO_GROUP);
-    wnck_tasklist_set_include_all_workspaces(WNCK_TASKLIST(t), FALSE);
-    wnck_tasklist_set_button_relief(WNCK_TASKLIST(t), GTK_RELIEF_NONE);
-    wnck_scr = wnck_screen_get_default();
-    if (wnck_scr) {
-        g_signal_connect(wnck_scr, "window-opened", G_CALLBACK(on_wnck_changed), NULL);
-        g_signal_connect(wnck_scr, "window-closed", G_CALLBACK(on_wnck_changed), NULL);
-        g_signal_connect(wnck_scr, "active-workspace-changed", G_CALLBACK(on_wnck_changed), NULL);
-    }
-    return t;
+    GtkWidget *t = hde_x11_taskbar_new();
+    if (t) return t;
+    GtkWidget *l = gtk_label_new("");
+    gtk_widget_set_tooltip_text(l, "No taskbar: the list of windows cannot be read (libwnck has no screen)");
+    return l;
 }
 
 static void apply_taskbar(void)
 {
 #ifdef HAVE_WAYLAND_TASKBAR
-    if (hde_is_wayland()) { hde_wl_taskbar_set_labels(tasks, pcfg.taskbar_labels); return; }
+    if (hde_is_wayland()) {
+        hde_wl_taskbar_set_labels(tasks, pcfg.taskbar_labels);
+        hde_wl_taskbar_set_preview(tasks, pcfg.taskbar_preview, pcfg.taskbar_preview_delay);
+        return;
+    }
 #endif
-    if (!hde_is_x11() || !WNCK_IS_TASKLIST(tasks)) return;
-    static const WnckTasklistGroupingType g[3] = { WNCK_TASKLIST_NEVER_GROUP, WNCK_TASKLIST_AUTO_GROUP, WNCK_TASKLIST_ALWAYS_GROUP };
-    wnck_tasklist_set_grouping(WNCK_TASKLIST(tasks), g[CLAMP(pcfg.taskbar_group, 0, 2)]);
-    if (pcfg.taskbar_labels) gtk_style_context_remove_class(gtk_widget_get_style_context(tasks), "icons-only");
-    else gtk_style_context_add_class(gtk_widget_get_style_context(tasks), "icons-only");
-    update_taskbar_width();
+    if (!hde_is_x11()) return;
+    hde_x11_taskbar_set_labels(tasks, pcfg.taskbar_labels);
+    hde_x11_taskbar_set_grouping(tasks, pcfg.taskbar_group);
+    hde_x11_taskbar_set_preview(tasks, pcfg.taskbar_preview, pcfg.taskbar_preview_delay);
+    /* with titles the taskbar takes all the room that is left; without them it is as wide as its icons */
+    if (tasks) gtk_box_set_child_packing(GTK_BOX(panel_box), tasks, pcfg.taskbar_labels, pcfg.taskbar_labels, 0,
+                                         GTK_PACK_START);
 }
 
 /* ---------- Settings > Panel / Start Menu changed: apply everything live ---------- */
@@ -1746,6 +1759,7 @@ static void apply_config(gboolean first)
     gtk_widget_set_visible(desk_btn, pcfg.show_desktop);
     gtk_widget_set_visible(run_btn, pcfg.show_run);
     gtk_widget_set_visible(tasks, pcfg.show_taskbar);
+    if (!pcfg.show_taskbar) hde_peek_hide();
     if (pager) gtk_widget_set_visible(pager, pcfg.show_workspaces && hde_is_x11());
     gtk_widget_set_visible(tray, pcfg.show_tray);
     gtk_widget_set_visible(status_area, pcfg.show_status);
@@ -1991,6 +2005,8 @@ int main(int argc, char **argv)
     tasks = make_taskbar();
     gtk_style_context_add_class(gtk_widget_get_style_context(tasks), "taskbar");
     gtk_box_pack_start(GTK_BOX(box), tasks, TRUE, TRUE, 0);
+    if (hde_is_x11())       /* the window switcher (Alt+Tab) asks the taskbar which windows there are */
+        hde_switch_set_provider(hde_x11_taskbar_switch_list, hde_x11_taskbar_switch_ops(), NULL);
 
     if (hde_is_x11()) {
         pager = wnck_pager_new();

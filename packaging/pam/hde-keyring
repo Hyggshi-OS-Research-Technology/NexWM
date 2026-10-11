@@ -1,0 +1,21 @@
+# hde-keyring — the two lines that make the password you type at the login screen open the keyring as well.
+#
+#   sudo cp packaging/pam/hde-keyring /usr/share/doc/...      `make install` puts it in $(PREFIX)/share/hde/pam/
+#
+# Add them to the PAM file of the display manager: /etc/pam.d/sddm on a machine using SDDM (HDE's own login
+# screen), /etc/pam.d/gdm-password for GDM, /etc/pam.d/lightdm for LightDM. The first line belongs with the other
+# "auth" lines, the second with the other "session" lines — PAM runs them in the order of the file, and
+# pam_gnome_keyring.so only keeps the password if it is asked after the password has been checked.
+#
+#   auth       optional   pam_gnome_keyring.so             remembers the password that was just checked
+#   session    optional   pam_gnome_keyring.so auto_start  starts the daemon and unlocks the keyring with it
+#
+# Without these lines HDE still has a keyring: hde-session starts gnome-keyring-daemon before anything else, so
+# the browser, Git and NetworkManager all find the one Secret Service and keep their passwords in it. It just
+# starts out locked, and the first program that needs a password has to ask for it again.
+#
+# The password itself never reaches the session: it goes from PAM to the daemon, and only the socket of the
+# unlocked keyring comes back (as GNOME_KEYRING_CONTROL / SSH_AUTH_SOCK, which hde-session exports).
+
+auth       optional     pam_gnome_keyring.so
+session    optional     pam_gnome_keyring.so auto_start

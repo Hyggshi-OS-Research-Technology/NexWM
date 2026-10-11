@@ -7,6 +7,7 @@
  *   panel_shadow=false  panel_rounded=false  panel_hover=true (shadow/corners: Floating style; compositing required)
  *   panel_show_menu / _desktop / _run / _launchers / _taskbar / _workspaces / _tray / _status / _notifications /
  *   _clock = true|false                 panel_taskbar_labels=true         panel_taskbar_group=auto|never|always
+ *   panel_taskbar_preview=true          panel_taskbar_preview_delay=400   (the thumbnail of a window, on hover)
  *   clock_24h=true  clock_show_date=true  clock_show_seconds=false
  *   panel_launchers=firefox-esr.desktop;org.gnome.Terminal.desktop;      (pinned apps, desktop file ids)
  *   panel_applets=cpu;mem;                 (extensions; each one is a group [applet:ID], see HdeApplet)
@@ -44,6 +45,8 @@ typedef struct {
              show_status, show_notifications, show_clock;
     gboolean taskbar_labels;        /* window titles next to the icons (FALSE: icons only) */
     int taskbar_group;              /* 0 never, 1 when space runs out, 2 always */
+    gboolean taskbar_preview;       /* resting the pointer on a button shows a small picture of the window(s) */
+    int taskbar_preview_delay;      /* how long the pointer rests before it appears, in milliseconds */
     gboolean clock_24h, clock_date, clock_seconds;
     char *menu_label;               /* text of the Start button ("" = icon only) */
     char *menu_icon;                /* "os" (logo of the system), "menu" (the ☰ sign), "hde", "none", an icon name or the

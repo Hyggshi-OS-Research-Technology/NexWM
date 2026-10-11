@@ -5,6 +5,7 @@
 #include "hde-settings.h"
 #include "hde-panel-config.h"
 #include "hde-osinfo.h"
+#include "hde-peek-core.h"           /* HDE_PEEK_DELAY_DEFAULT: the delay the taskbar preview starts with */
 #include "hde-theme.h"
 #include "hde-measure.h"
 #include "hde-ipc.h"
@@ -586,6 +587,8 @@ static gboolean panel_int_commit(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
+static guint preview_delay_timer;
+
 static void on_panel_int_scale(GtkRange *range, gpointer data)
 {
     guint *timer = data;
@@ -820,6 +823,15 @@ GtkWidget *page_panel_new(void)
     static const char *const grp_labels[] = { "Never", "When the taskbar is full", "Always", NULL };
     static const ComboKey grp = { "panel_taskbar_group", grp_ids };
     combo_row(card, &grp, grp_labels, "auto", "Group windows of the same app", "One button with a list instead of one button each");
+    switch_row(card, "panel_taskbar_preview", TRUE, "Preview of a window on hover",
+               "Resting the pointer on a taskbar button opens a small picture of the window (off: the title as a tooltip). "\
+               "On Wayland no program can read what another window shows, so there the icon and the title are shown "\
+               "instead of a picture");
+    GtkWidget *pd = scale_new(0, 1500, 100, cfg_get_int("panel_taskbar_preview_delay", HDE_PEEK_DELAY_DEFAULT), "ms");
+    g_object_set_data(G_OBJECT(pd), "hde-key", (gpointer)"panel_taskbar_preview_delay");
+    g_object_set_data(G_OBJECT(pd), "hde-title", (gpointer)"Preview after");
+    g_signal_connect(pd, "value-changed", G_CALLBACK(on_panel_int_scale), &preview_delay_timer);
+    gtk_container_add(GTK_CONTAINER(card), row_box("Preview after", "How long the pointer rests before it opens (0: at once)", pd));
     switch_row(card, "panel_show_workspaces", TRUE, "Workspaces", "Small pictures of the workspaces (X11)");
     switch_row(card, "panel_show_tray", TRUE, "System tray", "Icons of running apps (chat, updates, cloud storage, …)");
     switch_row(card, "panel_show_status", TRUE, "Status icons", "Network, Bluetooth, volume and battery");
