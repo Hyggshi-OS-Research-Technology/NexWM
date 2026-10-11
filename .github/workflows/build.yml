@@ -63,18 +63,25 @@ jobs:
       if: always() && matrix.os == 'ubuntu-22.04'
       run: |
         f=/tmp/hde-smoke/shot-16l-window-switcher.png
-        [ -f "$f" ] || { echo "no $f"; exit 0; }
-        wh=$(grep -o "switcher: [0-9]* window(s), [0-9]*x[0-9]*" /tmp/hde-smoke/session.log | tail -n 1 | sed 's/.* //')
-        xy=$(grep -o "switcher: [0-9]* window(s), [0-9]*x[0-9]* at [0-9]*,[0-9]*" /tmp/hde-smoke/session.log | tail -n 1 | sed 's/.* at //')
-        echo "crop ${wh:-600x200}+${xy:-300,250}"
-        convert "$f" -crop "${wh:-600x200}+${xy:-300,250}" +repage -resize 112x42! -colorspace Gray -depth 8 gray:/tmp/g1.raw
-        convert "$f" -resize 112x36! -colorspace Gray -depth 8 gray:/tmp/g2.raw
+        [ -f "$f" ] || { echo "::notice title=PIX-RECT::no $f"; exit 0; }
+        wh=$(grep -oE "switcher: [0-9]+ window.s., [0-9]+x[0-9]+" /tmp/hde-smoke/session.log | tail -n 1 | grep -oE "[0-9]+x[0-9]+$")
+        xy=$(grep -oE "switcher: [0-9]+ window.s., [0-9]+x[0-9]+ at [0-9]+,[0-9]+" /tmp/hde-smoke/session.log | tail -n 1 | grep -oE "[0-9]+,[0-9]+$")
+        echo "::notice title=PIX-RECT::$f ${wh:-?} at ${xy:-?}"
+        rect="${wh:-460x170}+${xy//,/+}"
+        convert "$f" -crop "$rect" +repage -resize 150x55! -colorspace Gray -depth 8 gray:/tmp/g1.raw
+        convert "$f" -crop "200x112+$(( ${xy%%,*} + 12 ))+$(( ${xy##*,} + 12 ))" +repage -resize 100x56! -colorspace Gray -depth 8 gray:/tmp/g2.raw
         b1=$(base64 -w0 /tmp/g1.raw)
         b2=$(base64 -w0 /tmp/g2.raw)
-        printf '::notice title=PIX-SWITCHER-1::%s\n' "${b1:0:3400}"
-        printf '::notice title=PIX-SWITCHER-2::%s\n' "${b1:3400}"
-        printf '::notice title=PIX-SCREEN-1::%s\n' "${b2:0:3400}"
-        printf '::notice title=PIX-SCREEN-2::%s\n' "${b2:3400}"
+        i=0
+        while [ $i -lt ${#b1} ]; do
+          printf '::notice title=PIX-POPUP-%d::%s\n' "$(( i / 3400 + 1 ))" "${b1:$i:3400}"
+          i=$(( i + 3400 ))
+        done
+        i=0
+        while [ $i -lt ${#b2} ]; do
+          printf '::notice title=PIX-THUMB-%d::%s\n' "$(( i / 3400 + 1 ))" "${b2:$i:3400}"
+          i=$(( i + 3400 ))
+        done
 
     - name: Try it in a window (scripts/test-nexde --check, a nested HDE session in Xephyr)
       if: always()

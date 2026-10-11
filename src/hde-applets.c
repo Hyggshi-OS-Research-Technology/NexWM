@@ -11,7 +11,7 @@ static gboolean debug_on;
 void hde_applets_set_debug(gboolean on) { debug_on = on; }
 
 /* ---------------------------------------------------------------- pinned apps */
-static void launch_id(const char *id)
+void hde_launch_app(const char *id)
 {
     GDesktopAppInfo *a = g_desktop_app_info_new(id);
     if (!a) { g_printerr("hde-panel: pinned app %s is not installed\n", id); return; }
@@ -29,7 +29,7 @@ static void launch_id(const char *id)
 static void on_launcher_clicked(GtkButton *b, gpointer d)
 {
     (void)d;
-    launch_id(g_object_get_data(G_OBJECT(b), "hde-id"));
+    hde_launch_app(g_object_get_data(G_OBJECT(b), "hde-id"));
 }
 
 static void unpin(GtkMenuItem *i, gpointer id) { (void)i; hde_cfg_list_remove("panel_launchers", id); }

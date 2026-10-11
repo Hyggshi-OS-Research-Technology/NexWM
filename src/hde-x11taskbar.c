@@ -9,9 +9,12 @@
 #define WNCK_I_KNOW_THIS_IS_UNSTABLE 1
 #include "hde-x11taskbar.h"
 
+#include "hde-applets.h"             /* hde_launch_app: start an application from its .desktop file */
+#include "hde-panel-config.h"        /* hde_cfg_list_*: the apps pinned to the panel */
 #include "hde-peek-core.h"
 #include "hde-peek.h"
 
+#include <gio/gdesktopappinfo.h>     /* GDesktopAppInfo: the .desktop file of the application (actions, class) */
 #include <libwnck/libwnck.h>
 #include "hde-wl.h"                  /* hde_main_monitor: the screen the taskbar has room on */
 #include <string.h>
@@ -421,6 +424,158 @@ static GtkWidget *window_item(Task *t)
     return it;
 }
 
+/* ---- the menu of the right button ----
+ * The name of the application first (it cannot be chosen: it says what the menu is about), then what the
+ * application itself offers — another window, the actions its .desktop file lists ("New private window" and the
+ * like), the files it was last used on —, then what can be done with it here (keep it on the panel, put it on
+ * another workspace, have it on all of them at once), and at the end the windows: bring one up, minimize them,
+ * close them. That is the order Windows 11 uses.
+ */
+
+/* The .desktop file of the application a window belongs to. X11 knows the class of a window (WM_CLASS), and a
+ * .desktop file may say which class its windows come up with (StartupWMClass); where it does not, the name of
+ * the file is what is left to go by ("org.gnome.gedit.desktop" -> "gedit"). NULL when nothing matches. */
+static char *desktop_id_for_class(const char *cls)
+{
+    if (!cls || !*cls) return NULL;
+    GList *all = g_app_info_get_all();
+    char *lower = g_ascii_strdown(cls, -1);
+    char *found = NULL;
+    for (GList *l = all; l && !found; l = l->next) {
+        if (!G_IS_DESKTOP_APP_INFO(l->data)) continue;
+        GDesktopAppInfo *a = l->data;
+        const char *id = g_app_info_get_id(G_APP_INFO(a));
+        if (!id || !g_str_has_suffix(id, ".desktop")) continue;
+        char *wm = g_desktop_app_info_get_string(a, "StartupWMClass");
+        if (wm && !g_ascii_strcasecmp(wm, cls)) found = g_strdup(id);
+        g_free(wm);
+        if (found) break;
+        char *base = g_path_get_basename(id);
+        char *dot = strrchr(base, '.');
+        if (dot) *dot = '\0';                          /* "org.gnome.gedit.desktop" -> "org.gnome.gedit" */
+        char *tail = strrchr(base, '.');                /* -> "gedit" */
+        if (!g_ascii_strcasecmp(tail ? tail + 1 : base, lower)) found = g_strdup(id);
+        g_free(base);
+    }
+    g_free(lower);
+    g_list_free_full(all, g_object_unref);
+    return found;
+}
+
+static void on_menu_new_window(GtkMenuItem *i, gpointer d)
+{
+    (void)d;
+    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
+    if (id) hde_launch_app(id);
+}
+
+/* one of the actions of the .desktop file: "New private window", "Compose new message", ... */
+static void on_menu_action(GtkMenuItem *i, gpointer d)
+{
+    (void)d;
+    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
+    const char *act = g_object_get_data(G_OBJECT(i), "hde-action");
+    if (!id || !act) return;
+    GDesktopAppInfo *a = g_desktop_app_info_new(id);
+    if (!a) return;
+    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
+    gdk_app_launch_context_set_timestamp(ctx, gtk_get_current_event_time());
+    g_desktop_app_info_launch_action(a, act, G_APP_LAUNCH_CONTEXT(ctx));
+    g_object_unref(ctx);
+    g_object_unref(a);
+}
+
+/* a file the application was last used on: opened again with it */
+static void on_menu_recent(GtkMenuItem *i, gpointer d)
+{
+    (void)d;
+    const char *id = g_object_get_data(G_OBJECT(i), "hde-id");
+    const char *uri = g_object_get_data(G_OBJECT(i), "hde-uri");
+    if (!id || !uri) return;
+    GDesktopAppInfo *a = g_desktop_app_info_new(id);
+    if (!a) return;
+    GList *files = g_list_append(NULL, g_file_new_for_uri(uri));
+    GdkAppLaunchContext *ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
+    gdk_app_launch_context_set_timestamp(ctx, gtk_get_current_event_time());
+    GError *e = NULL;
+    if (!g_app_info_launch(G_APP_INFO(a), files, G_APP_LAUNCH_CONTEXT(ctx), &e)) {
+        g_printerr("hde-panel: taskbar: cannot open %s: %s\n", uri, e ? e->message : "?");
+        g_clear_error(&e);
+    }
+    g_object_unref(ctx);
+    g_list_free_full(files, g_object_unref);
+    g_object_unref(a);
+}
+
+static void on_menu_pin(GtkMenuItem *i, gpointer d) { (void)i; hde_cfg_list_add("panel_launchers", d); }
+static void on_menu_unpin(GtkMenuItem *i, gpointer d) { (void)i; hde_cfg_list_remove("panel_launchers", d); }
+
+static void on_menu_workspace(GtkMenuItem *i, gpointer d)
+{
+    Group *g = d;
+    WnckWorkspace *ws = g_object_get_data(G_OBJECT(i), "hde-ws");       /* borrowed: libwnck keeps it */
+    if (!g || !ws) return;
+    for (guint k = 0; k < g->tasks->len; k++)
+        wnck_window_move_to_workspace(((Task *)g_ptr_array_index(g->tasks, k))->win, ws);
+}
+
+/* "always on visible workspace": the window stands on every one of them */
+static void on_menu_all_workspaces(GtkMenuItem *i, gpointer d)
+{
+    Group *g = d;
+    if (!g) return;
+    gboolean on = gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(i));
+    for (guint k = 0; k < g->tasks->len; k++) {
+        WnckWindow *w = ((Task *)g_ptr_array_index(g->tasks, k))->win;
+        if (on) wnck_window_pin(w);
+        else wnck_window_unpin(w);
+    }
+}
+
+static void on_menu_minimize_all(GtkMenuItem *i, gpointer d)
+{
+    (void)i;
+    Group *g = d;
+    for (guint k = 0; k < g->tasks->len; k++) wnck_window_minimize(((Task *)g_ptr_array_index(g->tasks, k))->win);
+}
+
+static void on_menu_restore_all(GtkMenuItem *i, gpointer d)
+{
+    (void)i;
+    Group *g = d;
+    for (guint k = 0; k < g->tasks->len; k++) task_activate(g_ptr_array_index(g->tasks, k));
+}
+
+/* one line of the menu, and a line in the log: tests/smoke.sh reads what the menu offered */
+static GtkWidget *menu_item(GtkMenuShell *m, const char *label, GCallback cb, gpointer d)
+{
+    GtkWidget *it = gtk_menu_item_new_with_mnemonic(label);
+    if (cb) g_signal_connect(it, "activate", cb, d);
+    gtk_menu_shell_append(m, it);
+    DBG("menu: %s", label);
+    return it;
+}
+
+/* the files this application was last used on (what Windows calls a jump list): the six most recent ones */
+static int menu_recent(GtkMenuShell *m, const char *id)
+{
+    GtkRecentManager *rm = gtk_recent_manager_get_default();
+    if (!rm) return 0;
+    GList *items = gtk_recent_manager_get_items(rm);
+    int n = 0;
+    for (GList *l = items; l && n < 6; l = l->next) {
+        GtkRecentInfo *info = l->data;
+        if (!gtk_recent_info_has_application(info, id)) continue;
+        if (!gtk_recent_info_exists(info)) continue;                 /* it was deleted in the meantime */
+        GtkWidget *it = menu_item(m, gtk_recent_info_get_display_name(info), G_CALLBACK(on_menu_recent), NULL);
+        g_object_set_data_full(G_OBJECT(it), "hde-id", g_strdup(id), g_free);
+        g_object_set_data_full(G_OBJECT(it), "hde-uri", g_strdup(gtk_recent_info_get_uri(info)), g_free);
+        n++;
+    }
+    g_list_free_full(items, (GDestroyNotify)gtk_recent_info_unref);
+    return n;
+}
+
 static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
 {
     Group *g = d;
@@ -429,13 +584,75 @@ static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
     if (e->button != 3) return FALSE;
     hde_peek_hide();
     GtkWidget *m = gtk_menu_new();
+    GtkMenuShell *sh = GTK_MENU_SHELL(m);
+    char *id = desktop_id_for_class(g->key);
+
+    /* the name of the application, which cannot be chosen */
+    GtkWidget *head = gtk_menu_item_new_with_label(g->name && *g->name ? g->name : "?");
+    gtk_widget_set_sensitive(head, FALSE);
+    gtk_menu_shell_append(sh, head);
+    gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
+    DBG("menu: %s (grouped: %s, desktop file: %s)", g->name ? g->name : "?",
+        g->tasks->len > 1 ? "yes" : "no", id ? id : "none");
+
+    gboolean any_app = FALSE;
+    if (id) {
+        GtkWidget *nw = menu_item(sh, "_New window", G_CALLBACK(on_menu_new_window), NULL);
+        g_object_set_data_full(G_OBJECT(nw), "hde-id", g_strdup(id), g_free);
+        any_app = TRUE;
+        GDesktopAppInfo *a = g_desktop_app_info_new(id);
+        if (a) {
+            const char *const *acts = g_desktop_app_info_list_actions(a);
+            for (int k = 0; acts && acts[k]; k++) {
+                GtkWidget *ai = menu_item(sh, g_desktop_app_info_get_action_name(a, acts[k]),
+                                          G_CALLBACK(on_menu_action), NULL);
+                g_object_set_data_full(G_OBJECT(ai), "hde-id", g_strdup(id), g_free);
+                g_object_set_data_full(G_OBJECT(ai), "hde-action", g_strdup(acts[k]), g_free);
+                any_app = TRUE;
+            }
+            g_object_unref(a);
+        }
+        if (menu_recent(sh, id) > 0) any_app = TRUE;
+    }
+    if (any_app) gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
+
+    if (id) {                                   /* keep it on the panel, or take it off again */
+        const char *label = hde_cfg_list_contains("panel_launchers", id) ? "Unpin from _Panel" : "_Pin to Panel";
+        menu_item(sh, label, G_CALLBACK(hde_cfg_list_contains("panel_launchers", id) ? on_menu_unpin
+                                                                                    : on_menu_pin), id);
+    }
+    if (scr && wnck_screen_get_workspace_count(scr) > 1) {
+        GtkWidget *sub = gtk_menu_new();
+        for (int k = 0; k < wnck_screen_get_workspace_count(scr); k++) {
+            WnckWorkspace *ws = wnck_screen_get_workspace(scr, k);
+            if (!ws) continue;
+            char *label = g_strdup_printf("Workspace _%d", k + 1);
+            GtkWidget *it = menu_item(GTK_MENU_SHELL(sub), label, G_CALLBACK(on_menu_workspace), g);
+            g_object_set_data(G_OBJECT(it), "hde-ws", ws);          /* borrowed: libwnck keeps it */
+            g_free(label);
+        }
+        GtkWidget *it = gtk_menu_item_new_with_mnemonic("Move to _Workspace");
+        gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), sub);
+        gtk_menu_shell_append(sh, it);
+        DBG("menu: Move to _Workspace");
+    }
+    gboolean on_all = g->tasks->len > 0;        /* is it on every workspace already? */
+    for (guint k = 0; k < g->tasks->len; k++)
+        if (!wnck_window_is_pinned(((Task *)g_ptr_array_index(g->tasks, k))->win)) on_all = FALSE;
+    GtkWidget *allws = gtk_check_menu_item_new_with_mnemonic("Always on _visible workspace");
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(allws), on_all);
+    g_signal_connect(allws, "toggled", G_CALLBACK(on_menu_all_workspaces), g);
+    gtk_menu_shell_append(sh, allws);
+    DBG("menu: Always on _visible workspace (%s)", on_all ? "on" : "off");
+    gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
+
     if (g->tasks->len > 1) {
         for (guint i = 0; i < g->tasks->len; i++)
-            gtk_menu_shell_append(GTK_MENU_SHELL(m), window_item(g_ptr_array_index(g->tasks, i)));
-        GtkWidget *it = gtk_menu_item_new_with_mnemonic("_Close all");
-        g_signal_connect(it, "activate", G_CALLBACK(on_menu_close_all), g);
-        gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
-        gtk_menu_shell_append(GTK_MENU_SHELL(m), it);
+            gtk_menu_shell_append(sh, window_item(g_ptr_array_index(g->tasks, i)));
+        gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
+        menu_item(sh, "Minimize _all", G_CALLBACK(on_menu_minimize_all), g);
+        menu_item(sh, "_Restore all", G_CALLBACK(on_menu_restore_all), g);
+        menu_item(sh, "_Close all", G_CALLBACK(on_menu_close_all), g);
     } else if (g->tasks->len == 1) {
         Task *t = g_ptr_array_index(g->tasks, 0);
         const struct { const char *label; GCallback cb; } items[] = {
@@ -443,12 +660,11 @@ static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
             { t->maximized ? "Unma_ximize" : "Ma_ximize", G_CALLBACK(on_menu_maximize) },
             { "_Close", G_CALLBACK(on_menu_close) } };
         for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
-            if (i == G_N_ELEMENTS(items) - 1) gtk_menu_shell_append(GTK_MENU_SHELL(m), gtk_separator_menu_item_new());
-            GtkWidget *it = gtk_menu_item_new_with_mnemonic(items[i].label);
-            g_signal_connect(it, "activate", items[i].cb, t);
-            gtk_menu_shell_append(GTK_MENU_SHELL(m), it);
+            if (i == G_N_ELEMENTS(items) - 1) gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
+            menu_item(sh, items[i].label, items[i].cb, t);
         }
     }
+    g_object_set_data_full(G_OBJECT(m), "hde-id", id, g_free);      /* the menu owns the id its items use */
     gtk_widget_show_all(m);
     gtk_menu_attach_to_widget(GTK_MENU(m), w, NULL);
     g_signal_connect(m, "selection-done", G_CALLBACK(gtk_widget_destroy), NULL);

@@ -1308,6 +1308,63 @@ fi
 check "... the switcher is closed again" grep -q "hde-panel: switcher: hidden" "$OUT/session.log"
 kill "$FSW" "$SSW" 2>/dev/null; wait "$FSW" "$SSW" 2>/dev/null
 
+# ---------- 6d4. the menu of a taskbar button: the application, the panel, the workspaces, the windows ----------
+# The right button on the button of a running application (src/hde-x11taskbar.c): the name of the application
+# first, then what it can start (a new window, the actions of its .desktop file, the files it was last used on),
+# then keeping it on the panel, putting it on another workspace, and at the end its windows. Every line the menu
+# offers is written into the log, so this is what is read here.
+"$B/hde-files" "$HOME" > "$OUT/files-menu.log" 2>&1 &
+FMN=$!
+sleep 3
+# shellcheck disable=SC2046  # pwidget: "CX CY X W"
+set -- $(pwidget task-1)
+if [ -n "${2:-}" ]; then
+    xdotool mousemove "$1" "$2" click 3; sleep 1.2
+    shot 16m-taskbar-menu
+    mline=$(grep "hde-panel: taskbar: menu: .*(grouped: " "$OUT/session.log" | tail -n 1)
+    if [ -n "$mline" ]; then
+        pass "right-clicking a taskbar button opens the menu of the application (${mline#*taskbar: })"
+    else
+        fail "right-clicking a taskbar button opens the menu of the application"
+        grep -E "hde-panel: taskbar: (menu|widget)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    if grep -q "hde-panel: taskbar: menu: _New window" "$OUT/session.log" &&
+       grep -q "hde-panel: taskbar: menu: _Pin to Panel" "$OUT/session.log"; then
+        pass "... it offers a new window of the application and to keep it on the panel"
+    else
+        fail "... it offers a new window of the application and to keep it on the panel"
+        grep -F "hde-panel: taskbar: menu" "$OUT/session.log" | tail -n 10 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    check "... and the workspace it stands on and its windows at the end of it" \
+          grep -q "hde-panel: taskbar: menu: Always on _visible workspace" "$OUT/session.log"
+    # "Pin to Panel" is chosen with its mnemonic (p): the menu holds the keyboard while it is open
+    pin0=$(nlog "hde-panel: pinned apps:")
+    xdotool key p; sleep 1.5
+    pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
+    if [ "$(nlog "hde-panel: pinned apps:")" -gt "$pin0" ] && echo "$pinned" | grep -q "hde-files"; then
+        pass "... and choosing it puts the application on the panel ($pinned)"
+    else
+        fail "... and choosing it puts the application on the panel ($pinned)"
+        grep -E "hde-panel: (taskbar: menu|pinned apps)" "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    xdotool mousemove "$1" "$2" click 3; sleep 1.2        # and off the panel again: the menu says "Unpin" now
+    xdotool key p; sleep 1.5
+    pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
+    if [ -n "$pinned" ] && ! echo "$pinned" | grep -q "hde-files"; then
+        pass "... and it can be taken off the panel again ($pinned)"
+    else
+        fail "... and it can be taken off the panel again ($pinned)"
+    fi
+    xdotool key Escape; sleep 0.5
+else
+    fail "right-clicking a taskbar button opens the menu of the application (no taskbar button to click)"
+    grep -F "hde-panel: widget task-" "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+fi
+kill "$FMN" 2>/dev/null; wait "$FMN" 2>/dev/null
+
 if command -v notify-send >/dev/null 2>&1; then
     notify-send -a "Smoke test" -i mail-unread "Two new messages" "For the Control Center test"
     notify-send -a "Calendar" -i x-office-calendar "Meeting at 15:00" "Room 2, with the HDE team"

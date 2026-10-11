@@ -7,6 +7,8 @@
 
 #include <gtk/gtk.h>
 
+/* Start an application from its .desktop id (what the pinned apps, the taskbar's menu and the Start menu share). */
+void       hde_launch_app(const char *desktop_id);
 GtkWidget *hde_launchers_new(void);
 /* rebuild the buttons for these desktop file ids (icon_size: pixels) */
 void       hde_launchers_update(GtkWidget *box, char **ids, int icon_size);
