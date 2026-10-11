@@ -1078,6 +1078,72 @@ Compiled the macro and ran the resulting string through `sh -n` (it is a shell c
 matters); `make check-unit`, `sh tests/arch-test.sh --deps`, and `hde-settings --deps runtime` on a fake os-release
 of each of the four families.
 
+## The Fedora smoke test: the F-keys that arrive with Alt held, and processes that are not running (fix 26)
+
+Nine checks of `tests/smoke.sh` failed on the `Fedora (dnf, full desktop)` job and nowhere else — the same ones fix 21
+could only describe (there: "the brightness code itself works on Fedora, so the key path is what differs", and "they
+now wait for the event and print what is still running"). Both halves have a cause now.
+
+### F6 / F7 / F8: xdotool sends them as Alt+F6
+
+`hde-hotkeys` grabs F6, F7 and F8 **with no modifiers** (`bindings[]` in `src/hde-hotkeys.c`), the way a keyboard
+sends them. What arrived at the X server in that container was something else. The test runs with `HDE_DEBUG`, so
+`hde-hotkeys` prints every key it sees, and that is what the results of the run showed:
+
+```
+INFO:   hde-hotkeys: raw key press code=64 super=0 down=0 other=0 dev=3 src=5
+INFO:   hde-hotkeys: raw key press code=72 super=0 down=0 other=0 dev=3 src=5
+INFO:   hde-hotkeys: raw key release code=64 super=0 down=0 other=0 dev=3 src=5
+INFO:   hde-hotkeys: raw key release code=72 super=0 down=0 other=0 dev=3 src=5
+```
+
+64 is `Alt_L`, 72 is `F6`: the key arrived as **Alt+F6**, so a grab for "F6 with no modifiers" never fired and the
+brightness and Project actions never ran. Nothing said a word about it either — the reason `keys_reason` prints (fix
+21) is only written when a *grab* is refused by another program, and here the grab was HDE's own; the key simply went
+to nobody (F7 and F8 the same way, with 73 and 74).
+
+The Alt comes from xdotool, not from HDE: asked for a keysym, xdotool asks the X server for its keycode and then
+checks what that keycode produces *in the keyboard group of the moment*; when it is not the keysym it was asked for,
+it presses a modifier to get there (jordansissel/xdotool#481, #484 — the same bug sends a `Tab` along with the arrow
+keys). On the Xvfb of an Ubuntu runner the group is the one F6 sits in; on Fedora's it is not. A real keyboard is not
+affected: it sends the keycode with no modifiers whatever the group is, which is why nothing about HDE had to change.
+
+* `tests/smoke.sh` and `tests/display-test.sh` send the F-keys as **keycodes** (`K_F1=67 … K_F8=74`), which xdotool
+  passes through as they are. Every X server numbers F1..F10 as 67..76 (evdev), so the keycode is both portable and
+  exactly what a keyboard sends. The other keys the test sends are untouched: plain `Print` reaches HDE on all three
+  systems (those checks pass there), and the media keys run where PulseAudio is.
+
+### "crashed panel is restarted" / "logout stops ...": the processes that are not running
+
+```
+INFO:   still running: 4171 [hde-panel] <defunct>
+INFO:   still running: 4209 [hde-panel] <defunct>
+INFO:   still running: 5950 /__w/NexWM/NexWM/build/hde-panel
+```
+
+`pgrep -x hde-panel` answers for zombies as well, so `stopped()` spent its 15 s waiting for a program that had
+already ended, and the restart check sent SIGSEGV to a zombie and then waited for a new process in vain. Seven of
+them were in the table — 4 panels and 3 hotkeys — and not one of them belongs to the session under test:
+`hde-session` logs a line every time it starts a component, and the session log of that run has exactly one
+`starting panel: ...`, for the panel that is still running at the end. They are the orphans of the session the
+**Fedora test** runs before the smoke test in the same job (`tests/fedora-test.sh --full`, with its Wayland session
+inside labwc): labwc double-forks what it starts, so those processes are nobody's children any more, and the PID 1 of
+a container does not reap what is left of them — `tests/wayland-test.sh` already knows this and counts only
+processes that are really running.
+
+* `tests/smoke.sh`: `live_pid` (the first process of that name that is running) and `running` read the state letter
+  of `/proc/PID/stat` and skip the `Z` ones. Used by the startup checks, by the crash check — which now kills the
+  panel that is running and waits for *that* one to be replaced — and by `stopped()` at logout.
+* One line in the results says how many such entries were there to begin with, so the next run that sees them does
+  not have to find out what they are.
+
+### Tests
+
+`sh -n` on both scripts. The helpers were run here against a real zombie (a child process that had ended and was not
+reaped) and against a live process: no pid for the zombie alone, the live pid when both are in the table. The Fedora
+job of the next CI run is the test that counts: nine FAILs should come back as nine PASSes, and the Ubuntu, Debian
+and Arch jobs keep theirs.
+
 ### A note on this checkout
 
 The sandbox was rebuilt while this was being written: a fresh clone, HEAD back at the base commit `cecf2a9`, and the
