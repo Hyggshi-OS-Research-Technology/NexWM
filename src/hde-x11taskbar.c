@@ -273,10 +273,21 @@ static GdkPixbuf *peek_grab(gpointer handle, gpointer data)
     WnckWindow *w = handle;
     if (!w || wnck_window_is_minimized(w)) return NULL;
     int x = 0, y = 0, ww = 0, wh = 0;
-    wnck_window_get_geometry(w, &x, &y, &ww, &wh);
+    /* The window as the application draws it, not as the window manager frames it: wnck_window_get_geometry()
+     * hands out the frame — the window plus the title bar and the borders the window manager puts around it —
+     * and a picture of that is a picture of the decorations, with what the window really shows pushed down and
+     * to the right inside it and cut off at the bottom. This is the client window, in root coordinates, which
+     * is what a thumbnail of a window has to be. */
+    wnck_window_get_client_window_geometry(w, &x, &y, &ww, &wh);
     GdkWindow *root = gdk_get_default_root_window();
     if (!root || ww < 16 || wh < 16) return NULL;
     int sw = gdk_window_get_width(root), sh = gdk_window_get_height(root);
+    if (debug_on) {                  /* what was read, and what the frame around it is: for the log */
+        int fx = 0, fy = 0, fw = 0, fh = 0;
+        wnck_window_get_geometry(w, &fx, &fy, &fw, &fh);
+        DBG("picture of %s: the window is %dx%d at %d,%d (its frame %dx%d at %d,%d)",
+            wnck_window_get_name(w), ww, wh, x, y, fw, fh, fx, fy);
+    }
     /* a window that hangs off the edge of the screen (or is under another one, or on another workspace):
      * what the screen shows there is not the window, so there is no picture of it */
     if (x < 0 || y < 0 || x + ww > sw || y + wh > sh) return NULL;

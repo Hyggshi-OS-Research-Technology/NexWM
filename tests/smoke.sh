@@ -1286,6 +1286,18 @@ else
     grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
         | tee -a "$OUT/results.txt"
 fi
+# what each picture is a picture of: the window as the application draws it, which sits inside the frame the
+# window manager puts around it. Reading the frame instead gives a picture of the decorations, with the window
+# pushed down and to the right inside it and cut off at the bottom.
+# shellcheck disable=SC2046  # "window W H X Y  frame W H X Y"
+set -- $(grep -F "hde-panel: taskbar: picture of " "$OUT/session.log" | tail -n 1 |
+         sed -n 's/.*the window is \([0-9]*\)x\([0-9]*\) at \([0-9-]*\),\([0-9-]*\) (its frame \([0-9]*\)x\([0-9]*\) at \([0-9-]*\),\([0-9-]*\)).*/\1 \2 \3 \4 \5 \6 \7 \8/p')
+if [ "$#" -eq 8 ] && [ "$1" -le "$5" ] && [ "$2" -le "$6" ] && [ "$3" -ge "$7" ] && [ "$4" -ge "$8" ]; then
+    pass "... and every picture is of the window itself, not of the frame around it (window ${1}x${2} at ${3},${4}, the frame ${5}x${6} at ${7},${8})"
+else
+    fail "... and every picture is of the window itself, not of the frame around it (${*:-no 'picture of' line})"
+    grep -F "hde-panel: taskbar: picture of " "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+fi
 shot 16l-window-switcher
 tab0=$(nlog "hde-panel: switcher: Tab")
 xdotool key Tab; sleep 0.8                   # on to the next one, and once more: back to the window that was
