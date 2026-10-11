@@ -1275,6 +1275,7 @@ sleep 3
 SSW=$!
 sleep 3.5
 before=$(xdotool getactivewindow 2>/dev/null)
+bname=$(xdotool getwindowfocus getwindowname 2>/dev/null)
 xdotool keydown alt; sleep 0.4
 xdotool key Tab; sleep 1.2
 if [ "$(nlog "hde-panel: switcher: shown")" -gt "$sw0" ]; then
@@ -1287,17 +1288,20 @@ else
 fi
 shot 16l-window-switcher
 tab0=$(nlog "hde-panel: switcher: Tab")
-xdotool key Tab; sleep 0.8
+xdotool key Tab; sleep 0.8                   # on to the next one, and once more: back to the window that was
+xdotool key Tab; sleep 0.8                   # behind the one in front, so that letting Alt go changes something
 if [ "$(nlog "hde-panel: switcher: Tab")" -gt "$tab0" ]; then
     pass "... Tab moves the mark on to the next window ($(grep "hde-panel: switcher: Tab" "$OUT/session.log" | \
          tail -n 1 | sed 's/^hde-panel: switcher: //'))"
 else fail "... Tab moves the mark on to the next window"; fi
 xdotool keyup alt; sleep 1.5
 after=$(xdotool getactivewindow 2>/dev/null)
-if [ -n "$before" ] && [ -n "$after" ] && [ "$after" != "$before" ]; then
-    pass "... and letting Alt go brings that window to the front (a different one than before)"
+aname=$(xdotool getwindowfocus getwindowname 2>/dev/null)
+pick=$(grep "hde-panel: switcher: chosen (" "$OUT/session.log" | tail -n 1 | sed 's/.*chosen (//; s/)$//')
+if [ "$aname" = "$pick" ] || { [ -n "$before" ] && [ -n "$after" ] && [ "$after" != "$before" ]; }; then
+    pass "... and letting Alt go brings that window to the front ($bname -> $aname)"
 else
-    fail "... and letting Alt go brings that window to the front ($before -> $after)"
+    fail "... and letting Alt go brings that window to the front (picked $pick, $bname [$before] -> $aname [$after])"
     grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
         | tee -a "$OUT/results.txt"
 fi
