@@ -151,7 +151,12 @@ static Group *group_new(const char *key, const char *name)
 
 static void group_free(Group *g)
 {
-    if (g->button) gtk_widget_destroy(g->button);
+    if (g->button) {
+        /* the pointer may have been on the button when the window it stood for closed: GDK can still have a
+         * crossing event for it in flight, and that event must not reach a group that is about to be freed */
+        g_signal_handlers_disconnect_by_data(g->button, g);
+        gtk_widget_destroy(g->button);
+    }
     g_ptr_array_free(g->tasks, TRUE);
     g_free(g->key);
     g_free(g->name);
@@ -196,7 +201,20 @@ static int room_for_buttons(void)
     return MAX(1, (w * 55 / 100) / (show_labels ? BTN_WITH_LABEL : BTN_ICON_ONLY));
 }
 
+/* where a button stands in the bar now (-1: not in it) */
+static int button_index(GtkWidget *b)
+{
+    if (!bar || !b) return -1;
+    GList *ch = gtk_container_get_children(GTK_CONTAINER(bar));
+    int i = g_list_index(ch, b);
+    g_list_free(ch);
+    return i;
+}
+
 /* ---------------------------------------------------------------- the buttons */
+
+static void log_button(Group *g);                /* where a button is, for the GUI tests (HDE_DEBUG) */
+static void on_button_map(GtkWidget *w, gpointer d);
 
 static void task_activate(Task *t)
 {
@@ -268,7 +286,7 @@ static gboolean on_enter(GtkWidget *w, GdkEventCrossing *e, gpointer d)
 {
     (void)e;
     Group *g = d;
-    if (!preview_on || !g || !g->tasks->len) return FALSE;
+    if (!preview_on || !g || g->button != w || !g->tasks->len) return FALSE;
     guint n = g->tasks->len;
     HdePeekItem *items = g_new0(HdePeekItem, n);
     for (guint i = 0; i < n; i++) {
@@ -293,8 +311,8 @@ static gboolean on_leave(GtkWidget *w, GdkEventCrossing *e, gpointer d)
 
 static void on_clicked(GtkButton *b, gpointer d)
 {
-    (void)b;
     Group *g = d;
+    if (!g || g->button != GTK_WIDGET(b)) return;
     hde_peek_hide();
     group_activate(g);
 }
@@ -351,7 +369,7 @@ static GtkWidget *window_item(Task *t)
 static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
 {
     Group *g = d;
-    if (e->type != GDK_BUTTON_PRESS) return FALSE;
+    if (!g || g->button != w || e->type != GDK_BUTTON_PRESS) return FALSE;
     if (e->button == 2) { group_close_all(g); return TRUE; }
     if (e->button != 3) return FALSE;
     hde_peek_hide();
@@ -499,37 +517,38 @@ static gboolean refresh_now(gpointer d)
         made += g->grouped ? 1 : (int)g->tasks->len;
     }
 
-    /* the same groups as before, in the same order: only their titles, icons and states have to follow */
-    gboolean same = g_list_length(fresh) == g_list_length(groups);
-    if (same) {
-        GList *a = fresh, *b = groups;
-        for (; a && b; a = a->next, b = b->next) {
-            Group *na = a->data, *ob = b->data;
-            if (g_strcmp0(na->key, ob->key) || na->tasks->len != ob->tasks->len ||
-                na->grouped != ob->grouped) { same = FALSE; break; }
+    /* An application that was there before keeps its button: only the applications that are gone lose theirs,
+     * and only the new ones get one made. (Throwing every button away and building them again each time a window
+     * opens would make the bar flicker, and would lose the pointer's place on it.) */
+    GList *old = groups;
+    groups = NULL;
+    for (GList *l = fresh; l; l = l->next) {
+        Group *ng = l->data;
+        Group *og = NULL;
+        for (GList *k = old; k; k = k->next)
+            if (!g_strcmp0(((Group *)k->data)->key, ng->key)) { og = k->data; break; }
+        if (og) {
+            old = g_list_remove(old, og);
+            g_free(og->name);
+            og->name = g_strdup(ng->name);
+            og->grouped = ng->grouped;
+            g_ptr_array_set_size(og->tasks, 0);
+            for (guint i = 0; i < ng->tasks->len; i++) g_ptr_array_add(og->tasks, g_ptr_array_index(ng->tasks, i));
+            group_free(ng);                      /* it never had a button: only the group itself goes */
+            groups = g_list_append(groups, og);
+        } else {
+            ng->button = group_button(ng);
+            gtk_box_pack_start(GTK_BOX(bar), ng->button, FALSE, FALSE, 0);
+            groups = g_list_append(groups, ng);
         }
     }
-    if (same) {
-        GList *a = fresh, *b = groups;
-        for (; a && b; a = a->next, b = b->next) {
-            Group *na = a->data, *ob = b->data;
-            g_ptr_array_set_size(ob->tasks, 0);
-            for (guint i = 0; i < na->tasks->len; i++) g_ptr_array_add(ob->tasks, g_ptr_array_index(na->tasks, i));
-            ob->grouped = na->grouped;
-        }
-        groups_free(fresh);                       /* their buttons are NULL: only the groups themselves go */
-    } else {
-        groups_free(groups);
-        groups = fresh;
-        fresh = NULL;
-        for (GList *l = groups; l; l = l->next) {
-            Group *g = l->data;
-            g->button = group_button(g);
-            gtk_box_pack_start(GTK_BOX(bar), g->button, FALSE, FALSE, 0);
-        }
-    }
-    for (GList *l = groups; l; l = l->next) {
+    g_list_free(fresh);                          /* the groups themselves are either kept or freed above */
+    groups_free(old);                            /* the applications whose last window has closed */
+
+    int i = 0;
+    for (GList *l = groups; l; l = l->next, i++) {
         Group *g = l->data;
+        if (button_index(g->button) != i) gtk_box_reorder_child(GTK_BOX(bar), g->button, i);
         group_update(g);
         log_button(g);
     }
