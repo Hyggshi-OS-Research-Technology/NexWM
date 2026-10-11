@@ -457,8 +457,10 @@ static void log_button(Group *g)
     if (!debug_on || !g->button || !gtk_widget_get_window(g->button)) return;
     if (gtk_widget_get_allocated_width(g->button) < 2) {
         /* nothing to point at yet: GTK has not given the button its size (and so not its place) */
-        DBG("button %s: no size yet (visible %d, mapped %d)", g->name, gtk_widget_get_visible(g->button),
-            gtk_widget_get_mapped(g->button));
+        DBG("button %s: no size yet (visible %d, mapped %d; the bar is %dx%d, visible %d, mapped %d)", g->name,
+            gtk_widget_get_visible(g->button), gtk_widget_get_mapped(g->button),
+            bar ? gtk_widget_get_allocated_width(bar) : -1, bar ? gtk_widget_get_allocated_height(bar) : -1,
+            bar ? gtk_widget_get_visible(bar) : -1, bar ? gtk_widget_get_mapped(bar) : -1);
         return;
     }
     GtkWidget *top = gtk_widget_get_toplevel(g->button);
