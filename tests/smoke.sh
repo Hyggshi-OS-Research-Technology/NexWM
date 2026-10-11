@@ -450,10 +450,21 @@ else
 fi
 
 # ---------- 4. notifications ----------
+# how often has the panel been started? it logs its taskbar once every time it comes up, so more than one line
+# means hde-session had to start it again (it died): the notification daemon goes with it, and so does the list of
+# the notifications it had. Printed here to tell a broken daemon from a panel that is simply not there.
+grep -c "hde-panel: taskbar: " "$OUT/session.log" | sed 's/^/INFO:   the panel started /;s/$/ time(s)/' \
+    | tee -a "$OUT/results.txt"
 if command -v gdbus >/dev/null 2>&1; then
     info=$(gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
            --method org.freedesktop.Notifications.GetServerInformation 2>&1)
-    case "$info" in *"HDE Notifications"*) pass "notification daemon answers on D-Bus" ;; *) fail "notification daemon answers on D-Bus ($info)" ;; esac
+    if printf '%s' "$info" | grep -q "HDE Notifications"; then pass "notification daemon answers on D-Bus"
+    else
+        fail "notification daemon answers on D-Bus ($info)"
+        grep -E "hde-session: .*(panel|restart|died|exit|signal)" "$OUT/session.log" | tail -n 8 \
+            | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        tail -n 15 "$OUT/session.log" | sed 's/^/INFO:   last log: /' | tee -a "$OUT/results.txt"
+    fi
 fi
 if command -v notify-send >/dev/null 2>&1; then
     n0=$(popups)
@@ -1216,6 +1227,34 @@ pwidget() {
 pclick() { set -- $(pwidget "$1"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
 cclog() { grep "hde-panel: control center: $1" "$OUT/session.log" | tail -n 1; }
 xdotool mousemove 640 400
+
+# ---------- 6d2. the taskbar preview (Windows 11 style): resting the pointer on a button opens a picture ----------
+# of the window. tests/peek-test.c checks the sums behind it (how big a picture is drawn, how many in a row, where
+# the popup goes) without a screen; here the pointer really rests on a button and the preview really opens.
+"$B/hde-files" "$HOME" > "$OUT/files-peek.log" 2>&1 &
+FPK=$!
+sleep 3
+# shellcheck disable=SC2046  # pwidget: "CX CY X W"
+set -- $(pwidget task-1)
+if [ -n "${2:-}" ]; then
+    pass "the taskbar has a button for the open window (task-1 at $3, $4 px wide)"
+    peek0=$(nlog "hde-panel: peek: shown")
+    xdotool mousemove "$1" "$2"; sleep 1.5
+    shot 16k-taskbar-preview
+    if [ "$(nlog "hde-panel: peek: shown")" -gt "$peek0" ]; then
+        pass "resting the pointer on a taskbar button opens the preview ($(grep "hde-panel: peek: .* window(s)" \
+             "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: peek: //'))"
+    else
+        fail "resting the pointer on a taskbar button opens the preview ($(tail -n 3 "$OUT/session.log" | tr '\n' ';'))"
+    fi
+    hid0=$(nlog "hde-panel: peek: hidden")
+    xdotool mousemove 640 400; sleep 1
+    if [ "$(nlog "hde-panel: peek: hidden")" -gt "$hid0" ]; then pass "... and moving the pointer away closes it"
+    else fail "... and moving the pointer away closes it"; fi
+else
+    fail "the taskbar has a button for the open window (no 'widget task-1' in the log)"
+fi
+kill "$FPK" 2>/dev/null; wait "$FPK" 2>/dev/null
 if command -v notify-send >/dev/null 2>&1; then
     notify-send -a "Smoke test" -i mail-unread "Two new messages" "For the Control Center test"
     notify-send -a "Calendar" -i x-office-calendar "Meeting at 15:00" "Room 2, with the HDE team"

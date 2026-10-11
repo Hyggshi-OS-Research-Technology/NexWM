@@ -403,8 +403,32 @@ static GtkWidget *group_button(Group *g)
     g_signal_connect(b, "button-press-event", G_CALLBACK(on_button_press), g);
     g_signal_connect(b, "enter-notify-event", G_CALLBACK(on_enter), g);
     g_signal_connect(b, "leave-notify-event", G_CALLBACK(on_leave), g);
+    g_signal_connect_after(b, "map", G_CALLBACK(on_button_map), g);
     gtk_widget_show_all(b);
     return b;
+}
+
+/* HDE_DEBUG: where a button is on the screen, as "hde-panel: widget task-1 (Firefox) at X,Y WxH" — the GUI test
+ * (tests/smoke.sh: pwidget task-1) rests the pointer on it to open the preview. */
+static void log_button(Group *g)
+{
+    if (!debug_on || !g->button || !gtk_widget_get_mapped(g->button)) return;
+    GtkWidget *top = gtk_widget_get_toplevel(g->button);
+    GdkWindow *gw = gtk_widget_get_window(top);
+    int ox = 0, oy = 0, x = 0, y = 0;
+    if (!gw || !gtk_widget_translate_coordinates(g->button, top, 0, 0, &x, &y)) return;
+    gdk_window_get_origin(gw, &ox, &oy);
+    Task *t = g->tasks->len ? g_ptr_array_index(g->tasks, 0) : NULL;
+    g_printerr("hde-panel: widget task-%d (%s) at %d,%d %dx%d\n", g_list_index(groups, g) + 1,
+               g->tasks->len > 1 ? g->name : (t && t->title ? t->title : "?"),
+               ox + x, oy + y, gtk_widget_get_allocated_width(g->button),
+               gtk_widget_get_allocated_height(g->button));
+}
+
+static void on_button_map(GtkWidget *w, gpointer d)
+{
+    (void)w;
+    log_button((Group *)d);
 }
 
 static void group_update(Group *g)
@@ -504,7 +528,11 @@ static gboolean refresh_now(gpointer d)
             gtk_box_pack_start(GTK_BOX(bar), g->button, FALSE, FALSE, 0);
         }
     }
-    for (GList *l = groups; l; l = l->next) group_update((Group *)l->data);
+    for (GList *l = groups; l; l = l->next) {
+        Group *g = l->data;
+        group_update(g);
+        log_button(g);
+    }
     return G_SOURCE_REMOVE;
 }
 

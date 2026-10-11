@@ -369,9 +369,11 @@ void hde_peek_hide(void)
 {
     if (show_id) { g_source_remove(show_id); show_id = 0; }
     if (hide_id) { g_source_remove(hide_id); hide_id = 0; }
-    if (win && gtk_widget_get_visible(win)) gtk_widget_hide(win);
+    gboolean was = win != NULL && gtk_widget_get_visible(win);
+    if (was) gtk_widget_hide(win);
     mute_tip(NULL);
     items_free();
+    if (was && debug_on()) g_printerr("hde-panel: peek: hidden\n");
 }
 
 gboolean hde_peek_visible(void)
