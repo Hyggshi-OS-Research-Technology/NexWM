@@ -914,3 +914,245 @@ exist, the installer now reports that explicitly rather than passing a stale pac
 
 On that same run, Fedora's build and Fedora-specific session test succeeded; its full smoke test was still running at the
 last status check. No Fedora-only source or dependency change was indicated by those results.
+
+## Idle to sleep, USB drives and the keyring (fix 23)
+
+The three things a desktop is expected to do on its own were left to something else: the screen when nobody is at the
+computer went to `xfce4-power-manager`, a USB stick was mounted by whatever GVfs the file manager happened to have, and
+there was no keyring at all — so the Wi-Fi password, the browser's and Git's were asked for again at every login. This
+is HDE's own answer to all three, in the same style as the rest of HDE: one small program each, no new dependency that
+the distribution does not already ship, and usable on the Wayland session as well as on the X11 one.
+
+### Added
+
+* **`hde-idle`** — `src/hde-idle.c`, with the rules in `src/hde-idle-core.h/.c`. Four times, set in
+  *Settings → Power → Screen and sleep*: when the screen turns off, when the session locks, and when the computer
+  sleeps — the last one separately for battery and while plugged in (1 minute to 2 hours, or never). The order is
+  always screen off, then locked, then asleep, and the computer locks before it sleeps even while a video is holding
+  the screen on. A player that asks to stay awake (`org.freedesktop.ScreenSaver.Inhibit`, which is what Firefox, mpv
+  and VLC send) holds off the screen and the lock but **not** the sleep; a program that asks not to be suspended
+  (`org.freedesktop.PowerManagement.Inhibit`, a presentation, a long download) holds off the sleep only. Both are
+  dropped when the program that asked disappears, so a crashed player cannot keep the screen on forever.
+  On X11 the time away comes from the X Screen Saver extension and the screen is turned off with DPMS; on Wayland it
+  asks the compositor (`ext-idle-notify-v1`) — `WAYLAND_DISPLAY` is tried first and X11 is the fallback.
+  `hde-idle --check` is what `hde-settings` asks: when the time away cannot be measured here (no extension, a
+  compositor without the protocol), Settings hands the screen back to the power manager that is already installed and
+  says so on the page, so a setting that nothing follows can no longer leave the screen on.
+* **`hde-automount`** and the **Drives** list — `src/hde-udisks.h/.c` (the talk with **udisks2** over D-Bus, written
+  here: no GVfs volume monitor, no libudisks2), `src/hde-disks.h/.c` (which drives are shown, which of them are
+  mounted, which can be taken out), `src/hde-automount.c` (mounting when a drive is plugged in) and
+  `hde-files/src/disks.c` (the list in the sidebar of Hyggshi Files). Plugging in a stick mounts it and says so with a
+  notification whose *Open* runs Files on it; in Files it is in the sidebar, and the button beside it safely removes
+  it ("It is now safe to remove the drive."). Loop devices, the system disk, encrypted volumes that need a password
+  and an optical drive with no disc in it are not shown; the same list works from a script (`hde-automount --list`).
+* **`hde-keyring`** — `src/hde-keyring.c`, with the environment parsing in `src/hde-keyring-core.h/.c`.
+  `gnome-keyring-daemon` is started by `hde-session` **before** anything that could ask for a password, on both the
+  X11 and the Wayland session, and the socket it answers on (`GNOME_KEYRING_CONTROL`, `SSH_AUTH_SOCK`) is exported
+  into the D-Bus activation environment. With the two lines of `packaging/pam/hde-keyring` in the PAM file of the
+  display manager, the password typed at the login screen opens the keyring as well and nothing asks a second time;
+  without them the keyring is there but locked, which is why the note is printed by `make install` and explained in
+  the README.
+* **Unit tests** for all three — `tests/idle-test.c`, `tests/disks-test.c`, `tests/keyring-test.c`, in `UNIT_TESTS`
+  and run by `make check-unit`. This is the shape the other new pieces of HDE follow from now on: the decisions live
+  in a `src/hde-*-core.c` that the program and the test both use, so they can be checked without a display, a drive
+  or a keyring.
+
+### Fixed
+
+* **The committed object file.** `hde-core/notifications/notifications.o` was in the repository (a build result, not
+  source). It is `git rm`'d, `hde-core/**/*.o|*.a|*.so` is in `.gitignore`, and `make check-tree` — now part of
+  `make check` — fails when any built file has been committed again.
+* ***Settings → Power*** mixed the three times into one `screen_timeout` with only 0/5/10/15/30/60 to choose from, and
+  asked for `xfce4-power-manager` when it was not installed. It now has the four combos above (1 minute to 2 hours),
+  the *Lock before sleeping* switch, and only mentions a power manager when this machine actually has one. An old
+  `screen_timeout` is read as the new times the first time, so nobody's setting is lost.
+* **Build and packaging:** the Wayland session needs `wayland-scanner` and `libwayland-dev` (the CI job did not have
+  them), and `udisks2` / `gnome-keyring` / `libxext` are in the dependency lists (`packaging/arch/deps.sh`,
+  `packaging/fedora/deps.sh`, `hde-settings --deps`).
+
+### Tests
+
+`make check-unit` runs the 148 checks of the three new tests (67 idle, 48 disks, 33 keyring); `make check-tree`
+verifies that no build result is tracked. The programs themselves are compiled but not linked in this sandbox (there
+is no GLib, GIO, X11-ext or Wayland header here), so the first real compile and link is the CI job — that is what the
+dependency additions above are for.
+
+## Arch has no package called `wlroots` any more (fix 24)
+
+The Arch job stopped before it built anything:
+
+```
+packaging/arch/deps.sh: none of 'wlroots|wlroots0.18|wlroots0.17' is available in the pacman sync databases
+Error: Process completed with exit code 1.
+```
+
+`pacman -Syu` had run fine, so nothing was wrong with the repositories or with HDE: the three names
+`packaging/arch/deps.sh` had written down for wlroots were simply not the names pacman has today. Arch **dropped the
+plain `wlroots`** package in 2025 in favour of numbered flavours, and it retires the oldest of them as a new series
+comes out — the repositories now carry `wlroots0.18`, `wlroots0.19` and `wlroots0.20`, and `wlroots0.17` is gone too.
+The comment at the top of the script still said the opposite ("Arch has one rolling repository, no wlroots0.18 next to
+wlroots"), which is how the list could sit there untouched while the distribution moved.
+
+* `packaging/arch/deps.sh`: the entry is now `wlroots0.21|wlroots0.20|wlroots0.19|wlroots0.18|wlroots0.17|wlroots` —
+  newest first, the plain name last for the Arch-based systems that kept one (Artix, Manjaro).
+* More to the point, the list no longer has to be kept up to date by hand: when **none** of the names of an entry is in
+  the databases, `pick` asks pacman which numbered flavours it does have (`pacman -Ssq '^wlroots[0-9]'`, newest first)
+  and takes that. wlroots 0.21 will not break the job when it lands. It only ever runs where the script used to give up,
+  so a name that is simply wrong still fails, with the same message as before.
+* `packaging/fedora/deps.sh` had the same shape of list (`wlroots-devel|wlroots0.21-devel|…`) and would have gone stale
+  the same way; it asks dnf the same question now.
+* `tests/arch-test.sh --deps` checks it with a stand-in pacman that has moved on to a series the list does not name
+  (`wlroots0.22`): the test fails if `deps.sh` goes back to trusting the names it wrote down.
+
+### What was behind it
+
+Fixing the names only uncovered the next wall, two lines further down the same step:
+
+```
+pacman -Q gtk3 libwnck3 gtk-layer-shell wlroots | sed 's/^/::notice::Arch package: /'
+```
+
+`pacman -Q` exits 1 when a name it is asked about is not installed, and the step runs under GitHub's
+`bash -eo pipefail`, so asking for `wlroots` — the very name Arch dropped — failed the job *after* `deps.sh` had
+succeeded. The install step now finds the installed wlroots by pattern (`pacman -Qsq '^wlroots'`), and the Build step
+asks the `wlroots-0.21 … wlroots` ladder one name at a time instead of handing `pkg-config` a list it exits non-zero
+on as soon as one entry is unknown. Arch answered `Arch wlroots: wlroots-0.20 0.20.2`: NexWM's compositor builds
+against the current series again, which is what that job exists to check.
+
+**How it was read.** The job log is a download nobody could open from here, but GitHub turns every `::notice::` and
+`::warning::` a step prints into an annotation of its check run, and those are readable
+(`gh api repos/<repo>/check-runs/<id>/annotations`). That is how the three `Arch package:` lines above gave the answer
+away. Every line `packaging/arch/deps.sh` writes is now shown again as one, so the next install failure names its
+package in the Checks tab instead of hiding at the bottom of a log.
+
+With the packages there, the Arch build compiled everything for the first time in a while and pointed at two leftovers
+of the Settings rewrite: `combo_with` and `cb_int_combo` in `src/hde-settings.c`, the helpers of the old
+`screen_timeout` combo, were defined but not used any more. The same scan found two more in `src/hde-automount.c` —
+`on_unmounted` and `on_ejected`, written and never called, which is why nothing ever said *It is now safe to remove
+the drive.* Both `--unmount` and `--eject` go through them now, and the eject button of the Files sidebar sends the
+same sentence as a notification instead of logging it.
+
+### Tests
+
+`sh tests/arch-test.sh --deps` (13 checks, all of them without pacman or Arch) and the Arch job of CI, which is the
+one that really runs `packaging/arch/deps.sh` against today's repositories — it is green, and the compiler warnings
+of the whole build are down to five, all of them in files this work never touched (`hde-panel.c`, `hde-cmd`).
+
+## Qt before GTK in the lock fallback, and `libpam0g` where it belongs (fix 25)
+
+`hde-lock` was built here without PAM, which is not a problem for anybody but this machine: `libpam0g-dev` is a
+*build* dependency (it carries `security/pam_appl.h`), and at run time hde-lock needs nothing but `libpam0g`, which
+every Debian and Ubuntu has because `login`, `su` and `sudo` use it. CI installs the `-dev` package, and
+`packaging/hyggshi-os/build-nexwm.sh` installs it to build and takes it out again when the ISO is closed. So the
+`NOTE: libpam0g-dev ... not found` of a local `make` says something about this checkout and nothing about a release.
+
+* `libpam0g` is now in the **runtime** lists (`packaging/arch/deps.sh` and `packaging/fedora/deps.sh` as `pam`,
+  `src/hde-distro.h` for `hde-settings --deps runtime`, translated per family), kept apart from the `libpam0g-dev` /
+  `pam-devel` of the build lists. `hde-settings --deps runtime` prints `libpam0g` on Debian and `pam` on Fedora, Arch
+  and openSUSE.
+* The install instructions and the Arch table say which of the two is which.
+
+**The fallback order of `HDE_SH_LOCK` (`src/hde-commands.h`) is now Qt first, then GTK.** HDE's own `hde-lock` is
+still first of all and is what runs on both of HDE's sessions; the list below it is what happens on a machine where
+HDE's lock screen is not built or cannot lock that session, and there it is the Qt locker that belongs in front:
+
+* a machine with a Qt locker has a Qt desktop behind it (KDE Plasma, LXQt), and a locker drawn in Qt is the one that
+  fits what that session already looks like — the same thought behind `QT_QPA_PLATFORMTHEME=gtk3` in `hde-session`,
+  which makes Qt applications follow the GTK theme;
+* the GTK lockers in the list belong to other desktops' *sessions* (Xfce, MATE, Cinnamon), which are not running when
+  this is an HDE session, so they are the longer shot.
+
+Two entries were added, in this order: `qdbus6 org.freedesktop.ScreenSaver /ScreenSaver Lock` (Plasma 6 / Qt 6) and
+`qdbus org.freedesktop.ScreenSaver /ScreenSaver Lock` (Plasma 5 / Qt 5) — `qdbus6` first, because a `qdbus` left over
+from an upgrade answers for the wrong Qt. They come before `swaylock` (Wayland, no toolkit) and before `gtklock`,
+`light-locker-command`, `xfce4-` / `mate-` / `cinnamon-screensaver-command`.
+
+One thing worth knowing about them: the bus name they call, `org.freedesktop.ScreenSaver`, is the one `hde-idle` takes
+for its inhibitors while an HDE session runs, and hde-idle has no `Lock` to answer, so on an HDE session the call
+fails and the chain moves on — which is the right thing, since `hde-lock` is tried first and this entry is only
+reached when it could not lock.
+
+### Tests
+
+Compiled the macro and ran the resulting string through `sh -n` (it is a shell chain, so that is the check that
+matters); `make check-unit`, `sh tests/arch-test.sh --deps`, and `hde-settings --deps runtime` on a fake os-release
+of each of the four families.
+
+## The Fedora smoke test: the F-keys that arrive with Alt held, and processes that are not running (fix 26)
+
+Nine checks of `tests/smoke.sh` failed on the `Fedora (dnf, full desktop)` job and nowhere else — the same ones fix 21
+could only describe (there: "the brightness code itself works on Fedora, so the key path is what differs", and "they
+now wait for the event and print what is still running"). Both halves have a cause now.
+
+### F6 / F7 / F8: xdotool sends them as Alt+F6
+
+`hde-hotkeys` grabs F6, F7 and F8 **with no modifiers** (`bindings[]` in `src/hde-hotkeys.c`), the way a keyboard
+sends them. What arrived at the X server in that container was something else. The test runs with `HDE_DEBUG`, so
+`hde-hotkeys` prints every key it sees, and that is what the results of the run showed:
+
+```
+INFO:   hde-hotkeys: raw key press code=64 super=0 down=0 other=0 dev=3 src=5
+INFO:   hde-hotkeys: raw key press code=72 super=0 down=0 other=0 dev=3 src=5
+INFO:   hde-hotkeys: raw key release code=64 super=0 down=0 other=0 dev=3 src=5
+INFO:   hde-hotkeys: raw key release code=72 super=0 down=0 other=0 dev=3 src=5
+```
+
+64 is `Alt_L`, 72 is `F6`: the key arrived as **Alt+F6**, so a grab for "F6 with no modifiers" never fired and the
+brightness and Project actions never ran. Nothing said a word about it either — the reason `keys_reason` prints (fix
+21) is only written when a *grab* is refused by another program, and here the grab was HDE's own; the key simply went
+to nobody (F7 and F8 the same way, with 73 and 74).
+
+The Alt comes from xdotool, not from HDE: asked for a keysym, xdotool asks the X server for its keycode and then
+checks what that keycode produces *in the keyboard group of the moment*; when it is not the keysym it was asked for,
+it presses a modifier to get there (jordansissel/xdotool#481, #484 — the same bug sends a `Tab` along with the arrow
+keys). On the Xvfb of an Ubuntu runner the group is the one F6 sits in; on Fedora's it is not. A real keyboard is not
+affected: it sends the keycode with no modifiers whatever the group is, which is why nothing about HDE had to change.
+
+* `tests/smoke.sh` and `tests/display-test.sh` send the F-keys as **keycodes** (`K_F1=67 … K_F8=74`), which xdotool
+  passes through as they are. Every X server numbers F1..F10 as 67..76 (evdev), so the keycode is both portable and
+  exactly what a keyboard sends. The other keys the test sends are untouched: plain `Print` reaches HDE on all three
+  systems (those checks pass there), and the media keys run where PulseAudio is.
+
+### "crashed panel is restarted" / "logout stops ...": the processes that are not running
+
+```
+INFO:   still running: 4171 [hde-panel] <defunct>
+INFO:   still running: 4209 [hde-panel] <defunct>
+INFO:   still running: 5950 /__w/NexWM/NexWM/build/hde-panel
+```
+
+`pgrep -x hde-panel` answers for zombies as well, so `stopped()` spent its 15 s waiting for a program that had
+already ended, and the restart check sent SIGSEGV to a zombie and then waited for a new process in vain. Seven of
+them were in the table — 4 panels and 3 hotkeys — and not one of them belongs to the session under test:
+`hde-session` logs a line every time it starts a component, and the session log of that run has exactly one
+`starting panel: ...`, for the panel that is still running at the end. They are the orphans of the session the
+**Fedora test** runs before the smoke test in the same job (`tests/fedora-test.sh --full`, with its Wayland session
+inside labwc): labwc double-forks what it starts, so those processes are nobody's children any more, and the PID 1 of
+a container does not reap what is left of them — `tests/wayland-test.sh` already knows this and counts only
+processes that are really running.
+
+* `tests/smoke.sh`: `live_pid` (the first process of that name that is running) and `running` read the state letter
+  of `/proc/PID/stat` and skip the `Z` ones. Used by the startup checks, by the crash check — which now kills the
+  panel that is running and waits for *that* one to be replaced — and by `stopped()` at logout.
+* One line in the results says how many such entries were there to begin with, so the next run that sees them does
+  not have to find out what they are.
+
+### Tests
+
+`sh -n` on both scripts. The helpers were run here against a real zombie (a child process that had ended and was not
+reaped) and against a live process: no pid for the zombie alone, the live pid when both are in the table.
+
+The run that followed (`22bb414`) is the proof. The Fedora job, which had ended with those 9 failures every time
+before, came back **241 passed, 0 failed**: the six F6/F7/F8 checks, "crashed panel is restarted by hde-session (after
+1200 ms)", "logout stops hde-panel", "logout stops hde-hotkeys", and the three Project checks that only run once F8
+really opens the window. Its results carry the line the new INFO writes, and it says what was guessed here: "7
+process(es) of an earlier session are zombies in this container". The others kept their passes: Ubuntu 24.04 runs the
+same script through `make check` (F1/F2/F3 included, they are the volume keys), Arch runs it too, and
+`screens (ubuntu-24.04)` runs `tests/display-test.sh` — the same F6/F7/F8 on a real X server with two screens.
+
+### A note on this checkout
+
+The sandbox was rebuilt while this was being written: a fresh clone, HEAD back at the base commit `cecf2a9`, and the
+six commits of this work only on the remote. `git fetch` + `git reset --mixed origin/arena/4b57e028-nexwm` put the
+branch back on `3d961e4` without touching a single file (`check-tree`, all five unit tests and `arch-test --deps`
+agree), and the two changes above are what follows it.

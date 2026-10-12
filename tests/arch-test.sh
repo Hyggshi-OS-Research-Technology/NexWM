@@ -61,6 +61,7 @@ if [ -x "$DEPS" ] || [ -f "$DEPS" ]; then
 printf '%s\n' "$*" >> "$PACMAN_LOG"
 case "$1" in
     -Syu|-Si|-S) exit 0 ;;
+    -Ssq) exit 0 ;;
     -Qq) exit 1 ;;
     *) echo "unexpected pacman arguments: $*" >&2; exit 2 ;;
 esac
@@ -80,6 +81,36 @@ EOF
         pass "deps.sh fully syncs a fresh container before installing packages"
     else
         fail "deps.sh fully syncs a fresh container before installing packages ($(tr '\n' '|' < "$tmp/output"))"
+    fi
+    rm -rf "$tmp"
+    # Arch keeps only numbered wlroots packages and retires the oldest as a new series comes out, so the names
+    # written in packaging/arch/deps.sh are not the ones pacman has for ever (the plain 'wlroots' is already
+    # gone). Simulate an Arch that has moved on to a series the list does not name yet: deps.sh must ask pacman
+    # which one it has instead of stopping with "none of ... is available".
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/hde-arch-wlroots.XXXXXX")
+    mkdir -p "$tmp/bin"
+    cat > "$tmp/bin/pacman" <<'EOF'
+#!/bin/sh
+case "$1" in
+    -Syu|-S) exit 0 ;;
+    -Qq) exit 1 ;;
+    -Si) case "$2" in wlroots*) exit 1 ;; *) exit 0 ;; esac ;;
+    -Ssq) case "$2" in '^wlroots[0-9]') echo wlroots0.22 ;; esac; exit 0 ;;
+    *) echo "unexpected pacman arguments: $*" >&2; exit 2 ;;
+esac
+EOF
+    cat > "$tmp/bin/ls" <<'EOF'
+#!/bin/sh
+[ "$*" = "-A /var/lib/pacman/sync" ] && { echo extra.db; exit 0; }
+exec /bin/ls "$@"
+EOF
+    printf '#!/bin/sh\nexec "$@"\n' > "$tmp/bin/sudo"
+    chmod +x "$tmp/bin/pacman" "$tmp/bin/ls" "$tmp/bin/sudo"
+    if PATH="$tmp/bin:$PATH" sh "$DEPS" install build >"$tmp/output" 2>&1 &&
+       grep -q "pacman -S --needed --noconfirm .* wlroots0\.22" "$tmp/output"; then
+        pass "deps.sh takes the wlroots pacman really has when none of the names it lists is there any more"
+    else
+        fail "deps.sh takes the wlroots pacman really has when none of the names it lists is there any more ($(tr '\n' '|' < "$tmp/output"))"
     fi
     rm -rf "$tmp"
     if sh "$DEPS" list nonsense 2>&1 | grep -q "unknown group"; then pass "an unknown group is said, not ignored"

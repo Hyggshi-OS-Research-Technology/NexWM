@@ -31,8 +31,11 @@ enum {
     HDE_CMD_CONTROL_CENTER = 10, /* open / close the Control Center (Super+A), argument = page (hde-control.h) */
     HDE_CMD_BATTERY = 11,        /* open / close the battery panel */
     HDE_CMD_NOTIFICATIONS = 12,  /* the Control Center at its notifications (Super+N) */
-    HDE_CMD_PLACE = 13           /* measure the screen again and put the panel back in place (Settings > Panel > Screen,
+    HDE_CMD_PLACE = 13,          /* measure the screen again and put the panel back in place (Settings > Panel > Screen,
                                   * hde-panel --measure) */
+    HDE_CMD_SWITCH = 14,         /* Alt+Tab: the window switcher (src/hde-switch.c). argument +1 with Tab, -1 with
+                                  * Shift+Tab: open it, or pick the next window while it is open */
+    HDE_CMD_SWITCH_DONE = 15     /* Alt was let go: bring the window that is picked up (argument 1: leave it) */
 };
 
 static int hde_ipc_ignore_x_error(Display *d, XErrorEvent *e) { (void)d; (void)e; return 0; }

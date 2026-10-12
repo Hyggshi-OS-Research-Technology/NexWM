@@ -189,7 +189,22 @@ sidebar() {
     else fail "Settings: no black frame around the sidebar ($1: $nb black point(s);${cols%;})"; fi
 }
 ncorr() { grep -c "^hde-panel: measured: the panel window is at" "$OUT/session.log"; }
-running() { pgrep -x "$1" >/dev/null 2>&1; }       # by process name (never matches the shell doing the check)
+# The state letter of a process (/proc/PID/stat: the letter after the name in brackets); Z is a zombie, a process
+# that has stopped running but whose exit status nobody has collected.
+proc_state() { sed -n 's/^.*) \([A-Za-z]\).*/\1/p' "/proc/$1/stat" 2>/dev/null; }
+# First process of that name that is really running (printed), or nothing: the <defunct> entries do not count. In a
+# container nothing reaps the orphans of a session that ended (labwc double-forks what it starts, so its children
+# are nobody's children; tests/wayland-test.sh says the same), and every one of them stays in the process table —
+# the jobs that run another session before this test (the Fedora job runs tests/fedora-test.sh first) would
+# otherwise be told "still running" about a program that is long gone.
+live_pid() { for lp in $(pgrep -x "$1" 2>/dev/null); do [ "$(proc_state "$lp")" != Z ] && { printf '%s\n' "$lp"; return 0; }; done; return 1; }
+running() { live_pid "$1" >/dev/null 2>&1; }       # by process name (never matches the shell doing the check)
+# The F-keys are sent as keycodes, not as names: xdotool asks the X server for the keycode of "F6" and then checks
+# what that keycode produces *in the keyboard group of the moment*; when it is not the keysym it was asked for it
+# presses an extra Alt_L first (jordansissel/xdotool#481, #484). HDE grabs "F6 with no modifiers", so a key that
+# arrives as Alt+F6 never reaches it — on Fedora that is exactly what happens, while the same command on Ubuntu
+# sends F6 alone. The keycodes of the F-keys are the same on every X server (evdev: F1..F10 are 67..76).
+K_F1=67; K_F2=68; K_F3=69; K_F6=72; K_F7=73; K_F8=74
 SETTINGS_INI="$XDG_CONFIG_HOME/hde/settings.ini"
 
 if command -v pulseaudio >/dev/null 2>&1; then
@@ -235,6 +250,18 @@ shot 01-session
 
 # ---------- 1. session startup ----------
 for p in hde-panel hde-desktop hde-hotkeys hde-xsettings; do check "$p is running" running $p; done
+# What is in the process table but is not running: the entries of an earlier session that nobody reaped (the jobs
+# that test another session first, like the Fedora job with tests/fedora-test.sh). They are harmless, and without
+# this line a later "still running: 4171 [hde-panel] <defunct>" looks like a program that would not stop.
+zombie_leftovers() {
+    zl=0
+    for zp in hde-panel hde-hotkeys hde-desktop hde-xsettings; do
+        for zq in $(pgrep -x "$zp" 2>/dev/null); do [ "$(proc_state "$zq")" = Z ] && zl=$((zl + 1)); done
+    done
+    echo "$zl"
+}
+zl=$(zombie_leftovers)
+[ "$zl" -gt 0 ] && echo "INFO: $zl process(es) of an earlier session are zombies in this container (they are not running; nothing here reaps the orphans of labwc, and they do not count as running below)" | tee -a "$OUT/results.txt"
 WM=$(sed -n 's/^hde-session: starting window manager \([A-Za-z0-9]*\).*/\1/p' "$OUT/session.log" | head -n1)
 if [ -n "$WM" ]; then pass "window manager started: $WM"; else fail "window manager started"; fi
 if command -v metacity >/dev/null 2>&1; then
@@ -344,20 +371,20 @@ if pactl info >/dev/null 2>&1; then
     vol() { pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -n1 | tr -d %; }
     mut() { pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'; }
     pactl set-sink-volume @DEFAULT_SINK@ 50%; pactl set-sink-mute @DEFAULT_SINK@ 0
-    xdotool key F3; sleep 0.7; shot 04-osd-volume; sleep 0.6
+    xdotool key $K_F3; sleep 0.7; shot 04-osd-volume; sleep 0.6
     v=$(vol); if [ "$v" = 55 ]; then pass "F3 raises the volume (50% -> $v%)"; else fail "F3 raises the volume (50% -> $v%)"; fi
-    xdotool key F2; sleep 1.3
+    xdotool key $K_F2; sleep 1.3
     v=$(vol); if [ "$v" = 50 ]; then pass "F2 lowers the volume (55% -> $v%)"; else fail "F2 lowers the volume (55% -> $v%)"; fi
-    xdotool key F1; sleep 1.3
+    xdotool key $K_F1; sleep 1.3
     if [ "$(mut)" = yes ]; then pass "F1 mutes"; else fail "F1 mutes (mute=$(mut))"; fi
-    xdotool key F1; sleep 1.3
+    xdotool key $K_F1; sleep 1.3
     if [ "$(mut)" = no ]; then pass "F1 unmutes"; else fail "F1 unmutes (mute=$(mut))"; fi
-    pactl set-sink-volume @DEFAULT_SINK@ 98%; xdotool key F3; sleep 1.3
+    pactl set-sink-volume @DEFAULT_SINK@ 98%; xdotool key $K_F3; sleep 1.3
     v=$(vol); if [ "$v" = 100 ]; then pass "F3 stops at 100% (98% -> $v%)"; else fail "F3 stops at 100% (98% -> $v%)"; fi
     xdotool key XF86AudioLowerVolume; sleep 1.3
     v=$(vol); if [ "$v" = 95 ]; then pass "XF86AudioLowerVolume media key works"; else fail "XF86AudioLowerVolume (100% -> $v%)"; fi
     echo "fkeys_sound=false" >> "$SETTINGS_INI"; sleep 2.5
-    pactl set-sink-volume @DEFAULT_SINK@ 50%; xdotool key F3; sleep 1.3
+    pactl set-sink-volume @DEFAULT_SINK@ 50%; xdotool key $K_F3; sleep 1.3
     v=$(vol); if [ "$v" = 50 ]; then pass "fkeys_sound=false gives F1-F3 back to applications"; else fail "fkeys_sound=false (F3 still changed volume to $v%)"; fi
     sed -i '/^fkeys_sound=/d' "$SETTINGS_INI"; sleep 2
     # what labwc's key bindings run in the Wayland session, here on X11
@@ -388,7 +415,7 @@ keys_reason() {
 }
 case "$binfo" in
     "software dimming"*)
-        xdotool key F6
+        xdotool key $K_F6
         if wait_osd; then pass "F6 shows the brightness OSD"; else fail "F6 shows the brightness OSD"; keys_reason; fi
         shot 04b-osd-brightness
         sleep 1
@@ -396,16 +423,16 @@ case "$binfo" in
         else fail "F6 dims the screen to 95% (_HDE_BRIGHTNESS=$(soft))"; keys_reason; fi
         if ! grep -q "hde-panel: command 6 (time [0-9]*, arg 95)" "$OUT/session.log"; then keys_reason; fi
         check "... the panel got the level for its OSD" grep -q "hde-panel: command 6 (time [0-9]*, arg 95)" "$OUT/session.log"
-        xdotool key F7; sleep 1.5
+        xdotool key $K_F7; sleep 1.5
         if [ "$(soft)" = 100 ]; then pass "F7 brightens it again (100%)"; else fail "F7 brightens it again (_HDE_BRIGHTNESS=$(soft))"; keys_reason; fi
         echo "fkeys_display=false" >> "$SETTINGS_INI"; sleep 2.5
-        xdotool key F6; sleep 1.5
+        xdotool key $K_F6; sleep 1.5
         if [ "$(soft)" = 100 ]; then pass "fkeys_display=false gives F6/F7/F8 back to applications"
         else fail "fkeys_display=false gives F6/F7/F8 back to applications (F6 still dimmed: $(soft))"; keys_reason; fi
         sed -i '/^fkeys_display=/d' "$SETTINGS_INI"; sleep 2 ;;
     *)
         n0=$(grep -c "from HDE: Brightness" "$OUT/session.log")
-        xdotool key F6; sleep 2
+        xdotool key $K_F6; sleep 2
         n1=$(grep -c "from HDE: Brightness" "$OUT/session.log")
         if [ "$n1" -gt "$n0" ]; then pass "F6 where nothing can change the brightness: a notification says why (no error dialog)"
         else fail "F6 where nothing can change the brightness: a notification says why"; keys_reason; fi
@@ -429,14 +456,14 @@ case "$binfo" in
         "$B/hde-settings" --brightness 100 > /dev/null 2>&1; sleep 3
         check "100% is written down too (no dimming at the next login)" grep -q "^soft_brightness=100" "$STATE_INI" ;;
 esac
-xdotool key F8
+xdotool key $K_F8
 i=0; while ! xdotool search --onlyvisible --name "^Project$" >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 if xdotool search --onlyvisible --name "^Project$" >/dev/null 2>&1; then
     pass "F8 opens the Project window (PC screen only / Duplicate / Extend / Second screen only)"
     sleep 1
     shot 04c-project-one-screen
     check "... it knows there is only one screen" grep -q "hde-settings: project: shown: 1 screen(s)" "$OUT/session.log"
-    xdotool key F8; sleep 1.5
+    xdotool key $K_F8; sleep 1.5
     nwin=$(xdotool search --onlyvisible --name "^Project$" 2>/dev/null | wc -l)
     if [ "$nwin" = 1 ] && grep -q "hde-settings: project: already open: next layout" "$OUT/session.log"; then
         pass "F8 again does not open a second Project window (it tells the open one to move on)"
@@ -450,10 +477,21 @@ else
 fi
 
 # ---------- 4. notifications ----------
+# how often has the panel been started? it logs its taskbar once every time it comes up, so more than one line
+# means hde-session had to start it again (it died): the notification daemon goes with it, and so does the list of
+# the notifications it had. Printed here to tell a broken daemon from a panel that is simply not there.
+grep -c "hde-panel: taskbar: X11 (libwnck)" "$OUT/session.log" | sed 's/^/INFO:   the panel started /;s/$/ time(s)/' \
+    | tee -a "$OUT/results.txt"
 if command -v gdbus >/dev/null 2>&1; then
     info=$(gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
            --method org.freedesktop.Notifications.GetServerInformation 2>&1)
-    case "$info" in *"HDE Notifications"*) pass "notification daemon answers on D-Bus" ;; *) fail "notification daemon answers on D-Bus ($info)" ;; esac
+    if printf '%s' "$info" | grep -q "HDE Notifications"; then pass "notification daemon answers on D-Bus"
+    else
+        fail "notification daemon answers on D-Bus ($info)"
+        grep -E "hde-session: .*(panel|restart|died|exit|signal)" "$OUT/session.log" | tail -n 8 \
+            | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        tail -n 15 "$OUT/session.log" | sed 's/^/INFO:   last log: /' | tee -a "$OUT/results.txt"
+    fi
 fi
 if command -v notify-send >/dev/null 2>&1; then
     n0=$(popups)
@@ -781,7 +819,7 @@ click_widget() { set -- $(widget "$1" "$2"); [ -n "${2:-}" ] && xdotool mousemov
 tp_window() { xdotool search --onlyvisible --name "^Touchpad scrolling$" >/dev/null 2>&1; }
 # notification popups (bottom right) could be over a button: wait until they are gone (at most 10 s)
 wait_popups() { i=0; while [ "$(popups)" -gt "$BASE_POPUPS" ] && [ $i -lt 40 ]; do sleep 0.25; i=$((i + 1)); done; }
-XS_PID=$(pgrep -x hde-xsettings | head -n 1)
+XS_PID=$(live_pid hde-xsettings)
 if command -v xinput >/dev/null 2>&1 && [ -n "$XS_PID" ] &&
    xinput set-prop --type=int --format=8 "$FAKE_TP" "$TAPP" 0 2>/dev/null &&
    xinput set-prop --type=int --format=8 "$FAKE_TP" "$NAT" 0 2>/dev/null; then
@@ -927,7 +965,7 @@ if grep -q "^Desktop memory now: " "$OUT/about.txt" && grep -q " hde-panel " "$O
 else fail "hde-settings --about lists the memory of the desktop's programs"; fi
 sed -n '/^Desktop memory now/,$p' "$OUT/about.txt" | sed 's/^/INFO: /' >> "$OUT/results.txt"
 # where the desktop's memory goes (largest mappings, PSS in kB; "[anon]" = the heap)
-dp=$(pgrep -x hde-desktop | head -n 1)
+dp=$(live_pid hde-desktop)
 if [ -n "$dp" ] && [ -r "/proc/$dp/smaps" ]; then
     awk '/^[0-9a-f]+-[0-9a-f]+ /{n=$6; if (n == "") n="[anon]"} /^Pss:/{p[n]+=$2} END{for (k in p) printf "%d %s\n", p[k], k}' \
         "/proc/$dp/smaps" | sort -rn | head -n 8 | sed 's/^/INFO: hde-desktop PSS kB: /' >> "$OUT/results.txt"
@@ -1216,6 +1254,189 @@ pwidget() {
 pclick() { set -- $(pwidget "$1"); [ -n "${2:-}" ] && xdotool mousemove "$1" "$2" click 1; }
 cclog() { grep "hde-panel: control center: $1" "$OUT/session.log" | tail -n 1; }
 xdotool mousemove 640 400
+
+# ---------- 6d2. the taskbar preview (Windows 11 style): resting the pointer on a button opens a picture ----------
+# of the window. tests/peek-test.c checks the sums behind it (how big a picture is drawn, how many in a row, where
+# the popup goes) without a screen; here the pointer really rests on a button and the preview really opens.
+"$B/hde-files" "$HOME" > "$OUT/files-peek.log" 2>&1 &
+FPK=$!
+sleep 3
+# shellcheck disable=SC2046  # pwidget: "CX CY X W"
+set -- $(pwidget task-1)
+if [ -n "${2:-}" ]; then
+    pass "the taskbar has a button for the open window (task-1 at $3, $4 px wide)"
+    peek0=$(nlog "hde-panel: peek: shown")
+    xdotool mousemove "$1" "$2"; sleep 1.5
+    shot 16k-taskbar-preview
+    if [ "$(nlog "hde-panel: peek: shown")" -gt "$peek0" ]; then
+        pass "resting the pointer on a taskbar button opens the preview ($(grep "hde-panel: peek: .* window(s)" \
+             "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: peek: //'))"
+    else
+        fail "resting the pointer on a taskbar button opens the preview ($(tail -n 3 "$OUT/session.log" | tr '\n' ';'))"
+        grep -F "hde-panel: widget task-" "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        grep -F "hde-panel: peek: " "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+        grep -F "hde-panel: taskbar: " "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    fi
+    hid0=$(nlog "hde-panel: peek: hidden")
+    xdotool mousemove 640 400; sleep 1
+    if [ "$(nlog "hde-panel: peek: hidden")" -gt "$hid0" ]; then pass "... and moving the pointer away closes it"
+    else fail "... and moving the pointer away closes it"; fi
+else
+    fail "the taskbar has a button for the open window (no 'widget task-1' in the log)"
+    # what the taskbar did (HDE_DEBUG): which windows it saw, and which buttons it made for them
+    grep -F "hde-panel: taskbar: " "$OUT/session.log" | tail -n 12 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    grep -F "hde-panel: widget " "$OUT/session.log" | tail -n 5 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+    tail -n 5 "$OUT/files-peek.log" 2>/dev/null | sed 's/^/INFO:   hde-files: /' | tee -a "$OUT/results.txt"
+fi
+kill "$FPK" 2>/dev/null; wait "$FPK" 2>/dev/null
+
+# ---------- 6d3. the window switcher (Alt+Tab): a picture of every window, the picked one comes to the front -----
+# hde-hotkeys holds Alt+Tab (it takes the keyboard while Alt is down) and tells the panel over its command channel
+# which way to move and when Alt went up; src/hde-switch.c is the window in the middle of the screen, and
+# tests/switch-test.c checks the sums behind it without a screen.
+sw0=$(nlog "hde-panel: switcher: shown")
+"$B/hde-files" "$HOME" > "$OUT/files-sw.log" 2>&1 &
+FSW=$!
+sleep 3
+"$B/hde-settings" display > "$OUT/settings-sw.log" 2>&1 &
+SSW=$!
+sleep 3.5
+before=$(xdotool getactivewindow 2>/dev/null)
+bname=$(xdotool getwindowfocus getwindowname 2>/dev/null)
+xdotool keydown alt; sleep 0.4
+xdotool key Tab; sleep 1.2
+if [ "$(nlog "hde-panel: switcher: shown")" -gt "$sw0" ]; then
+    pass "Alt+Tab opens the window switcher ($(grep "hde-panel: switcher: .* picked" "$OUT/session.log" | tail -n 1 \
+         | sed 's/^hde-panel: switcher: //'))"
+else
+    fail "Alt+Tab opens the window switcher ($(tail -n 3 "$OUT/session.log" | tr '\\n' ';'))"
+    grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+        | tee -a "$OUT/results.txt"
+fi
+# what each picture is a picture of: the window as the application draws it, which sits inside the frame the
+# window manager puts around it. Reading the frame instead gives a picture of the decorations, with the window
+# pushed down and to the right inside it and cut off at the bottom.
+# shellcheck disable=SC2046  # "window W H X Y  frame W H X Y"
+set -- $(grep -F "hde-panel: taskbar: picture of " "$OUT/session.log" | tail -n 1 |
+         sed -n 's/.*the window is \([0-9]*\)x\([0-9]*\) at \([0-9-]*\),\([0-9-]*\) (its frame \([0-9]*\)x\([0-9]*\) at \([0-9-]*\),\([0-9-]*\)).*/\1 \2 \3 \4 \5 \6 \7 \8/p')
+if [ "$#" -eq 8 ] && [ "$1" -le "$5" ] && [ "$2" -le "$6" ] && [ "$3" -ge "$7" ] && [ "$4" -ge "$8" ]; then
+    pass "... and every picture is of the window itself, not of the frame around it (window ${1}x${2} at ${3},${4}, the frame ${5}x${6} at ${7},${8})"
+else
+    fail "... and every picture is of the window itself, not of the frame around it (${*:-no 'picture of' line})"
+    grep -F "hde-panel: taskbar: picture of " "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+fi
+shot 16l-window-switcher
+tab0=$(nlog "hde-panel: switcher: Tab")
+xdotool key Tab; sleep 0.8                   # on to the next one, and once more: back to the window that was
+xdotool key Tab; sleep 0.8                   # behind the one in front, so that letting Alt go changes something
+if [ "$(nlog "hde-panel: switcher: Tab")" -gt "$tab0" ]; then
+    pass "... Tab moves the mark on to the next window ($(grep "hde-panel: switcher: Tab" "$OUT/session.log" | \
+         tail -n 1 | sed 's/^hde-panel: switcher: //'))"
+else fail "... Tab moves the mark on to the next window"; fi
+xdotool keyup alt; sleep 1.5
+after=$(xdotool getactivewindow 2>/dev/null)
+aname=$(xdotool getwindowfocus getwindowname 2>/dev/null)
+pick=$(grep "hde-panel: switcher: chosen (" "$OUT/session.log" | tail -n 1 | sed 's/.*chosen (//; s/)$//')
+if [ "$aname" = "$pick" ] || { [ -n "$before" ] && [ -n "$after" ] && [ "$after" != "$before" ]; }; then
+    pass "... and letting Alt go brings that window to the front ($bname -> $aname)"
+else
+    fail "... and letting Alt go brings that window to the front (picked $pick, $bname [$before] -> $aname [$after])"
+    grep -E "hde-(hotkeys: Alt.[+]Tab|panel: switcher)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+        | tee -a "$OUT/results.txt"
+fi
+check "... the switcher is closed again" grep -q "hde-panel: switcher: hidden" "$OUT/session.log"
+kill "$FSW" "$SSW" 2>/dev/null; wait "$FSW" "$SSW" 2>/dev/null
+
+# ---------- 6d4. the menu of a taskbar button: the application, the panel, the workspaces, the windows ----------
+# The right button on a running application (src/hde-x11taskbar.c), and on the pinned button (src/hde-applets.c):
+# the name first, then what it can start (a new window, the actions of its .desktop file, the files it was last used on),
+# then keeping it on the panel, putting it on another workspace, and at the end its windows. Every line the menu
+# offers is written into the log, so this is what is read here.
+# Which .desktop file a window belongs to is found from the class X11 knows (WM_CLASS), so the application
+# has to be installed for the menu to know anything about it: the last section of this test does the same.
+sed "s|@PREFIX@/bin/hde-files|$B/hde-files|g" "$HERE/../hde-files/hde-files.desktop" \
+    > "$XDG_DATA_HOME/applications/hde-files.desktop"
+"$B/hde-files" "$HOME" > "$OUT/files-menu.log" 2>&1 &
+FMN=$!
+sleep 3
+# shellcheck disable=SC2046  # pwidget: "CX CY X W"
+set -- $(pwidget task-1)
+if [ -n "${2:-}" ]; then
+    xdotool mousemove "$1" "$2" click 3; sleep 1.2
+    shot 16m-taskbar-menu
+    mline=$(grep "hde-panel: taskbar: menu: .*(grouped: " "$OUT/session.log" | tail -n 1)
+    if [ -n "$mline" ]; then
+        pass "right-clicking a taskbar button opens the menu of the application (${mline#*taskbar: })"
+    else
+        fail "right-clicking a taskbar button opens the menu of the application"
+        grep -E "hde-panel: taskbar: (menu|widget)" "$OUT/session.log" | tail -n 6 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    if grep -q "hde-panel: app menu: _New window" "$OUT/session.log" &&
+       grep -q "hde-panel: taskbar: menu: _Pin to Panel" "$OUT/session.log"; then
+        pass "... it offers a new window of the application and to keep it on the panel"
+    else
+        fail "... it offers a new window of the application and to keep it on the panel"
+        grep -F "hde-panel: taskbar: menu" "$OUT/session.log" | tail -n 10 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    if grep -q "hde-panel: taskbar: menu: Always on _visible workspace" "$OUT/session.log" &&
+       grep -q "hde-panel: app menu: Open the Trash" "$OUT/session.log"; then
+        pass "... and the workspace it stands on, the actions of its .desktop file, its windows at the end"
+    else
+        fail "... and the workspace it stands on, the actions of its .desktop file, its windows at the end"
+        grep -F "hde-panel: taskbar: menu" "$OUT/session.log" | tail -n 10 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    # "Pin to Panel" is chosen with its mnemonic (p): the menu holds the keyboard while it is open
+    pin0=$(nlog "hde-panel: pinned apps:")
+    xdotool key p; sleep 1.5
+    pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
+    if [ "$(nlog "hde-panel: pinned apps:")" -gt "$pin0" ] &&
+       { echo "$pinned" | grep -q "Hyggshi Files" || grep -q "hde-files" "$OUT/home/.config/hde/settings.ini"; }; then
+        pass "... and choosing it puts the application on the panel ($pinned)"
+    else
+        fail "... and choosing it puts the application on the panel ($pinned)"
+        grep -E "hde-panel: (taskbar: menu|pinned apps)" "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    # The smoke test already has HDE Test App pinned; Hyggshi Files is the next button in the same row.
+    # Its own button has the same app menu and can take itself off the panel again.
+    set -- $(pwidget launcher-2)
+    if [ -n "${2:-}" ]; then
+        appmenu0=$(nlog "hde-panel: app menu: _New window")
+        action0=$(nlog "hde-panel: app menu: Open the Trash")
+        xdotool mousemove "$1" "$2" click 3; sleep 1.2
+        shot 16n-pinned-taskbar-menu
+        if [ "$(nlog "hde-panel: app menu: _New window")" -gt "$appmenu0" ] &&
+           [ "$(nlog "hde-panel: app menu: Open the Trash")" -gt "$action0" ] &&
+           grep -q "hde-panel: launcher menu: Unpin from _Panel" "$OUT/session.log"; then
+            pass "... the pinned app button opens the application's menu, too"
+        else
+            fail "... the pinned app button opens the application's menu, too"
+            grep -E "hde-panel: (app menu|launcher menu)" "$OUT/session.log" | tail -n 8 | sed 's/^/INFO:   /' \
+                | tee -a "$OUT/results.txt"
+        fi
+        xdotool key p; sleep 1.5
+        pinned=$(grep "hde-panel: pinned apps: " "$OUT/session.log" | tail -n 1 | sed 's/^hde-panel: //')
+        if [ -n "$pinned" ] && ! echo "$pinned" | grep -q "Hyggshi Files" &&
+           ! grep -q "hde-files" "$OUT/home/.config/hde/settings.ini"; then
+            pass "... and it can be taken off the panel again ($pinned)"
+        else
+            fail "... and it can be taken off the panel again ($pinned)"
+        fi
+    else
+        fail "... the pinned app button can be found on the panel after pinning"
+        grep -F "hde-panel: widget launcher-" "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' \
+            | tee -a "$OUT/results.txt"
+    fi
+    xdotool key Escape; sleep 0.5
+else
+    fail "right-clicking a taskbar button opens the menu of the application (no taskbar button to click)"
+    grep -F "hde-panel: widget task-" "$OUT/session.log" | tail -n 4 | sed 's/^/INFO:   /' | tee -a "$OUT/results.txt"
+fi
+kill "$FMN" 2>/dev/null; wait "$FMN" 2>/dev/null
+
 if command -v notify-send >/dev/null 2>&1; then
     notify-send -a "Smoke test" -i mail-unread "Two new messages" "For the Control Center test"
     notify-send -a "Calendar" -i x-office-calendar "Meeting at 15:00" "Room 2, with the HDE team"
@@ -1741,7 +1962,7 @@ if command -v openbox >/dev/null 2>&1 && command -v metacity >/dev/null 2>&1; th
         else fail "Openbox with Print bound in rc.xml: Print did nothing ($n0 -> $n1)"; fi
         # The situation of a session started by an OLDER hde-session (WM first) or of hde-hotkeys restarted after the
         # WM grabbed Print: HDE must say so, and take Print back by itself as soon as the WM gives way.
-        hk=$(pgrep -x hde-hotkeys | head -n1)
+        hk=$(live_pid hde-hotkeys)
         kill -KILL "$hk" 2>/dev/null; openbox --reconfigure >/dev/null 2>&1; sleep 4   # Openbox grabs Print; hde-session restarts hde-hotkeys
         if grep -q "hde-hotkeys: already used by another program (window manager: Openbox):.* Print" "$OUT/session.log"; then
             pass "hde-hotkeys notices that the window manager (Openbox) holds Print"
@@ -1775,12 +1996,12 @@ else
 fi
 
 # ---------- 8. restart after a crash ----------
-pid=$(pgrep -x hde-panel | head -n1)
+pid=$(live_pid hde-panel)
 if [ -n "$pid" ]; then
     kill -SEGV "$pid"
     new=""; i=0
     while [ "$i" -lt 75 ]; do
-        new=$(pgrep -x hde-panel | head -n1)
+        new=$(live_pid hde-panel)
         [ -n "$new" ] && [ "$new" != "$pid" ] && break
         sleep 0.2; i=$((i + 1))
     done
@@ -1803,7 +2024,7 @@ kill -TERM "$SESSION"
 # up to 15 s for a program of the session to be gone; the FAIL says what is still running and from where
 stopped() {
     name=$1; i=0
-    while [ "$i" -lt 75 ]; do pgrep -x "$name" >/dev/null 2>&1 || return 0; sleep 0.2; i=$((i + 1)); done
+    while [ "$i" -lt 75 ]; do running "$name" || return 0; sleep 0.2; i=$((i + 1)); done
     return 1
 }
 logout_check() {

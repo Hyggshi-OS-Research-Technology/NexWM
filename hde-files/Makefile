@@ -9,7 +9,8 @@ CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializer
 GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0)
 GTK_LIBS := $(shell pkg-config --libs gtk+-3.0)
 # hde-theme.c: Light / Dark and the accent colour of HDE's Settings
-SRC = $(wildcard src/*.c) ../src/hde-theme.c
+# hde-udisks.c + hde-disks.c: the drives in the sidebar ("Drives"), read from udisks2 without GVfs
+SRC = $(wildcard src/*.c) ../src/hde-theme.c ../src/hde-udisks.c ../src/hde-disks.c
 
 hde-files: $(SRC) src/files.h ../src/hde-theme.h
 	$(CC) $(CFLAGS) -Isrc -I../src $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS)

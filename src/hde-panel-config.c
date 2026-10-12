@@ -1,5 +1,6 @@
 /* hde-panel-config.c — see hde-panel-config.h */
 #include "hde-panel-config.h"
+#include "hde-peek-core.h"          /* the defaults of the taskbar preview (HDE_PEEK_DELAY_*) */
 #include <gio/gio.h>
 #include <gio/gdesktopappinfo.h>
 #include <string.h>
@@ -117,6 +118,9 @@ void hde_panel_config_load(HdePanelConfig *c)
     char *g = kf_str(kf, "panel_taskbar_group", "auto");
     c->taskbar_group = !g_ascii_strcasecmp(g, "never") ? 0 : !g_ascii_strcasecmp(g, "always") ? 2 : 1;
     g_free(g);
+    c->taskbar_preview = kf_bool(kf, "panel_taskbar_preview", TRUE);
+    c->taskbar_preview_delay = CLAMP(kf_int(kf, "panel_taskbar_preview_delay", HDE_PEEK_DELAY_DEFAULT),
+                                     HDE_PEEK_DELAY_MIN, HDE_PEEK_DELAY_MAX);
     c->clock_24h = kf_bool(kf, "clock_24h", TRUE);
     c->clock_date = kf_bool(kf, "clock_show_date", TRUE);
     c->clock_seconds = kf_bool(kf, "clock_show_seconds", FALSE);

@@ -116,6 +116,12 @@ wait_win() { i=0; while [ "$i" -lt "${2:-60}" ]; do win_visible "$1" && return 0
 wait_nowin() { i=0; while [ "$i" -lt "${2:-60}" ]; do win_visible "$1" || return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 wait_log() { i=0; while [ "$i" -lt "${2:-60}" ]; do grep -q "$1" "$LOG" 2>/dev/null && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 nlog() { nlog_n=$(grep -c "$1" "$LOG" 2>/dev/null); echo "${nlog_n:-0}"; }
+# The F-keys are sent as keycodes, not as names: xdotool asks the X server for the keycode of "F6" and then checks
+# what that keycode produces *in the keyboard group of the moment*; when it is not the keysym it was asked for it
+# presses an extra Alt_L first (jordansissel/xdotool#481, #484). HDE grabs "F6 with no modifiers", so a key that
+# arrives as Alt+F6 never reaches it. The keycodes are the same on every X server (evdev: F1..F10 are 67..76);
+# tests/smoke.sh says the same.
+K_F6=72; K_F7=73; K_F8=74
 wait_more() { i=0; while [ "$i" -lt "${3:-60}" ]; do [ "$(nlog "$1")" -gt "$2" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 # widget NAME [LOG] -> "X Y", the centre of a widget of hde-settings (HDE_DEBUG: "hde-settings: widget NAME at ...")
 widget() {
@@ -174,17 +180,17 @@ if grep -q "^Layout: PC screen only" "$OUT/displays-1.txt" && grep -q "DUMMY1: D
 else fail "hde-settings --displays ($(tr '\n' ';' < "$OUT/displays-1.txt"))"; fi
 
 # ---------- 1. F8 opens the Project window, F8 again moves on, Enter applies ----------
-xdotool key F8
+xdotool key $K_F8
 if wait_win "^Project$"; then
     pass "F8 opens the Project window"
     sleep 0.8
     shot 01-project
     check "... it lists 2 screens and the layout in use (PC screen only)" wait_log "hde-settings: project: shown: 2 screen(s): .*layout now: PC screen only"
-    n0=$(nlog "hde-settings: project: selected"); xdotool key F8
+    n0=$(nlog "hde-settings: project: selected"); xdotool key $K_F8
     if wait_more "hde-settings: project: selected Duplicate" 0 30; then pass "F8 again moves to the next choice (Duplicate) instead of opening a second window"
     else fail "F8 again moves to the next choice (Duplicate)"; fi
     check "... and the second F8 only told the open window (one Project window)" wait_log "hde-settings: project: already open: next layout"
-    xdotool key F8; sleep 0.6
+    xdotool key $K_F8; sleep 0.6
     check "F8 a third time: Extend" wait_log "hde-settings: project: selected Extend"
     shot 02-project-extend-selected
     xdotool key Return
@@ -208,18 +214,18 @@ check "the choice is remembered for these screens (display_mode=extend, display_
 
 # ---------- 2. F6 / F7: software dimming of every screen (no backlight here) ----------
 br0=$(verbose_field DUMMY0 Brightness)
-xdotool key F6; sleep 1
+xdotool key $K_F6; sleep 1
 b0=$(verbose_field DUMMY0 Brightness); b1=$(verbose_field DUMMY1 Brightness)
 if [ "$(pct "$b0")" = 95 ] && [ "$(pct "$b1")" = 95 ]; then pass "F6 dims both screens to 95% (gamma: DUMMY0 $b0, DUMMY1 $b1; was $br0)"
 else fail "F6 dims both screens to 95% (DUMMY0 $b0, DUMMY1 $b1, was $br0)"; fi
 check "... remembered for every HDE program (_HDE_BRIGHTNESS = 95)" sh -c "[ \"\$(xprop -root _HDE_BRIGHTNESS 2>/dev/null | sed -n 's/.*= //p')\" = 95 ]"
 if [ "$(root_prop _HDE_BRIGHTNESS)" != 95 ]; then info "_HDE_BRIGHTNESS: $(xprop -root _HDE_BRIGHTNESS 2>&1)"; fi
 shot 04-osd-brightness
-xdotool key F6; sleep 0.6; xdotool key F6; sleep 1
+xdotool key $K_F6; sleep 0.6; xdotool key $K_F6; sleep 1
 b0=$(verbose_field DUMMY0 Brightness)
 if [ "$(pct "$b0")" = 85 ]; then pass "F6 twice more: 85%"; else fail "F6 twice more: 85% (got $b0)"; fi
 check "the session log tells how (software dimming)" grep -q "hde-hotkeys: brightness down: software dimming: 85%" "$LOG"
-xdotool key F7; sleep 0.6; xdotool key F7; sleep 0.6; xdotool key F7; sleep 0.6; xdotool key F7; sleep 1
+xdotool key $K_F7; sleep 0.6; xdotool key $K_F7; sleep 0.6; xdotool key $K_F7; sleep 0.6; xdotool key $K_F7; sleep 1
 b0=$(verbose_field DUMMY0 Brightness)
 if [ "$(pct "$b0")" = 100 ]; then pass "F7 brightens again up to 100% (stops there)"; else fail "F7 brightens again up to 100% (got $b0)"; fi
 "$B/hde-settings" --brightness 60 > "$OUT/brightness-cli.txt" 2>&1
@@ -255,7 +261,7 @@ shot 06-duplicate
 close_project() { win_visible "^Project$" && xdotool key Escape && sleep 0.5; return 0; }
 # ---------- 5. Second screen only: nobody keeps it -> back by itself ----------
 close_project
-xdotool key F8
+xdotool key $K_F8
 if wait_win "^Project$"; then
     sleep 0.6
     xdotool key 4
@@ -274,7 +280,7 @@ sleep 1
 
 # ---------- 6. Second screen only, kept ----------
 close_project
-xdotool key F8
+xdotool key $K_F8
 if wait_win "^Project$"; then
     sleep 0.6
     click_widget project-second

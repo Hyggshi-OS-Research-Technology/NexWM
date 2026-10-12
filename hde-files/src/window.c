@@ -815,7 +815,7 @@ static void act_show_sidebar(GSimpleAction *a, GVariant *v, gpointer d)
     files_log("sidebar: %s", prefs.show_sidebar ? "shown" : "hidden");
     for (GList *l = windows; l; l = l->next) {
         FilesWindow *w = l->data;
-        gtk_widget_set_visible(w->sidebar, prefs.show_sidebar);
+        gtk_widget_set_visible(w->sidebar_box, prefs.show_sidebar);
         set_state(w, "show-sidebar", g_variant_new_boolean(prefs.show_sidebar));
     }
 }
@@ -1703,7 +1703,12 @@ FilesWindow *files_window_new(GtkApplication *app, GFile *location)
     g_signal_connect(sb, "show-error-message", G_CALLBACK(on_sidebar_error), w);
     g_signal_connect(sb, "drag-action-requested", G_CALLBACK(on_sidebar_drag_action), w);
     g_signal_connect(sb, "drag-perform-drop", G_CALLBACK(on_sidebar_drop), w);
-    gtk_paned_pack1(GTK_PANED(w->paned), w->sidebar, FALSE, FALSE);
+    /* the drives (udisks2) above the places, in the same half of the paned window */
+    w->sidebar_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    w->drives = files_drives_new();
+    gtk_box_pack_start(GTK_BOX(w->sidebar_box), w->drives, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(w->sidebar_box), w->sidebar, TRUE, TRUE, 0);
+    gtk_paned_pack1(GTK_PANED(w->paned), w->sidebar_box, FALSE, FALSE);
     GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     w->trash_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_style_context_add_class(gtk_widget_get_style_context(w->trash_bar), "files-trashbar");
@@ -1781,7 +1786,7 @@ FilesWindow *files_window_new(GtkApplication *app, GFile *location)
     windows = g_list_prepend(windows, w);
 
     gtk_widget_show_all(vbox);
-    gtk_widget_set_visible(w->sidebar, prefs.show_sidebar);
+    gtk_widget_set_visible(w->sidebar_box, prefs.show_sidebar);
     gtk_widget_set_visible(w->zoom_scale, !prefs.list_view);
     GFile *home = NULL;
     if (!location) location = home = g_file_new_for_path(g_get_home_dir());
