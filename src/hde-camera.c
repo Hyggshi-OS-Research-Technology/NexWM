@@ -1036,9 +1036,35 @@ static void on_mirror_toggled(GtkToggleButton *tb, gpointer d)
     g_atomic_int_set(&current_mirror, gtk_toggle_button_get_active(tb) ? 1 : 0);
 }
 
+static void show_about_dialog(void)
+{
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(main_win),
+        "program-name", "Hyggshi Camera",
+        "version", HDE_VERSION,
+        "comments", "Smooth 30 FPS Linux V4L2 photo and video capture application for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "camera-web",
+        NULL);
+}
+
+static void on_about_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    show_about_dialog();
+}
+
 static gboolean on_cam_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
 {
     (void)w; (void)d;
+    if (ev->keyval == GDK_KEY_F1) {
+        show_about_dialog();
+        return TRUE;
+    }
     if (ev->keyval == GDK_KEY_space || ev->keyval == GDK_KEY_Return) {
         on_take_photo(NULL, NULL);
         return TRUE;
@@ -1145,11 +1171,16 @@ int main(int argc, char **argv)
     g_signal_connect(filter_combo, "changed", G_CALLBACK(on_filter_changed), NULL);
     g_signal_connect(mirror_toggle, "toggled", G_CALLBACK(on_mirror_toggled), NULL);
 
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Camera (F1)");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), NULL);
+
     gtk_box_pack_start(GTK_BOX(top_bar), gtk_label_new("Camera:"), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(top_bar), device_combo, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(top_bar), res_combo, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(top_bar), timer_combo, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(top_bar), filter_combo, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(top_bar), about_btn, FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(top_bar), grid_toggle, FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(top_bar), mirror_toggle, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(root), top_bar, FALSE, FALSE, 0);

@@ -1242,6 +1242,8 @@ static void player_on_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointe
     if (i >= 0) player_play_index(p, i);
 }
 
+static void player_on_about(GtkWidget *b, gpointer d);
+
 static gboolean player_on_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
 {
     (void)w;
@@ -1283,6 +1285,7 @@ static gboolean player_on_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
         if (p->is_fullscreen) { player_toggle_fullscreen(p); return TRUE; }
         gtk_widget_destroy(p->window);
         return TRUE;
+    case GDK_KEY_F1:         player_on_about(NULL, p); return TRUE;
     case GDK_KEY_q:          gtk_widget_destroy(p->window); return TRUE;
     default:                 return FALSE;
     }
@@ -1321,6 +1324,28 @@ static GtkWidget *player_button(const char *label, const char *tip, GCallback cb
     g_signal_connect(b, "clicked", cb, p);
     gtk_box_pack_start(GTK_BOX(bar), b, FALSE, FALSE, 0);
     return b;
+}
+
+#ifndef HDE_VERSION
+#define HDE_VERSION "1.0.0"
+#endif
+
+static void player_on_about(GtkWidget *b, gpointer d)
+{
+    (void)b;
+    HdeMediaPlayer *p = d;
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(p && p->window ? GTK_WINDOW(p->window) : NULL,
+        "program-name", "Hyggshi Video & Media Player",
+        "version", HDE_VERSION,
+        "comments", "Audio and video player with playlist management, MPRIS2 integration, and hardware-accelerated playback for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "video-x-generic",
+        NULL);
 }
 
 static void player_build_window(HdeMediaPlayer *p)
@@ -1424,6 +1449,7 @@ static void player_build_window(HdeMediaPlayer *p)
     p->speed_button = player_button("1.0x", "Playback speed ([ / ] or click)", G_CALLBACK(player_on_speed), p, bar);
     p->fullscreen_button = player_button("Fullscreen", "Toggle full screen (f / F11 / double-click video)",
                                          G_CALLBACK(player_on_fullscreen), p, bar);
+    player_button("About", "About Hyggshi Video & Media Player (F1)", G_CALLBACK(player_on_about), p, bar);
 
     /* the volume, to the right */
     GtkWidget *space = gtk_label_new("");

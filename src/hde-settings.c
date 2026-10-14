@@ -1306,6 +1306,23 @@ static void on_search_entry_activate(GtkEntry *e, gpointer d)
     g_list_free(rows);
 }
 
+static void on_settings_about_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(window),
+        "program-name", "Hyggshi Settings",
+        "version", HDE_VERSION,
+        "comments", "System settings, display & appearance configuration, hardware controls, and desktop preferences for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "preferences-system",
+        NULL);
+}
+
 static gboolean on_window_key_press(GtkWidget *w, GdkEventKey *ev, gpointer d)
 {
     (void)w; (void)d;
@@ -1417,6 +1434,10 @@ static void on_activate(GtkApplication *app, gpointer d)
     gtk_box_pack_start(GTK_BOX(header), page_title, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(header), page_subtitle, FALSE, FALSE, 2);
     gtk_box_pack_start(GTK_BOX(header_row), header, TRUE, TRUE, 0);
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Settings");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_settings_about_clicked), NULL);
+    gtk_box_pack_end(GTK_BOX(header_row), about_btn, FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(header_row), make_search_button(), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(main_box), header_row, FALSE, FALSE, 0);
 

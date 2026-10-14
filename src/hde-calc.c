@@ -689,6 +689,38 @@ static GtkWidget *build_converter_page(void)
     return box;
 }
 
+static void show_about_dialog(void)
+{
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(main_win),
+        "program-name", "Hyggshi Calculator",
+        "version", HDE_VERSION,
+        "comments", "Standard, Scientific, 64-bit Programmer, and Unit Converter calculator for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "accessories-calculator",
+        NULL);
+}
+
+static void on_about_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    show_about_dialog();
+}
+
+static gboolean on_calc_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
+{
+    (void)w; (void)d;
+    if (ev->keyval == GDK_KEY_F1) {
+        show_about_dialog();
+        return TRUE;
+    }
+    return FALSE;
+}
+
 int main(int argc, char **argv)
 {
     hde_calc_env_init(&calc_env);
@@ -726,6 +758,7 @@ int main(int argc, char **argv)
     gtk_window_set_icon_name(GTK_WINDOW(main_win), "accessories-calculator");
     gtk_window_set_default_size(GTK_WINDOW(main_win), 780, 560);
     g_signal_connect(main_win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(main_win, "key-press-event", G_CALLBACK(on_calc_key), NULL);
 
     stack = gtk_stack_new();
     gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT_RIGHT);
@@ -736,6 +769,12 @@ int main(int argc, char **argv)
     GtkWidget *switcher = gtk_stack_switcher_new();
     gtk_stack_switcher_set_stack(GTK_STACK_SWITCHER(switcher), GTK_STACK(stack));
     gtk_header_bar_set_custom_title(GTK_HEADER_BAR(hbar), switcher);
+
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Calculator (F1)");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), NULL);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(hbar), about_btn);
+
     gtk_window_set_titlebar(GTK_WINDOW(main_win), hbar);
 
     gtk_stack_add_titled(GTK_STACK(stack), build_calc_page(TRUE), "scientific", "Scientific & Standard");

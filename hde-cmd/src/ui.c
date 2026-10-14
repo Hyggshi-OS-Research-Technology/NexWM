@@ -1447,6 +1447,34 @@ static void menu_close(GtkMenuItem *item, gpointer userdata)
     gtk_widget_destroy(app->window);
 }
 
+#ifndef HDE_VERSION
+#define HDE_VERSION "1.0.0"
+#endif
+
+static void menu_about(GtkMenuItem *mi, gpointer userdata)
+{
+    (void)mi;
+    CmdWindow *app = userdata;
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(app && app->window ? GTK_WINDOW(app->window) : NULL,
+        "program-name", "HDE Cmd",
+        "version", HDE_VERSION,
+        "comments", "Fast, customizable VT100/xterm-256color terminal emulator with search, color themes, and URL detection for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "utilities-terminal",
+        NULL);
+}
+
+static void on_about_btn_clicked(GtkButton *b, gpointer userdata)
+{
+    (void)b;
+    menu_about(NULL, userdata);
+}
+
 static GtkWidget *build_header(CmdWindow *app)
 {
     GtkWidget *header = gtk_header_bar_new();
@@ -1458,6 +1486,11 @@ static GtkWidget *build_header(CmdWindow *app)
     gtk_widget_set_tooltip_text(new_button, "Open a new terminal window (Ctrl+Shift+T)");
     g_signal_connect(new_button, "clicked", G_CALLBACK(menu_new), app);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_button);
+
+    GtkWidget *about_button = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_button, "About HDE Cmd");
+    g_signal_connect(about_button, "clicked", G_CALLBACK(on_about_btn_clicked), app);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), about_button);
 
     GtkWidget *find_button = gtk_button_new_from_icon_name("edit-find-symbolic", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(find_button, "Find in terminal (Ctrl+Shift+F)");
@@ -1513,6 +1546,8 @@ static GtkWidget *build_header(CmdWindow *app)
     menu_item(menu, "Clear Scrollback  Ctrl+Shift+K", G_CALLBACK(menu_clear_scrollback), app);
     menu_item(menu, "Reset Terminal", G_CALLBACK(menu_reset_terminal), app);
     menu_item(menu, "Toggle Full Screen  F11", G_CALLBACK(menu_fullscreen), app);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+    menu_item(menu, "About HDE Cmd…", G_CALLBACK(menu_about), app);
     menu_item(menu, "Close Window  Ctrl+Shift+W", G_CALLBACK(menu_close), app);
     gtk_widget_show_all(menu);
     gtk_menu_button_set_popup(GTK_MENU_BUTTON(button), menu);

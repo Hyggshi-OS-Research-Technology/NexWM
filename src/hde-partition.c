@@ -846,6 +846,38 @@ static void on_clear_pending(GtkButton *b, gpointer d)
     gtk_label_set_text(GTK_LABEL(status_lbl), "Discarded pending changes and reloaded disk partition table.");
 }
 
+static void show_about_dialog(void)
+{
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(main_win),
+        "program-name", "Hyggshi Partition Manager",
+        "version", HDE_VERSION,
+        "comments", "Disk and partition management utility with visual partition map and pending operations queue for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "drive-harddisk",
+        NULL);
+}
+
+static void on_about_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    show_about_dialog();
+}
+
+static gboolean on_partition_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
+{
+    (void)w; (void)d;
+    if (ev->keyval == GDK_KEY_F1) {
+        show_about_dialog();
+        return TRUE;
+    }
+    return FALSE;
+}
+
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
@@ -889,6 +921,7 @@ int main(int argc, char **argv)
     gtk_window_set_icon_name(GTK_WINDOW(main_win), "drive-harddisk");
     gtk_window_set_default_size(GTK_WINDOW(main_win), 960, 620);
     g_signal_connect(main_win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(main_win, "key-press-event", G_CALLBACK(on_partition_key), NULL);
 
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(main_win), root);
@@ -903,6 +936,8 @@ int main(int argc, char **argv)
     GtkWidget *btn_fmt    = gtk_button_new_with_label("Format…");
     GtkWidget *btn_chk    = gtk_button_new_with_label("Check Filesystem…");
     GtkWidget *btn_del    = gtk_button_new_with_label("Delete Partition");
+    GtkWidget *btn_about  = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(btn_about, "About Hyggshi Partition Manager (F1)");
 
     g_signal_connect(btn_rescan, "clicked", G_CALLBACK(on_rescan_clicked), NULL);
     g_signal_connect(btn_new,    "clicked", G_CALLBACK(on_new_part_clicked), NULL);
@@ -910,6 +945,7 @@ int main(int argc, char **argv)
     g_signal_connect(btn_fmt,    "clicked", G_CALLBACK(on_format_clicked), NULL);
     g_signal_connect(btn_chk,    "clicked", G_CALLBACK(on_check_fs_clicked), NULL);
     g_signal_connect(btn_del,    "clicked", G_CALLBACK(on_delete_part_clicked), NULL);
+    g_signal_connect(btn_about,  "clicked", G_CALLBACK(on_about_clicked), NULL);
 
     gtk_box_pack_start(GTK_BOX(tbar), btn_rescan, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(tbar), gtk_separator_new(GTK_ORIENTATION_VERTICAL), FALSE, FALSE, 4);
@@ -917,6 +953,7 @@ int main(int argc, char **argv)
     gtk_box_pack_start(GTK_BOX(tbar), btn_resize, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(tbar), btn_fmt,    FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(tbar), btn_chk,    FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(tbar),   btn_about,  FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(tbar),   btn_del,    FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(root), tbar, FALSE, FALSE, 0);
 
@@ -925,6 +962,7 @@ int main(int argc, char **argv)
     gtk_paned_set_position(GTK_PANED(paned), 240);
 
     disk_listbox = gtk_list_box_new();
+    gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(disk_listbox), FALSE);
     g_signal_connect(disk_listbox, "row-selected", G_CALLBACK(on_disk_row_selected), NULL);
     GtkWidget *left_sc = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(left_sc), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);

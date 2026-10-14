@@ -1103,6 +1103,38 @@ static GtkWidget *build_processes_page(void)
     return box;
 }
 
+static void show_about_dialog(void)
+{
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(main_win),
+        "program-name", "Hyggshi Resources",
+        "version", HDE_VERSION,
+        "comments", "System resource monitor (CPU, memory, disk, network) and application/process controller for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "utilities-system-monitor",
+        NULL);
+}
+
+static void on_about_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    show_about_dialog();
+}
+
+static gboolean on_resources_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
+{
+    (void)w; (void)d;
+    if (ev->keyval == GDK_KEY_F1) {
+        show_about_dialog();
+        return TRUE;
+    }
+    return FALSE;
+}
+
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
@@ -1137,6 +1169,7 @@ int main(int argc, char **argv)
     gtk_window_set_icon_name(GTK_WINDOW(main_win), "utilities-system-monitor");
     gtk_window_set_default_size(GTK_WINDOW(main_win), 920, 640);
     g_signal_connect(main_win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(main_win, "key-press-event", G_CALLBACK(on_resources_key), NULL);
 
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(main_win), root);
@@ -1150,6 +1183,12 @@ int main(int argc, char **argv)
     GtkWidget *sw = gtk_stack_switcher_new();
     gtk_stack_switcher_set_stack(GTK_STACK_SWITCHER(sw), GTK_STACK(stack));
     gtk_box_pack_start(GTK_BOX(top_bar), sw, TRUE, FALSE, 0);
+
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Resources (F1)");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), NULL);
+    gtk_box_pack_end(GTK_BOX(top_bar), about_btn, FALSE, FALSE, 0);
+
     gtk_box_pack_start(GTK_BOX(root), top_bar, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(root), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 0);
 

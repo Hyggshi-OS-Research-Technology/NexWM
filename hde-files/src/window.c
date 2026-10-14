@@ -1683,6 +1683,8 @@ FilesWindow *files_window_new(GtkApplication *app, GFile *location)
     gtk_widget_set_focus_on_click(w->view_btn, FALSE);
     gtk_actionable_set_action_name(GTK_ACTIONABLE(w->view_btn), "win.toggle-view");
     gtk_box_pack_start(GTK_BOX(bar), w->view_btn, FALSE, FALSE, 0);
+    GtkWidget *about_btn = tool_button("help-about-symbolic", "About Hyggshi Files", "win.about");
+    gtk_box_pack_start(GTK_BOX(bar), about_btn, FALSE, FALSE, 0);
     w->menu_btn = gtk_button_new_from_icon_name("open-menu-symbolic", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(w->menu_btn, "Menu (F10)");
     gtk_widget_set_focus_on_click(w->menu_btn, FALSE);

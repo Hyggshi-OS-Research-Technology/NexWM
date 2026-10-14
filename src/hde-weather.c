@@ -44,6 +44,10 @@ static GtkWidget *hero_area = NULL;
 static GtkWidget *chart_area = NULL;
 static GtkWidget *hourly_box = NULL;
 static GtkWidget *daily_box = NULL;
+static GtkWidget *row_temp_lbl[MAX_SAVED_CITIES];
+static GtkWidget *row_sub_lbl[MAX_SAVED_CITIES];
+static GtkWidget *row_icon_img[MAX_SAVED_CITIES];
+static gboolean rebuilding_sidebar = FALSE;
 
 /* Detail card labels & gauges */
 static GtkWidget *lbl_uv_val, *lbl_uv_sub, *bar_uv;
@@ -202,27 +206,26 @@ typedef struct {
     HdeWeatherCity city;
 } FetchTaskData;
 
+static void refresh_forecast_views(void);
+
 static void on_fetch_finished(GObject *source, GAsyncResult *res, gpointer user_data)
 {
     GSubprocess *proc = G_SUBPROCESS(source);
     FetchTaskData *td = user_data;
     char *stdout_buf = NULL;
-    char *stderr_buf = NULL;
 
-    if (g_subprocess_communicate_utf8_finish(proc, res, &stdout_buf, &stderr_buf, NULL)) {
+    if (g_subprocess_communicate_utf8_finish(proc, res, &stdout_buf, NULL, NULL)) {
         if (stdout_buf && *stdout_buf && td->city_idx >= 0 && td->city_idx < saved_city_count) {
             HdeWeatherForecast parsed;
             if (hde_weather_parse_open_meteo_json(stdout_buf, &td->city, &parsed) == 0) {
                 forecasts[td->city_idx] = parsed;
-                if (td->city_idx == active_city_idx) {
+                if (td->city_idx == active_city_idx)
                     active_fc = parsed;
-                    refresh_all_views();
-                }
+                refresh_forecast_views();
             }
         }
     }
     g_free(stdout_buf);
-    g_free(stderr_buf);
     g_free(td);
     fetch_in_progress = FALSE;
     if (status_spinner)
@@ -679,12 +682,11 @@ static void clear_container(GtkWidget *container)
     g_list_free(children);
 }
 
-static void on_delete_city_clicked(GtkButton *btn, gpointer user_data)
+static gboolean delete_city_idle_cb(gpointer user_data)
 {
-    (void)btn;
     int idx = GPOINTER_TO_INT(user_data);
     if (saved_city_count <= 1 || idx < 0 || idx >= saved_city_count)
-        return;
+        return G_SOURCE_REMOVE;
     for (int i = idx; i + 1 < saved_city_count; i++) {
         saved_cities[i] = saved_cities[i + 1];
         forecasts[i] = forecasts[i + 1];
@@ -695,11 +697,40 @@ static void on_delete_city_clicked(GtkButton *btn, gpointer user_data)
     active_fc = forecasts[active_city_idx];
     save_config();
     refresh_all_views();
+    return G_SOURCE_REMOVE;
+}
+
+static void on_delete_city_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    g_idle_add(delete_city_idle_cb, user_data);
+}
+
+static void update_sidebar_labels_in_place(void)
+{
+    for (int i = 0; i < saved_city_count; i++) {
+        if (row_temp_lbl[i]) {
+            char tbuf[24];
+            format_temp(forecasts[i].current_temp_c, tbuf, sizeof(tbuf), FALSE);
+            gtk_label_set_text(GTK_LABEL(row_temp_lbl[i]), tbuf);
+        }
+        if (row_sub_lbl[i]) {
+            gtk_label_set_text(GTK_LABEL(row_sub_lbl[i]), hde_weather_wmo_description(forecasts[i].wmo_code));
+        }
+        if (row_icon_img[i]) {
+            const char *ic = hde_weather_wmo_icon(forecasts[i].wmo_code, forecasts[i].is_day);
+            gtk_image_set_from_icon_name(GTK_IMAGE(row_icon_img[i]), ic, GTK_ICON_SIZE_LARGE_TOOLBAR);
+        }
+    }
 }
 
 static void rebuild_city_sidebar(void)
 {
     if (!city_list_box) return;
+    rebuilding_sidebar = TRUE;
+    memset(row_temp_lbl, 0, sizeof(row_temp_lbl));
+    memset(row_sub_lbl, 0, sizeof(row_sub_lbl));
+    memset(row_icon_img, 0, sizeof(row_icon_img));
     clear_container(city_list_box);
 
     const char *filter = city_filter_entry ? gtk_entry_get_text(GTK_ENTRY(city_filter_entry)) : "";
@@ -720,6 +751,7 @@ static void rebuild_city_sidebar(void)
 
         const char *icon_name = hde_weather_wmo_icon(forecasts[i].wmo_code, forecasts[i].is_day);
         GtkWidget *img = gtk_image_new_from_icon_name(icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
+        row_icon_img[i] = img;
         gtk_box_pack_start(GTK_BOX(hb), img, FALSE, FALSE, 0);
 
         GtkWidget *vb = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
@@ -730,6 +762,7 @@ static void rebuild_city_sidebar(void)
 
         const char *cond = hde_weather_wmo_description(forecasts[i].wmo_code);
         GtkWidget *sub = gtk_label_new(cond);
+        row_sub_lbl[i] = sub;
         gtk_style_context_add_class(gtk_widget_get_style_context(sub), "dim-label");
         gtk_label_set_xalign(GTK_LABEL(sub), 0.0);
         gtk_box_pack_start(GTK_BOX(vb), nm, FALSE, FALSE, 0);
@@ -739,6 +772,7 @@ static void rebuild_city_sidebar(void)
         char tbuf[24];
         format_temp(forecasts[i].current_temp_c, tbuf, sizeof(tbuf), FALSE);
         GtkWidget *tlbl = gtk_label_new(tbuf);
+        row_temp_lbl[i] = tlbl;
         gtk_style_context_add_class(gtk_widget_get_style_context(tlbl), "city-row-temp");
         gtk_box_pack_start(GTK_BOX(hb), tlbl, FALSE, FALSE, 2);
 
@@ -756,6 +790,7 @@ static void rebuild_city_sidebar(void)
             gtk_list_box_select_row(GTK_LIST_BOX(city_list_box), GTK_LIST_BOX_ROW(row));
     }
     gtk_widget_show_all(city_list_box);
+    rebuilding_sidebar = FALSE;
 }
 
 static void rebuild_hourly_strip(void)
@@ -949,16 +984,22 @@ static void update_detail_cards(void)
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(bar_aqi), CLAMP(active_fc.aqi / 200.0, 0.0, 1.0));
 }
 
-static void refresh_all_views(void)
+static void refresh_forecast_views(void)
 {
     if (unit_temp_btn)
         gtk_button_set_label(GTK_BUTTON(unit_temp_btn), use_fahrenheit ? "°F" : "°C");
-    rebuild_city_sidebar();
+    update_sidebar_labels_in_place();
     rebuild_hourly_strip();
     rebuild_daily_list();
     update_detail_cards();
     if (hero_area) gtk_widget_queue_draw(hero_area);
     if (chart_area) gtk_widget_queue_draw(chart_area);
+}
+
+static void refresh_all_views(void)
+{
+    rebuild_city_sidebar();
+    refresh_forecast_views();
 }
 
 /* --- Add Location Dialog --- */
@@ -1020,6 +1061,8 @@ static void populate_add_city_results(AddCityDialogData *d, const char *query)
 
         gtk_container_add(GTK_CONTAINER(row), hb);
         gtk_list_box_insert(GTK_LIST_BOX(d->list_box), row, -1);
+        if (i == 0)
+            gtk_list_box_select_row(GTK_LIST_BOX(d->list_box), GTK_LIST_BOX_ROW(row));
     }
     gtk_widget_show_all(d->list_box);
 }
@@ -1032,11 +1075,9 @@ static void on_add_search_changed(GtkEditable *ed, gpointer user_data)
 
 static void on_add_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointer user_data)
 {
-    (void)box;
     AddCityDialogData *d = user_data;
-    int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "res-idx"));
-    if (idx >= 0 && idx < d->result_count) {
-        add_city_and_select(&d->results[idx]);
+    if (row) {
+        gtk_list_box_select_row(box, row);
         gtk_dialog_response(GTK_DIALOG(d->dialog), GTK_RESPONSE_ACCEPT);
     }
 }
@@ -1072,6 +1113,7 @@ static void on_add_city_clicked(GtkButton *btn, gpointer user_data)
     gtk_widget_set_vexpand(sw, TRUE);
 
     d.list_box = gtk_list_box_new();
+    gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(d.list_box), FALSE);
     gtk_container_add(GTK_CONTAINER(sw), d.list_box);
     gtk_box_pack_start(GTK_BOX(vbox), sw, TRUE, TRUE, 0);
     gtk_container_add(GTK_CONTAINER(content), vbox);
@@ -1081,17 +1123,24 @@ static void on_add_city_clicked(GtkButton *btn, gpointer user_data)
     g_signal_connect(d.list_box, "row-activated", G_CALLBACK(on_add_row_activated), &d);
 
     gtk_widget_show_all(dlg);
+    HdeWeatherCity chosen;
+    gboolean has_chosen = FALSE;
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         GtkListBoxRow *sel = gtk_list_box_get_selected_row(GTK_LIST_BOX(d.list_box));
         if (sel) {
             int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(sel), "res-idx"));
-            if (idx >= 0 && idx < d.result_count)
-                add_city_and_select(&d.results[idx]);
+            if (idx >= 0 && idx < d.result_count) {
+                chosen = d.results[idx];
+                has_chosen = TRUE;
+            }
         } else if (d.result_count > 0) {
-            add_city_and_select(&d.results[0]);
+            chosen = d.results[0];
+            has_chosen = TRUE;
         }
     }
     gtk_widget_destroy(dlg);
+    if (has_chosen)
+        add_city_and_select(&chosen);
 }
 
 /* --- Signal Callbacks --- */
@@ -1100,13 +1149,14 @@ static void on_city_row_selected(GtkListBox *box, GtkListBoxRow *row, gpointer u
 {
     (void)box;
     (void)user_data;
-    if (!row) return;
+    if (rebuilding_sidebar || !row)
+        return;
     int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "city-idx"));
     if (idx >= 0 && idx < saved_city_count && idx != active_city_idx) {
         active_city_idx = idx;
         active_fc = forecasts[idx];
         save_config();
-        refresh_all_views();
+        refresh_forecast_views();
         start_async_fetch_for_city(idx);
     }
 }
@@ -1124,7 +1174,7 @@ static void on_refresh_clicked(GtkButton *btn, gpointer user_data)
     (void)user_data;
     hde_weather_generate_fallback(&saved_cities[active_city_idx], time(NULL), &forecasts[active_city_idx]);
     active_fc = forecasts[active_city_idx];
-    refresh_all_views();
+    refresh_forecast_views();
     start_async_fetch_for_city(active_city_idx);
 }
 
@@ -1155,11 +1205,38 @@ static gboolean on_anim_tick(gpointer user_data)
     return G_SOURCE_CONTINUE;
 }
 
+static void show_about_dialog(void)
+{
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(main_win),
+        "program-name", "Hyggshi Weather",
+        "version", HDE_VERSION,
+        "comments", "Desktop weather forecast, 24-hour temperature & precipitation chart, 7-day outlook, and atmospheric metrics for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "weather-clear",
+        NULL);
+}
+
+static void on_about_clicked(GtkButton *btn, gpointer user_data)
+{
+    (void)btn;
+    (void)user_data;
+    show_about_dialog();
+}
+
 static gboolean on_window_key_press(GtkWidget *w, GdkEventKey *ev, gpointer user_data)
 {
     (void)w;
     (void)user_data;
     guint mods = ev->state & gtk_accelerator_get_default_mod_mask();
+    if (ev->keyval == GDK_KEY_F1) {
+        show_about_dialog();
+        return TRUE;
+    }
     if (ev->keyval == GDK_KEY_F5 || (mods == GDK_CONTROL_MASK && (ev->keyval == GDK_KEY_r || ev->keyval == GDK_KEY_R))) {
         on_refresh_clicked(NULL, NULL);
         return TRUE;
@@ -1299,6 +1376,11 @@ int main(int argc, char **argv)
     status_spinner = gtk_spinner_new();
     gtk_header_bar_pack_start(GTK_HEADER_BAR(hbar), status_spinner);
 
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Weather (F1)");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), NULL);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(hbar), about_btn);
+
     unit_wind_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "km/h");
     gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "mph");
@@ -1334,6 +1416,7 @@ int main(int argc, char **argv)
 
     city_list_box = gtk_list_box_new();
     gtk_list_box_set_selection_mode(GTK_LIST_BOX(city_list_box), GTK_SELECTION_SINGLE);
+    gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(city_list_box), FALSE);
     g_signal_connect(city_list_box, "row-selected", G_CALLBACK(on_city_row_selected), NULL);
     gtk_container_add(GTK_CONTAINER(side_sw), city_list_box);
     gtk_box_pack_start(GTK_BOX(side_box), side_sw, TRUE, TRUE, 0);

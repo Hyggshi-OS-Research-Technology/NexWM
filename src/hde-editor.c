@@ -665,6 +665,28 @@ static gboolean on_window_delete(GtkWidget *w, GdkEvent *ev, gpointer d)
     return FALSE;
 }
 
+static void show_about_dialog(void)
+{
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(main_win),
+        "program-name", "Hyggshi Text Editor",
+        "version", HDE_VERSION,
+        "comments", "Beginner-friendly multi-tab text editor with undo/redo, find & replace, and font zoom for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "accessories-text-editor",
+        NULL);
+}
+
+static void on_about_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    show_about_dialog();
+}
+
 static gboolean on_editor_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
 {
     (void)w; (void)d;
@@ -708,6 +730,10 @@ static gboolean on_editor_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
             return TRUE;
         default: break;
         }
+    }
+    if (ev->keyval == GDK_KEY_F1) {
+        on_about_clicked(NULL, NULL);
+        return TRUE;
     }
     if (ev->keyval == GDK_KEY_Escape && gtk_revealer_get_reveal_child(GTK_REVEALER(find_revealer))) {
         toggle_find_bar(FALSE);
@@ -801,8 +827,8 @@ int main(int argc, char **argv)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(wrap_toggle), TRUE);
     gtk_widget_set_tooltip_text(wrap_toggle, "Wrap long lines automatically so you never have to scroll sideways");
     g_signal_connect(wrap_toggle, "toggled", G_CALLBACK(on_wrap_toggled), NULL);
+    gtk_box_pack_end(GTK_BOX(tbar), toolbar_btn("help-about-symbolic", "About", "About Hyggshi Text Editor (F1)", G_CALLBACK(on_about_clicked), NULL), FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(tbar), wrap_toggle, FALSE, FALSE, 0);
-
     gtk_box_pack_end(GTK_BOX(tbar), toolbar_btn("zoom-in-symbolic", "A+", "Make text larger (Ctrl++)", G_CALLBACK(on_zoom_change), GINT_TO_POINTER(1)), FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(tbar), toolbar_btn("zoom-out-symbolic", "A-", "Make text smaller (Ctrl+-)", G_CALLBACK(on_zoom_change), GINT_TO_POINTER(-1)), FALSE, FALSE, 0);
 

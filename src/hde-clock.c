@@ -354,14 +354,20 @@ static void update_world_zones_ui(void)
     if (analog_area) gtk_widget_queue_draw(analog_area);
 }
 
-static void on_remove_zone(GtkButton *b, gpointer d)
+static gboolean remove_zone_idle_cb(gpointer d)
 {
-    (void)b;
     WorldZone *z = d;
-    if (!z || !world_zones) return;
+    if (!z || !world_zones) return G_SOURCE_REMOVE;
     if (z->row) gtk_widget_destroy(z->row);
     g_ptr_array_remove(world_zones, z);
     save_state();
+    return G_SOURCE_REMOVE;
+}
+
+static void on_remove_zone(GtkButton *b, gpointer d)
+{
+    (void)b;
+    g_idle_add(remove_zone_idle_cb, d);
 }
 
 static void add_world_zone_row(const char *city, const char *tz_id, gboolean persist)
@@ -499,14 +505,20 @@ static void on_alarm_toggled(GObject *sw, GParamSpec *ps, gpointer d)
     save_state();
 }
 
-static void on_alarm_delete(GtkButton *b, gpointer d)
+static gboolean delete_alarm_idle_cb(gpointer d)
 {
-    (void)b;
     AlarmItem *a = d;
-    if (!a || !alarms) return;
+    if (!a || !alarms) return G_SOURCE_REMOVE;
     g_ptr_array_remove(alarms, a);
     rebuild_alarms_list();
     save_state();
+    return G_SOURCE_REMOVE;
+}
+
+static void on_alarm_delete(GtkButton *b, gpointer d)
+{
+    (void)b;
+    g_idle_add(delete_alarm_idle_cb, d);
 }
 
 static void rebuild_alarms_list(void)
@@ -1085,6 +1097,38 @@ static void load_saved_state(void)
     g_key_file_free(kf);
 }
 
+static void show_about_dialog(void)
+{
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(GTK_WINDOW(main_win),
+        "program-name", "Hyggshi Clock",
+        "version", HDE_VERSION,
+        "comments", "World Clock, Alarms, Stopwatch, and Countdown Timer for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "preferences-system-time",
+        NULL);
+}
+
+static void on_about_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    show_about_dialog();
+}
+
+static gboolean on_clock_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
+{
+    (void)w; (void)d;
+    if (ev->keyval == GDK_KEY_F1) {
+        show_about_dialog();
+        return TRUE;
+    }
+    return FALSE;
+}
+
 int main(int argc, char **argv)
 {
     const char *start_page = "world";
@@ -1117,6 +1161,7 @@ int main(int argc, char **argv)
     gtk_window_set_icon_name(GTK_WINDOW(main_win), "preferences-system-time");
     gtk_window_set_default_size(GTK_WINDOW(main_win), 760, 480);
     g_signal_connect(main_win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(main_win, "key-press-event", G_CALLBACK(on_clock_key), NULL);
 
     stack = gtk_stack_new();
     gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT_RIGHT);
@@ -1127,6 +1172,12 @@ int main(int argc, char **argv)
     GtkWidget *switcher = gtk_stack_switcher_new();
     gtk_stack_switcher_set_stack(GTK_STACK_SWITCHER(switcher), GTK_STACK(stack));
     gtk_header_bar_set_custom_title(GTK_HEADER_BAR(hbar), switcher);
+
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Clock (F1)");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), NULL);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(hbar), about_btn);
+
     gtk_window_set_titlebar(GTK_WINDOW(main_win), hbar);
 
     gtk_stack_add_titled(GTK_STACK(stack), build_world_page(), "world", "World Clock");

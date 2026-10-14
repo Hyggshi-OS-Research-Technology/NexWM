@@ -613,7 +613,7 @@ static void write_sym_svg(const char *dir, const char *name, const char *inner)
 const char *hde_theme_ensure_icon_theme(void)
 {
     char *base = g_build_filename(g_get_user_data_dir(), "icons", HDE_BUILTIN_ICON_THEME, NULL);
-    char *stamp = g_build_filename(base, ".hde-icons-v1", NULL);
+    char *stamp = g_build_filename(base, ".hde-icons-v3", NULL);
     char *idx = g_build_filename(base, "index.theme", NULL);
     if (g_file_test(stamp, G_FILE_TEST_EXISTS) && g_file_test(idx, G_FILE_TEST_EXISTS)) {
         g_free(idx); g_free(stamp); g_free(base);
@@ -668,6 +668,8 @@ const char *hde_theme_ensure_icon_theme(void)
         { "scalable/apps", "system-help", "#2ec27e", "<circle cx=\"24\" cy=\"24\" r=\"12\" fill=\"none\" stroke=\"#fff\" stroke-width=\"3\"/><rect x=\"22\" y=\"17\" width=\"4\" height=\"10\" fill=\"#fff\"/><rect x=\"22\" y=\"30\" width=\"4\" height=\"4\" fill=\"#fff\"/>" },
         { "scalable/apps", "dialog-question", "#2ec27e", "<circle cx=\"24\" cy=\"24\" r=\"12\" fill=\"none\" stroke=\"#fff\" stroke-width=\"3\"/>" },
         { "scalable/apps", "dialog-information", "#3584e4", "<rect x=\"22\" y=\"21\" width=\"4\" height=\"13\" fill=\"#fff\"/><rect x=\"22\" y=\"14\" width=\"4\" height=\"4\" fill=\"#fff\"/>" },
+        { "scalable/apps", "help-about", "#3584e4", "<circle cx=\"24\" cy=\"24\" r=\"12\" fill=\"none\" stroke=\"#fff\" stroke-width=\"3\"/><rect x=\"22\" y=\"21\" width=\"4\" height=\"10\" fill=\"#fff\"/><rect x=\"22\" y=\"15\" width=\"4\" height=\"4\" fill=\"#fff\"/>" },
+        { "scalable/apps", "utilities-system-monitor", "#2ec27e", "<path fill=\"none\" stroke=\"#fff\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M11 26h6l3-8 4 14 3-9 2 3h8\"/>" },
         { "scalable/apps", "dialog-warning", "#e5a50a", "<path fill=\"#fff\" d=\"M24 12L11 35h26zm-2 10h4v7h-4zm0 9h4v3h-4z\"/>" },
         { "scalable/apps", "dialog-error", "#e01b24", "<rect x=\"13\" y=\"22\" width=\"22\" height=\"4\" fill=\"#fff\"/>" },
         { "scalable/apps", "utilities-terminal", "#241f31", "<path fill=\"#fff\" d=\"M13 16l8 6-8 6v-3l4-3-4-3zm10 11h12v3H23z\"/>" },
@@ -761,6 +763,8 @@ const char *hde_theme_ensure_icon_theme(void)
         { "scalable/devices", "drive-harddisk-symbolic", "<rect x=\"2\" y=\"1\" width=\"12\" height=\"14\" rx=\"2\" fill=\"#bebebe\"/>" },
         { "scalable/devices", "computer-symbolic", "<rect x=\"1\" y=\"2\" width=\"14\" height=\"10\" rx=\"1\" fill=\"#bebebe\"/><rect x=\"5\" y=\"13\" width=\"6\" height=\"2\" fill=\"#bebebe\"/>" },
         { "scalable/apps", "help-browser-symbolic", "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"none\" stroke=\"#bebebe\" stroke-width=\"2\"/><rect x=\"7\" y=\"4\" width=\"2\" height=\"5\" fill=\"#bebebe\"/><rect x=\"7\" y=\"10\" width=\"2\" height=\"2\" fill=\"#bebebe\"/>" },
+        { "scalable/apps", "help-about-symbolic", "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"none\" stroke=\"#bebebe\" stroke-width=\"2\"/><rect x=\"7\" y=\"7\" width=\"2\" height=\"5\" fill=\"#bebebe\"/><rect x=\"7\" y=\"4\" width=\"2\" height=\"2\" fill=\"#bebebe\"/>" },
+        { "scalable/actions", "help-about-symbolic", "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"none\" stroke=\"#bebebe\" stroke-width=\"2\"/><rect x=\"7\" y=\"7\" width=\"2\" height=\"5\" fill=\"#bebebe\"/><rect x=\"7\" y=\"4\" width=\"2\" height=\"2\" fill=\"#bebebe\"/>" },
         { "scalable/apps", "help-faq-symbolic", "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"none\" stroke=\"#bebebe\" stroke-width=\"2\"/><rect x=\"7\" y=\"4\" width=\"2\" height=\"5\" fill=\"#bebebe\"/><rect x=\"7\" y=\"10\" width=\"2\" height=\"2\" fill=\"#bebebe\"/>" },
         { "scalable/apps", "dialog-question-symbolic", "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"none\" stroke=\"#bebebe\" stroke-width=\"2\"/><rect x=\"7\" y=\"4\" width=\"2\" height=\"5\" fill=\"#bebebe\"/><rect x=\"7\" y=\"10\" width=\"2\" height=\"2\" fill=\"#bebebe\"/>" },
         { "scalable/apps", "utilities-terminal-symbolic", "<path fill=\"#bebebe\" d=\"M1 2h14v12H1zm2 3l4 3-4 3v-2l2-1-2-1zm5 5h5v1H8z\"/>" },
