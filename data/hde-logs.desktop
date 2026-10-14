@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Logs
+GenericName=System & Session Log Viewer
+Comment=Inspect and filter system, kernel (dmesg), security, and Hyggshi Desktop session logs
+Exec=@PREFIX@/bin/hde-logs
+Icon=utilities-log-viewer
+Terminal=false
+Categories=GTK;System;Monitor;Utility;
+Keywords=logs;syslog;journalctl;dmesg;kernel;errors;diagnostics;debug;
+StartupNotify=true

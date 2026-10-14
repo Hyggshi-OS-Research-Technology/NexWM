@@ -6,6 +6,8 @@
 inode/directory=hde-files.desktop
 text/plain=hde-editor.desktop
 text/markdown=hde-editor.desktop
+text/calendar=hde-calendar.desktop
+text/x-log=hde-logs.desktop
 image/png=hde-media.desktop
 image/jpeg=hde-media.desktop
 image/gif=hde-media.desktop

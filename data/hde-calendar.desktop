@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Calendar
+GenericName=Calendar & Event Planner
+Comment=View monthly and yearly calendars, holidays, and manage recurring events and schedules
+Exec=@PREFIX@/bin/hde-calendar
+Icon=x-office-calendar
+Terminal=false
+Categories=GTK;Office;Calendar;Utility;
+Keywords=calendar;date;events;schedule;agenda;holidays;reminder;ics;
+StartupNotify=true
