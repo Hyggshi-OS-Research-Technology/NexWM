@@ -6,7 +6,7 @@
 #
 #   sudo sh login/sddm/install.sh                    install the theme and make SDDM use it
 #   sudo sh login/sddm/install.sh --default-session   ... and preselect HDE (hde.desktop) as the session SDDM starts
-#   sudo sh login/sddm/install.sh --session NAME      ... and preselect NAME (x11, wayland, nexwm, nexwm-wayland, or *.desktop)
+#   sudo sh login/sddm/install.sh --session NAME      ... and preselect NAME (x11 / hde.desktop or wayland / hde-wayland.desktop)
 #   sudo sh login/sddm/install.sh --no-config         only the theme files (leave SDDM's configuration alone)
 #   sudo sh login/sddm/install.sh --root DIR          install under DIR as if it were /  (packaging, tests, ISOs)
 #   sudo sh login/sddm/install.sh --dir DIR           install the theme into DIR (default /usr/share/sddm/themes)
@@ -55,13 +55,11 @@ usage() {
 
 normalize_session() {
     case "${1:-}" in
-    x11|hde|hde-x11)             echo "hde.desktop" ;;
-    wayland|hde-wayland)         echo "hde-wayland.desktop" ;;
-    nexwm|nexwm-x11)             echo "nexwm.desktop" ;;
-    nexwm-wayland)               echo "nexwm-wayland.desktop" ;;
-    *.desktop)                   echo "$1" ;;
-    "")                          echo "hde.desktop" ;;
-    *)                           echo "$1.desktop" ;;
+    x11|hde|hde-x11|hde.desktop)             echo "hde.desktop" ;;
+    wayland|hde-wayland|hde-wayland.desktop) echo "hde-wayland.desktop" ;;
+    *.desktop)                               echo "$1" ;;
+    "")                                      echo "hde.desktop" ;;
+    *)                                       echo "$1.desktop" ;;
     esac
 }
 

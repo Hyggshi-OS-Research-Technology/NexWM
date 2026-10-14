@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=HDE
-Comment=Lightweight GTK desktop environment
+Name=HDE (X11)
+Comment=Lightweight GTK desktop environment on X11
 Exec=@PREFIX@/bin/hde-start
 TryExec=@PREFIX@/bin/hde-session
 Type=Application

@@ -5,3 +5,4 @@ Exec=@PREFIX@/bin/hde-start --wm nexwm --wayland
 TryExec=@PREFIX@/bin/nexwm
 Type=Application
 DesktopNames=HDE
+NoDisplay=true

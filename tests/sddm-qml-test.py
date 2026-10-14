@@ -156,8 +156,8 @@ class SessionModel(QAbstractListModel):
 
     def __init__(self):
         super().__init__()
-        self.sessions = [{"name": "NexWM (Wayland)", "exec": "/usr/bin/hde-start"},
-                         {"name": "HDE", "exec": "/usr/bin/startplasma"}]
+        self.sessions = [{"name": "HDE (Wayland)", "exec": "/usr/bin/hde-start --wayland"},
+                         {"name": "HDE (X11)", "exec": "/usr/bin/hde-start"}]
 
     def roleNames(self):
         return self.Roles

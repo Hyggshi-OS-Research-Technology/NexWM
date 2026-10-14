@@ -1,8 +1,8 @@
-// HdeSessions.qml — which desktop session to start (HDE, HDE (Wayland), NexWM, NexWM (Wayland), ...).
+// HdeSessions.qml — which desktop session to start (HDE (X11), HDE (Wayland), ...).
 //
 // Reads SDDM's sessionModel (/usr/share/xsessions and /usr/share/wayland-sessions), detects whether each session runs
 // on X11 or Wayland, shows a protocol badge ("X11" / "Wayland") on every entry, and provides a 1-click X11 | Wayland
-// quick switcher bar above the dropdown so the user can switch display servers or desktop sessions effortlessly.
+// quick switcher bar above the dropdown so the user can switch between HDE (X11) and HDE (Wayland) effortlessly.
 import QtQuick 2.0
 
 Column {
@@ -30,21 +30,26 @@ Column {
         return "X11";
     }
 
-    // Switch directly to an X11 or Wayland session while keeping the same WM family (NexWM vs HDE) when possible
+    function formatSessionName(rawName, proto) {
+        var n = String(rawName || "");
+        if (n === "HDE" || n === "NexWM" || n === "NexWM (X11)")
+            return "HDE (X11)";
+        if (n === "NexWM (Wayland)")
+            return "HDE (Wayland)";
+        if (n === "HDE" && proto === "Wayland")
+            return "HDE (Wayland)";
+        return n;
+    }
+
+    // Switch directly to HDE (X11) or HDE (Wayland)
     function selectProtocol(targetProto) {
         if (protocols.length === 0) return;
-        var curNameLower = String(root.currentName || "").toLowerCase();
-        var wantNexwm = curNameLower.indexOf("nexwm") >= 0;
         var best = -1;
         for (var i = 0; i < protocols.length; i++) {
             if (protocols[i] !== targetProto) continue;
             if (best < 0) best = i;
             var candLower = String(names[i] || "").toLowerCase();
-            if (wantNexwm && candLower.indexOf("nexwm") >= 0) {
-                best = i;
-                break;
-            }
-            if (!wantNexwm && candLower.indexOf("hde") >= 0 && candLower.indexOf("nexwm") < 0) {
+            if (candLower.indexOf("hde") >= 0) {
                 best = i;
                 break;
             }
@@ -68,9 +73,10 @@ Column {
             width: 0
             height: 0
             Component.onCompleted: {
-                var nm = (model.name !== undefined && model.name !== "") ? String(model.name) : ("Session " + (index + 1));
+                var rawNm = (model.name !== undefined && model.name !== "") ? String(model.name) : ("Session " + (index + 1));
                 var ex = (model.exec !== undefined) ? String(model.exec) : "";
-                var proto = root.detectProtocol(nm, ex);
+                var proto = root.detectProtocol(rawNm, ex);
+                var nm = root.formatSessionName(rawNm, proto);
                 root.names = root.names.concat([nm]);
                 root.protocols = root.protocols.concat([proto]);
             }

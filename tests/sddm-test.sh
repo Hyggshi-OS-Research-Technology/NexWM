@@ -279,11 +279,11 @@ if [ -x "$INSTALL" ] || [ -f "$INSTALL" ]; then
     else
         fail "--session wayland did not write DefaultSession=hde-wayland.desktop"
     fi
-    sh "$INSTALL" --root "$ROOT" --session nexwm-wayland >/dev/null 2>&1
-    if grep -q "^DefaultSession=nexwm-wayland.desktop" "$ROOT/etc/sddm.conf.d/50-hde-theme.conf"; then
-        pass "--session nexwm-wayland preselects NexWM (Wayland) (DefaultSession=nexwm-wayland.desktop)"
+    sh "$INSTALL" --root "$ROOT" --session x11 >/dev/null 2>&1
+    if grep -q "^DefaultSession=hde.desktop" "$ROOT/etc/sddm.conf.d/50-hde-theme.conf"; then
+        pass "--session x11 preselects HDE (X11) (DefaultSession=hde.desktop)"
     else
-        fail "--session nexwm-wayland did not write DefaultSession=nexwm-wayland.desktop"
+        fail "--session x11 did not write DefaultSession=hde.desktop"
     fi
     # the theme of an installed HDE is the theme of this checkout: every file the installer put there is identical to
     # its source (the documentation stays in the checkout, and metadata.desktop may have QtVersion rewritten for the

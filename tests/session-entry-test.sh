@@ -42,7 +42,12 @@ entry() { sed -n "s/^$2=//p" "$1" | head -n1; }               # one key of a des
 for f in data/hde.desktop data/nexwm.desktop data/nexwm-wayland.desktop data/hde-wayland.desktop; do
     if [ ! -f "$CASE/$f" ]; then fail "$f is there"; continue; fi
     eq "$f: it is an application (the login screen shows it)" "Application" "$(entry "$CASE/$f" Type)"
+done
+for f in data/hde.desktop data/hde-wayland.desktop; do
     hasnt "$f: visible in SDDM session chooser (not hidden by NoDisplay=true)" "NoDisplay=true" "$(cat "$CASE/$f")"
+done
+for f in data/nexwm.desktop data/nexwm-wayland.desktop; do
+    has "$f: hidden from SDDM login session chooser (NoDisplay=true)" "NoDisplay=true" "$(cat "$CASE/$f")"
 done
 
 x11=$(cat "$CASE/data/nexwm.desktop" 2>/dev/null)
