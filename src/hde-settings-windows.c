@@ -1,6 +1,7 @@
 /* Hyggshi Settings — Window Management page: choose the WM (GTK WMs preferred) and switch instantly without logging out. */
 #include "hde-distro.h"
 #include "hde-settings.h"
+#include "hde-theme.h"
 #include "hde-wm.h"
 #include <gdk/gdkx.h>
 #include <signal.h>

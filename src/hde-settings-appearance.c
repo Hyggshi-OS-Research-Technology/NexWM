@@ -984,7 +984,7 @@ GtkWidget *page_appearance_new(void)
     g_signal_connect(mode, "changed", G_CALLBACK(on_wallpaper_mode), NULL);
     gtk_box_pack_start(GTK_BOX(advanced), row_box("Background fit", "How the picture fills the screen.", mode), FALSE, FALSE, 0);
 
-    GtkWidget *fx_title = section_title("Visual Effects & Animations");
+    GtkWidget *fx_title = section("Visual Effects & Animations");
     gtk_box_pack_start(GTK_BOX(box), fx_title, FALSE, FALSE, 0);
     GtkWidget *fx_surface = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     gtk_style_context_add_class(gtk_widget_get_style_context(fx_surface), "appearance-surface");

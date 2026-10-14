@@ -1,6 +1,7 @@
 /* dialogs.c — Hyggshi Files: rename, new folder / document, properties, open with, run or display, conflicts,
  * opening files with their application, About, keyboard shortcuts. */
 #include "files.h"
+#include <fnmatch.h>
 #include <gio/gdesktopappinfo.h>
 #include <grp.h>
 #include <pwd.h>
@@ -1355,7 +1356,6 @@ void files_select_pattern_dialog(FilesWindow *w)
     if (gtk_dialog_run(GTK_DIALOG(d)) == GTK_RESPONSE_OK) {
         const char *pat = gtk_entry_get_text(GTK_ENTRY(entry));
         if (pat && *pat && w->pane && w->pane->sort) {
-            GPatternSpec *ps = g_pattern_spec_new(pat);
             GList *matches = NULL;
             GtkTreeIter iter;
             if (gtk_tree_model_get_iter_first(w->pane->sort, &iter)) {
@@ -1363,13 +1363,12 @@ void files_select_pattern_dialog(FilesWindow *w)
                     GFile *f = NULL;
                     char *name = NULL;
                     gtk_tree_model_get(w->pane->sort, &iter, COL_FILE, &f, COL_NAME, &name, -1);
-                    if (f && name && g_pattern_match_string(ps, name))
+                    if (f && name && fnmatch(pat, name, 0) == 0)
                         matches = g_list_prepend(matches, g_object_ref(f));
                     if (f) g_object_unref(f);
                     g_free(name);
                 } while (gtk_tree_model_iter_next(w->pane->sort, &iter));
             }
-            g_pattern_spec_free(ps);
             pane_select_files(w->pane, matches);
             files_list_free(matches);
         }

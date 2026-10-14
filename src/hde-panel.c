@@ -109,7 +109,7 @@ static const char *label_font_name(GtkWidget *label)
 {
     static char buf[128] = "";
     PangoLayout *l = gtk_widget_create_pango_layout(label, "0123456789/:");
-    PangoFontDescription *fd = pango_layout_get_font_description(l);
+    const PangoFontDescription *fd = pango_layout_get_font_description(l);
     char *s = fd ? pango_font_description_to_string(fd) : NULL;
     g_strlcpy(buf, s ? s : "?", sizeof buf);
     g_free(s);

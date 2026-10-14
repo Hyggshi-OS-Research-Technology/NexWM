@@ -26,6 +26,7 @@
 #include "hde-choose.h"
 #include "hde-build.h"
 #include <gio/gio.h>
+#include <gio/gdesktopappinfo.h>
 #include <glib/gstdio.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -1348,7 +1349,9 @@ static GtkWidget *make_search_button(void)
         GtkWidget *r = gtk_list_box_row_new();
         GtkWidget *hb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
         gtk_container_set_border_width(GTK_CONTAINER(hb), 6);
-        gtk_box_pack_start(GTK_BOX(hb), first_icon(items[i].icon, 16), FALSE, FALSE, 0);
+        char *icon = pick_icon(items[i].icon);
+        gtk_box_pack_start(GTK_BOX(hb), gtk_image_new_from_icon_name(icon, GTK_ICON_SIZE_MENU), FALSE, FALSE, 0);
+        g_free(icon);
         GtkWidget *tb = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
         GtkWidget *tl = gtk_label_new(items[i].title);
         gtk_label_set_xalign(GTK_LABEL(tl), 0);
