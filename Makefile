@@ -521,7 +521,14 @@ install: all
 	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
 	chmod 644 $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
 	install -m644 data/hde-portals.conf $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-	@command -v labwc >/dev/null 2>&1 || echo "NOTE: the HDE (Wayland) session appears on the login screen once labwc is installed (sudo apt install labwc)"
+	@if ! command -v labwc >/dev/null 2>&1; then \
+	  sed -i 's|^TryExec=.*|TryExec=labwc|' $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
+	  sed 's|@PREFIX@|$(PREFIX)|g' data/hde-wayland.desktop > $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop; \
+	  chmod 644 $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
+	  echo "NOTE: installed $(XSESSIONS)/hde-wayland.desktop so HDE (Wayland) can start even before labwc is installed"; \
+	else \
+	  rm -f $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
+	fi
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
 	# "NexWM" on the login screen: the HDE session with NexWM as its window manager (hde-start --wm nexwm)
 	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm.desktop > $(DESTDIR)$(XSESSIONS)/nexwm.desktop
@@ -577,7 +584,7 @@ reload:
 	$(PREFIX)/bin/hde-session restart
 uninstall:
 	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
-	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
+	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-support.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-clock.desktop $(DESTDIR)$(APPS_DIR)/hde-camera.desktop $(DESTDIR)$(APPS_DIR)/hde-calc.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-editor.desktop $(DESTDIR)$(APPS_DIR)/hde-resources.desktop $(DESTDIR)$(APPS_DIR)/hde-partition.desktop \

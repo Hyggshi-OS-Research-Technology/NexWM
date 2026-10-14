@@ -340,7 +340,7 @@ Rectangle {
                         accent: root.accent
                         fontFamily: root.fontFamily
                         currentIndex: root.sessionIndex
-                        onPicked: function (index) {
+                        onPicked: {
                             root.sessionIndex = index;
                             console.log("hde-login: selected session #" + index + " (" + sessions.currentName + " / " + sessions.currentProtocol + ")");
                             root.focusFirst(false);
@@ -411,7 +411,9 @@ Rectangle {
         root.userName = user;
         root.busy = true;
         root.message = "";
-        sddm.login(user, field.passwordText, root.sessionIndex);
+        var sIdx = (sessions.visible && sessions.selectedModelIndex >= 0)
+                   ? sessions.selectedModelIndex : root.sessionIndex;
+        sddm.login(user, field.passwordText, sIdx);
     }
 
     // Enter in the user name field: the password is the next thing to type, so the cursor goes there (unless one was

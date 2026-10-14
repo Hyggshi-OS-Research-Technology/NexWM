@@ -194,6 +194,13 @@ ${SESSION_LINE}EOF"
             mkdir -p /usr/share/xsessions /usr/share/wayland-sessions
             sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde.desktop" > /usr/share/xsessions/hde.desktop
             sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/wayland-sessions/hde-wayland.desktop
+            if ! command -v labwc >/dev/null 2>&1; then
+                sed -i 's|^TryExec=.*|TryExec=labwc|' /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true
+                sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/xsessions/hde-wayland.desktop
+                chmod 644 /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
+            else
+                rm -f /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
+            fi
             [ -f "$DATA_DIR/nexwm.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm.desktop" > /usr/share/xsessions/nexwm.desktop
             [ -f "$DATA_DIR/nexwm-wayland.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm-wayland.desktop" > /usr/share/wayland-sessions/nexwm-wayland.desktop
             chmod 644 /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true

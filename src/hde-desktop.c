@@ -2480,10 +2480,13 @@ int main(int argc, char **argv)
     GdkDisplay *dpy = gdk_display_get_default();
     GdkMonitor *m = gdk_display_get_primary_monitor(dpy);
     if (!m) m = gdk_display_get_monitor(dpy, 0);
-    gdk_monitor_get_geometry(m, &mon);
+    if (m) gdk_monitor_get_geometry(m, &mon);
+    if (mon.width <= 0 || mon.height <= 0) mon = (GdkRectangle){ 0, 0, 1280, 800 };
 
     GdkScreen *scr = gdk_display_get_default_screen(dpy);
     int sw = gdk_screen_get_width(scr), sh = gdk_screen_get_height(scr);
+    if (sw <= 0) sw = mon.width;
+    if (sh <= 0) sh = mon.height;
 
     win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(win), "hde-desktop");
@@ -2544,7 +2547,9 @@ int main(int argc, char **argv)
     if (hde_wl_is_layer(GTK_WINDOW(win))) {
         update_extra_wallpapers(m);
         fprintf(stderr, "hde-desktop: Wayland: desktop on the background layer, %dx%d\n", mon.width, mon.height);
-    } else gdk_window_lower(gtk_widget_get_window(win));  /* even without a WM, or when the WM ignores the DESKTOP hint */
+    } else if (gtk_widget_get_window(win)) {
+        gdk_window_lower(gtk_widget_get_window(win));  /* even without a WM, or when the WM ignores the DESKTOP hint */
+    }
     g_signal_connect(scr, "monitors-changed", G_CALLBACK(on_screens_changed), NULL);
     g_signal_connect(scr, "size-changed", G_CALLBACK(on_screens_changed), NULL);
     gtk_main();

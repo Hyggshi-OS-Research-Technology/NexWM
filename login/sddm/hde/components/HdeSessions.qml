@@ -11,12 +11,15 @@ Column {
     property string fontFamily: ""
     property int currentIndex: 0
     readonly property bool open: combo.open          // the list of sessions is open: the keyboard is its
+    property var rawEntries: []
     property var names: []
     property var protocols: []                       // "Wayland" or "X11" for each displayed item
     property var modelIndices: []                    // index in SDDM's sessionModel for each displayed item
     readonly property string currentName: combo.currentText
     readonly property string currentProtocol: (combo.index >= 0 && combo.index < protocols.length)
                                               ? protocols[combo.index] : ""
+    readonly property int selectedModelIndex: (combo.index >= 0 && combo.index < modelIndices.length)
+                                              ? modelIndices[combo.index] : currentIndex
     readonly property bool hasX11: protocols.indexOf("X11") >= 0
     readonly property bool hasWayland: protocols.indexOf("Wayland") >= 0
     signal picked(int index)
@@ -46,37 +49,39 @@ Column {
         return n;
     }
 
-    function rebuildSessionList() {
-        var rawItems = [];
-        for (var i = 0; i < rawCollector.count; i++) {
-            var item = rawCollector.itemAt(i);
-            if (!item) continue;
-            rawItems.push({
-                modelIndex: i,
-                rawName: item.rawName,
-                displayName: item.displayName,
-                proto: item.proto,
-                isNexwmAlias: item.isNexwmAlias
-            });
+    function syncComboIndex() {
+        if (root.modelIndices.length === 0) return;
+        var mapped = root.modelIndices.indexOf(root.currentIndex);
+        if (mapped >= 0 && combo.index !== mapped) {
+            combo.index = mapped;
+        } else if (mapped < 0 && (combo.index < 0 || combo.index >= root.names.length)) {
+            combo.index = 0;
         }
+    }
 
+    onCurrentIndexChanged: root.syncComboIndex()
+
+    function rebuildSessionList() {
         var outNames = [];
         var outProtos = [];
         var outIndices = [];
+        var outAliases = [];
 
-        for (var j = 0; j < rawItems.length; j++) {
-            var r = rawItems[j];
+        for (var j = 0; j < root.rawEntries.length; j++) {
+            var r = root.rawEntries[j];
             var existing = outNames.indexOf(r.displayName);
             if (existing >= 0) {
                 // Prefer the primary hde.desktop / hde-wayland.desktop entry over a legacy nexwm alias
-                if (!r.isNexwmAlias) {
+                if (outAliases[existing] && !r.isNexwmAlias) {
                     outIndices[existing] = r.modelIndex;
+                    outAliases[existing] = false;
                 }
                 continue;
             }
             outNames.push(r.displayName);
             outProtos.push(r.proto);
             outIndices.push(r.modelIndex);
+            outAliases.push(r.isNexwmAlias);
         }
 
         // Ensure both HDE (X11) and HDE (Wayland) are always visible in the login chooser
@@ -95,10 +100,7 @@ Column {
         root.names = outNames;
         root.protocols = outProtos;
         root.modelIndices = outIndices;
-
-        // Sync combo.index with root.currentIndex
-        var mapped = outIndices.indexOf(root.currentIndex);
-        combo.index = mapped >= 0 ? mapped : 0;
+        root.syncComboIndex();
     }
 
     // Switch directly to HDE (X11) or HDE (Wayland)
@@ -132,14 +134,26 @@ Column {
             visible: false
             width: 0
             height: 0
-            readonly property string rawName: (model.name !== undefined && model.name !== "") ? String(model.name) : ("Session " + (index + 1))
-            readonly property string rawExec: (model.exec !== undefined) ? String(model.exec) : ""
-            readonly property string rawFile: (model.file !== undefined) ? String(model.file) : ""
-            readonly property string rawType: (model.type !== undefined) ? String(model.type) : ""
-            readonly property string proto: root.detectProtocol(rawName, rawExec, rawFile, rawType)
-            readonly property string displayName: root.formatSessionName(rawName, proto)
-            readonly property bool isNexwmAlias: String(rawName).toLowerCase().indexOf("nexwm") >= 0
-            Component.onCompleted: root.rebuildSessionList()
+            Component.onCompleted: {
+                var rawNm = (model.name !== undefined && model.name !== "") ? String(model.name) : ("Session " + (index + 1));
+                var rawEx = (model.exec !== undefined) ? String(model.exec) : "";
+                var rawFl = (model.file !== undefined) ? String(model.file) : "";
+                var rawTp = (model.type !== undefined) ? String(model.type) : "";
+                var pr = root.detectProtocol(rawNm, rawEx, rawFl, rawTp);
+                var disp = root.formatSessionName(rawNm, pr);
+                var isAlias = rawNm.toLowerCase().indexOf("nexwm") >= 0 || rawFl.toLowerCase().indexOf("nexwm") >= 0;
+                var next = root.rawEntries.slice();
+                next.push({
+                    modelIndex: index,
+                    rawName: rawNm,
+                    displayName: disp,
+                    proto: pr,
+                    isNexwmAlias: isAlias
+                });
+                next.sort(function (a, b) { return a.modelIndex - b.modelIndex; });
+                root.rawEntries = next;
+                root.rebuildSessionList();
+            }
         }
     }
 
@@ -227,16 +241,13 @@ Column {
         badges: root.protocols
         accent: root.accent
         fontFamily: root.fontFamily
-        onPicked: function (idx) {
-            var modelIdx = (idx >= 0 && idx < root.modelIndices.length) ? root.modelIndices[idx] : idx;
-            root.currentIndex = modelIdx;
+        onPicked: {
+            var modelIdx = (index >= 0 && index < root.modelIndices.length) ? root.modelIndices[index] : index;
             root.picked(modelIdx);
         }
     }
 
     Component.onCompleted: {
-        if (typeof sessionModel !== "undefined" && sessionModel !== null)
-            root.currentIndex = Math.max(0, sessionModel.lastIndex);
         root.rebuildSessionList();
     }
 }

@@ -243,6 +243,20 @@ static int wayland_launch_nexwm(const char *inner)
  * compositor with --wm nexwm and falls back to labwc on the machines where it cannot run yet. */
 static int wayland_launch(void)
 {
+    const char *rdir = getenv("XDG_RUNTIME_DIR");
+    char rbuf[256];
+    struct stat rst;
+    if (!rdir || !*rdir || stat(rdir, &rst) != 0) {
+        snprintf(rbuf, sizeof rbuf, "/run/user/%u", (unsigned)getuid());
+        if (stat(rbuf, &rst) != 0 || access(rbuf, W_OK) != 0) {
+            snprintf(rbuf, sizeof rbuf, "/tmp/hde-runtime-%u", (unsigned)getuid());
+            mkdir(rbuf, 0700);
+            chmod(rbuf, 0700);
+        }
+        setenv("XDG_RUNTIME_DIR", rbuf, 1);
+    }
+    setenv("WLR_NO_HARDWARE_CURSORS", "1", 0);
+    setenv("WLR_RENDERER_ALLOW_SOFTWARE", "1", 0);
     setenv("XDG_SESSION_TYPE", "wayland", 1);
     setenv("XDG_CURRENT_DESKTOP", "HDE", 1);
     setenv("XDG_SESSION_DESKTOP", "HDE", 1);
@@ -254,6 +268,7 @@ static int wayland_launch(void)
     setenv("ELECTRON_OZONE_PLATFORM_HINT", "auto", 0);
     unsetenv("GDK_BACKEND");                         /* GTK apps pick Wayland by themselves (X11 through Xwayland) */
     unsetenv("DISPLAY");                             /* labwc sets it for Xwayland */
+    unsetenv("WAYLAND_DISPLAY");                     /* compositor creates its own Wayland socket */
     config_path(g_labwc_dir, sizeof g_labwc_dir, "labwc");
     char cmd[8300];
     snprintf(cmd, sizeof cmd, "'%s/hde-session' --wayland-inner", g_bindir);   /* labwc: no shell, quotes ok */
@@ -867,10 +882,15 @@ int main(int argc, char **argv)
             break;
         }
     }
-    if (argc > 1 && (!strcmp(argv[1], "--wayland") || !strcmp(argv[1], "--wayland-inner"))) {
+    int arg_wayland = 0, arg_wayland_inner = 0;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--wayland")) arg_wayland = 1;
+        else if (!strcmp(argv[i], "--wayland-inner")) arg_wayland_inner = 1;
+    }
+    if (arg_wayland || arg_wayland_inner) {
         self_dir(g_bindir, sizeof(g_bindir), argv[0]);
         /* outside the compositor (from the login screen): start labwc, which starts us again inside */
-        if (!strcmp(argv[1], "--wayland") && !getenv("WAYLAND_DISPLAY")) {
+        if (arg_wayland && !arg_wayland_inner && !getenv("WAYLAND_DISPLAY")) {
             start_keyring();        /* before labwc: the compositor and everything it starts inherit it */
             return wayland_launch();
         }

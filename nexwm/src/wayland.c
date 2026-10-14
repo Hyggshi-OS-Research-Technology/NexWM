@@ -432,6 +432,25 @@ static bool output_enable(NexwmServer *server, struct wlr_output *wlr)
     if (mode) wlr_output_state_set_mode(&state, mode);
     bool ok = wlr_output_commit_state(wlr, &state);
     wlr_output_state_finish(&state);
+    if (!ok) {
+        struct wlr_output_mode *cand;
+        wl_list_for_each(cand, &wlr->modes, link) {
+            if (cand == mode) continue;
+            wlr_output_state_init(&state);
+            wlr_output_state_set_enabled(&state, true);
+            wlr_output_state_set_mode(&state, cand);
+            ok = wlr_output_commit_state(wlr, &state);
+            wlr_output_state_finish(&state);
+            if (ok) break;
+        }
+    }
+    if (!ok) {
+        wlr_output_state_init(&state);
+        wlr_output_state_set_enabled(&state, true);
+        wlr_output_state_set_custom_mode(&state, 1280, 800, 60000);
+        ok = wlr_output_commit_state(wlr, &state);
+        wlr_output_state_finish(&state);
+    }
 #else
     wlr_output_enable(wlr, true);
     if (mode) wlr_output_set_mode(wlr, mode);
@@ -1235,6 +1254,9 @@ static void view_map(struct wl_listener *listener, void *data)
     NexwmView *view = wl_container_of(listener, view, map);
     NexwmServer *server = view->server;
     struct wlr_box area = server_workarea(server);
+    const char *title = view->xdg->title ? view->xdg->title : "";
+    bool is_desktop = strcmp(title, "hde-desktop") == 0;
+    bool is_panel = strcmp(title, "hde-panel") == 0;
     view->mapped = true;
     view->minimized = false;
     view->workspace = server->workspace;
@@ -1243,24 +1265,43 @@ static void view_map(struct wl_listener *listener, void *data)
     view->height = view->xdg->base->current.geometry.height;
     if (view->width < 1) view->width = NEXWM_DEFAULT_WIDTH;
     if (view->height < 1) view->height = NEXWM_DEFAULT_HEIGHT;
-    if (view->width > area.width) view->width = area.width;
-    if (view->height > area.height) view->height = area.height;
-    size_t count = 0;
-    NexwmView *other;
-    wl_list_for_each(other, &server->views, link) if (other->mapped) count++;
-    int cascade = (int)(count % 10) * 28;
-    view->x = area.x + 32 + cascade;
-    view->y = area.y + 32 + cascade;
-    if (view->x + view->width > area.x + area.width) view->x = area.x + area.width - view->width;
-    if (view->y + view->height > area.y + area.height) view->y = area.y + area.height - view->height;
+    if (is_desktop && view->output) {
+        view->x = view->output->layout_box.x;
+        view->y = view->output->layout_box.y;
+        view->width = view->output->full_area.width;
+        view->height = view->output->full_area.height;
+        wlr_xdg_toplevel_set_size(view->xdg, view->width, view->height);
+    } else if (is_panel && view->output) {
+        view->width = view->output->full_area.width;
+        if (view->height > 96) view->height = 34;
+        view->x = view->output->layout_box.x;
+        view->y = view->output->layout_box.y + view->output->full_area.height - view->height;
+        wlr_xdg_toplevel_set_size(view->xdg, view->width, view->height);
+    } else {
+        if (view->width > area.width) view->width = area.width;
+        if (view->height > area.height) view->height = area.height;
+        size_t count = 0;
+        NexwmView *other;
+        wl_list_for_each(other, &server->views, link) if (other->mapped) count++;
+        int cascade = (int)(count % 10) * 28;
+        view->x = area.x + 32 + cascade;
+        view->y = area.y + 32 + cascade;
+        if (view->x + view->width > area.x + area.width) view->x = area.x + area.width - view->width;
+        if (view->y + view->height > area.y + area.height) view->y = area.y + area.height - view->height;
+    }
     view->restore_valid = false;
     wlr_scene_node_set_position(&view->scene_tree->node, view->x, view->y);
     wlr_scene_node_set_enabled(&view->scene_tree->node, true);
-    wl_list_insert(&server->views, &view->link);
-    if (view->foreign && view->output)
+    if (is_desktop) {
+        wlr_scene_node_lower_to_bottom(&view->scene_tree->node);
+        wl_list_insert(server->views.prev, &view->link);
+    } else {
+        wl_list_insert(&server->views, &view->link);
+    }
+    if (!is_desktop && !is_panel && view->foreign && view->output)
         wlr_foreign_toplevel_handle_v1_output_enter(view->foreign, view->output->wlr);
     view_sync_foreign_state(view);
-    view_focus(server, view);
+    if (!is_desktop && !is_panel) view_focus(server, view);
     log_message("info", "mapped '%s' on workspace %d",
                 view->xdg->title ? view->xdg->title : "(untitled)", view->workspace + 1);
 }
@@ -1663,6 +1704,7 @@ static bool server_init(NexwmServer *server)
         return false;
     }
     server->event_loop = wl_display_get_event_loop(server->display);
+    setenv("WLR_NO_HARDWARE_CURSORS", "1", 0);
 
 #if NEXWM_WLROOTS_MINOR >= 18
     server->backend = wlr_backend_autocreate(server->event_loop, NULL);
@@ -1872,6 +1914,11 @@ int nexwm_wayland_run(const char *config_path, int replace, const char *session)
         goto finish;
     }
     setenv("WAYLAND_DISPLAY", socket, 1);
+    {
+        char pid_str[32];
+        snprintf(pid_str, sizeof pid_str, "%d", (int)getpid());
+        setenv("LABWC_PID", pid_str, 1);
+    }
     server.session_pid = start_session_command(session);
     if (server.session_pid < 0) {
         server.exit_code = 3;
