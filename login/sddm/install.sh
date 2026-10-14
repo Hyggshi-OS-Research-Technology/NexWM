@@ -184,6 +184,22 @@ DefaultSession=$SESSION
 Current=$THEME_NAME
 ${SESSION_LINE}EOF"
     say "  wrote:      $DEST_CONF_FILE"
+    if [ -z "$ROOT" ] && [ "$DRY" != 1 ]; then
+        DATA_DIR=""
+        if [ -d "$HERE/../data" ]; then DATA_DIR=$(cd "$HERE/../data" && pwd);
+        elif [ -d "$HERE/../../data" ]; then DATA_DIR=$(cd "$HERE/../../data" && pwd); fi
+        PREF="/usr/local"
+        [ -x /usr/bin/hde-session ] && [ ! -x /usr/local/bin/hde-session ] && PREF="/usr"
+        if [ -n "$DATA_DIR" ] && [ -f "$DATA_DIR/hde.desktop" ] && [ -f "$DATA_DIR/hde-wayland.desktop" ]; then
+            mkdir -p /usr/share/xsessions /usr/share/wayland-sessions
+            sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde.desktop" > /usr/share/xsessions/hde.desktop
+            sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/wayland-sessions/hde-wayland.desktop
+            [ -f "$DATA_DIR/nexwm.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm.desktop" > /usr/share/xsessions/nexwm.desktop
+            [ -f "$DATA_DIR/nexwm-wayland.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm-wayland.desktop" > /usr/share/wayland-sessions/nexwm-wayland.desktop
+            chmod 644 /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true
+            say "  sessions:   installed HDE (X11) and HDE (Wayland) into /usr/share/{xsessions,wayland-sessions}"
+        fi
+    fi
 fi
 
 # older SDDM preselects the session of state.conf (SDDM overwrites it after every login, so it is only a first choice)

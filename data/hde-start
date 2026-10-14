@@ -54,12 +54,12 @@ if [ "${1:-}" = "--wayland" ]; then
         set -- --wayland --wm nexwm
         echo "hde-start: running $SESSION --wayland --wm nexwm (NexWM, HDE's own compositor)"
     else
-        if ! command -v labwc >/dev/null 2>&1; then
-            echo "hde-start: the HDE (Wayland) session needs the labwc compositor: $(install_hint labwc)"
+        if ! command -v labwc >/dev/null 2>&1 && ! command -v nexwm >/dev/null 2>&1 && [ ! -x "$HERE/nexwm" ]; then
+            echo "hde-start: the HDE (Wayland) session needs labwc or nexwm: $(install_hint labwc)"
             exit 1
         fi
         set -- --wayland
-        echo "hde-start: running $SESSION --wayland (labwc $(labwc --version 2>/dev/null | head -n1))"
+        echo "hde-start: running $SESSION --wayland"
     fi
     export XDG_CURRENT_DESKTOP=HDE XDG_SESSION_DESKTOP=HDE DESKTOP_SESSION=hde-wayland XDG_SESSION_TYPE=wayland
     unset DISPLAY GDK_BACKEND GDK_CORE_DEVICE_EVENTS

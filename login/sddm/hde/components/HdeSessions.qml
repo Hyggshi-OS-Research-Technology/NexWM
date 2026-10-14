@@ -1,18 +1,19 @@
 // HdeSessions.qml — which desktop session to start (HDE (X11), HDE (Wayland), ...).
 //
-// Reads SDDM's sessionModel (/usr/share/xsessions and /usr/share/wayland-sessions), detects whether each session runs
-// on X11 or Wayland, shows a protocol badge ("X11" / "Wayland") on every entry, and provides a 1-click X11 | Wayland
-// quick switcher bar above the dropdown so the user can switch between HDE (X11) and HDE (Wayland) effortlessly.
+// Reads SDDM's sessionModel (/usr/share/xsessions and /usr/share/wayland-sessions), normalizes HDE session names so
+// both "HDE (X11)" and "HDE (Wayland)" are always clearly presented (without exposing internal NexWM entries),
+// shows a protocol badge ("X11" / "Wayland") on every entry, and provides a 1-click X11 | Wayland quick switcher.
 import QtQuick 2.0
 
 Column {
     id: root
     property color accent: "#3584e4"
     property string fontFamily: ""
-    property alias currentIndex: combo.index
+    property int currentIndex: 0
     readonly property bool open: combo.open          // the list of sessions is open: the keyboard is its
     property var names: []
-    property var protocols: []                       // "Wayland" or "X11" for each session
+    property var protocols: []                       // "Wayland" or "X11" for each displayed item
+    property var modelIndices: []                    // index in SDDM's sessionModel for each displayed item
     readonly property string currentName: combo.currentText
     readonly property string currentProtocol: (combo.index >= 0 && combo.index < protocols.length)
                                               ? protocols[combo.index] : ""
@@ -22,36 +23,95 @@ Column {
     function closeCombo() { combo.open = false; }
     spacing: 5
 
-    function detectProtocol(nameStr, execStr) {
+    function detectProtocol(nameStr, execStr, fileStr, typeStr) {
         var n = String(nameStr || "").toLowerCase();
         var e = String(execStr || "").toLowerCase();
-        if (n.indexOf("wayland") >= 0 || e.indexOf("wayland") >= 0)
+        var f = String(fileStr || "").toLowerCase();
+        var t = String(typeStr || "").toLowerCase();
+        if (n.indexOf("wayland") >= 0 || e.indexOf("wayland") >= 0 ||
+            f.indexOf("wayland") >= 0 || t.indexOf("wayland") >= 0)
             return "Wayland";
         return "X11";
     }
 
     function formatSessionName(rawName, proto) {
         var n = String(rawName || "");
-        if (n === "HDE" || n === "NexWM" || n === "NexWM (X11)")
+        if (proto === "Wayland") {
+            if (n === "HDE" || n === "HDE (Wayland)" || n === "NexWM" || n === "NexWM (Wayland)")
+                return "HDE (Wayland)";
+            return n;
+        }
+        if (n === "HDE" || n === "HDE (X11)" || n === "NexWM" || n === "NexWM (X11)")
             return "HDE (X11)";
-        if (n === "NexWM (Wayland)")
-            return "HDE (Wayland)";
-        if (n === "HDE" && proto === "Wayland")
-            return "HDE (Wayland)";
         return n;
+    }
+
+    function rebuildSessionList() {
+        var rawItems = [];
+        for (var i = 0; i < rawCollector.count; i++) {
+            var item = rawCollector.itemAt(i);
+            if (!item) continue;
+            rawItems.push({
+                modelIndex: i,
+                rawName: item.rawName,
+                displayName: item.displayName,
+                proto: item.proto,
+                isNexwmAlias: item.isNexwmAlias
+            });
+        }
+
+        var outNames = [];
+        var outProtos = [];
+        var outIndices = [];
+
+        for (var j = 0; j < rawItems.length; j++) {
+            var r = rawItems[j];
+            var existing = outNames.indexOf(r.displayName);
+            if (existing >= 0) {
+                // Prefer the primary hde.desktop / hde-wayland.desktop entry over a legacy nexwm alias
+                if (!r.isNexwmAlias) {
+                    outIndices[existing] = r.modelIndex;
+                }
+                continue;
+            }
+            outNames.push(r.displayName);
+            outProtos.push(r.proto);
+            outIndices.push(r.modelIndex);
+        }
+
+        // Ensure both HDE (X11) and HDE (Wayland) are always visible in the login chooser
+        if (outNames.indexOf("HDE (X11)") < 0) {
+            outNames.unshift("HDE (X11)");
+            outProtos.unshift("X11");
+            outIndices.unshift(outIndices.length > 0 ? outIndices[0] : 0);
+        }
+        if (outNames.indexOf("HDE (Wayland)") < 0) {
+            var insertAt = outNames.indexOf("HDE (X11)") + 1;
+            outNames.splice(insertAt, 0, "HDE (Wayland)");
+            outProtos.splice(insertAt, 0, "Wayland");
+            outIndices.splice(insertAt, 0, outIndices.length > 0 ? outIndices[0] : 0);
+        }
+
+        root.names = outNames;
+        root.protocols = outProtos;
+        root.modelIndices = outIndices;
+
+        // Sync combo.index with root.currentIndex
+        var mapped = outIndices.indexOf(root.currentIndex);
+        combo.index = mapped >= 0 ? mapped : 0;
     }
 
     // Switch directly to HDE (X11) or HDE (Wayland)
     function selectProtocol(targetProto) {
         if (protocols.length === 0) return;
-        var best = -1;
-        for (var i = 0; i < protocols.length; i++) {
-            if (protocols[i] !== targetProto) continue;
-            if (best < 0) best = i;
-            var candLower = String(names[i] || "").toLowerCase();
-            if (candLower.indexOf("hde") >= 0) {
-                best = i;
-                break;
+        var targetLabel = (targetProto === "Wayland") ? "HDE (Wayland)" : "HDE (X11)";
+        var best = names.indexOf(targetLabel);
+        if (best < 0) {
+            for (var i = 0; i < protocols.length; i++) {
+                if (protocols[i] === targetProto) {
+                    best = i;
+                    break;
+                }
             }
         }
         if (best >= 0 && best !== combo.index) {
@@ -65,21 +125,21 @@ Column {
         combo.select(nextIdx);
     }
 
-    // Walk sessionModel once and collect session names + display server protocols ("X11" / "Wayland")
     Repeater {
+        id: rawCollector
         model: (typeof sessionModel !== "undefined" && sessionModel !== null) ? sessionModel : []
         delegate: Item {
             visible: false
             width: 0
             height: 0
-            Component.onCompleted: {
-                var rawNm = (model.name !== undefined && model.name !== "") ? String(model.name) : ("Session " + (index + 1));
-                var ex = (model.exec !== undefined) ? String(model.exec) : "";
-                var proto = root.detectProtocol(rawNm, ex);
-                var nm = root.formatSessionName(rawNm, proto);
-                root.names = root.names.concat([nm]);
-                root.protocols = root.protocols.concat([proto]);
-            }
+            readonly property string rawName: (model.name !== undefined && model.name !== "") ? String(model.name) : ("Session " + (index + 1))
+            readonly property string rawExec: (model.exec !== undefined) ? String(model.exec) : ""
+            readonly property string rawFile: (model.file !== undefined) ? String(model.file) : ""
+            readonly property string rawType: (model.type !== undefined) ? String(model.type) : ""
+            readonly property string proto: root.detectProtocol(rawName, rawExec, rawFile, rawType)
+            readonly property string displayName: root.formatSessionName(rawName, proto)
+            readonly property bool isNexwmAlias: String(rawName).toLowerCase().indexOf("nexwm") >= 0
+            Component.onCompleted: root.rebuildSessionList()
         }
     }
 
@@ -167,11 +227,16 @@ Column {
         badges: root.protocols
         accent: root.accent
         fontFamily: root.fontFamily
-        onPicked: root.picked(index)
+        onPicked: function (idx) {
+            var modelIdx = (idx >= 0 && idx < root.modelIndices.length) ? root.modelIndices[idx] : idx;
+            root.currentIndex = modelIdx;
+            root.picked(modelIdx);
+        }
     }
 
     Component.onCompleted: {
-        if (typeof sessionModel !== "undefined" && sessionModel !== null && combo.index === 0)
-            combo.index = Math.max(0, sessionModel.lastIndex);
+        if (typeof sessionModel !== "undefined" && sessionModel !== null)
+            root.currentIndex = Math.max(0, sessionModel.lastIndex);
+        root.rebuildSessionList();
     }
 }

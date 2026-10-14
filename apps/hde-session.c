@@ -279,6 +279,10 @@ static int wayland_launch(void)
     }
     char *labwc = resolve_component("labwc", NULL);
     if (!labwc) {
+        if (!want_nexwm) {
+            int rc = wayland_launch_nexwm(cmd);
+            if (rc >= 0) return rc;
+        }
         char *hint = hde_install_hint("labwc");
         fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: %s\n", hint);
         free(hint);

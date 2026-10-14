@@ -63,9 +63,9 @@ has "and it is only offered when NexWM is installed" "nexwm" "$(entry "$CASE/dat
 has "it says what it is on the login screen" "NexWM (Wayland)" "$wl"
 
 labwc=$(entry "$CASE/data/hde-wayland.desktop" Exec)
-has "HDE (Wayland) is still the labwc session (labwc is not removed)" "--wayland" "$labwc"
+has "HDE (Wayland) is still the Wayland session (--wayland)" "--wayland" "$labwc"
 hasnt "and it does not ask for another compositor" "--wm" "$labwc"
-has "and the login screen only offers it with labwc installed" "labwc" "$(entry "$CASE/data/hde-wayland.desktop" TryExec)"
+has "and the login screen offers it whenever hde-session is installed" "hde-session" "$(entry "$CASE/data/hde-wayland.desktop" TryExec)"
 
 mk_install=$(sed -n '/^install:/,/^uninstall:/p' "$CASE/Makefile" 2>/dev/null)
 mk_uninstall=$(sed -n '/^uninstall:/,$p' "$CASE/Makefile" 2>/dev/null)
