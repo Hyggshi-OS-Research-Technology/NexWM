@@ -1,8 +1,9 @@
-// HdeSessions.qml — which desktop session to start (HDE (X11), HDE (Wayland), ...).
+// HdeSessions.qml — which desktop session to start (HDE (X11), HDE (Wayland)).
 //
 // Reads SDDM's sessionModel (/usr/share/xsessions and /usr/share/wayland-sessions), normalizes HDE session names so
-// both "HDE (X11)" and "HDE (Wayland)" are always clearly presented (without exposing internal NexWM entries),
-// shows a protocol badge ("X11" / "Wayland") on every entry, and provides a 1-click X11 | Wayland quick switcher.
+// both "HDE (X11)" and "HDE (Wayland)" are always clearly presented (without exposing internal NexWM or non-HDE
+// fallback entries), shows a protocol badge ("X11" / "Wayland") on every entry, and provides a 1-click X11 | Wayland
+// quick switcher.
 import QtQuick 2.0
 
 Column {
@@ -37,6 +38,15 @@ Column {
         return "X11";
     }
 
+    function isHdeSession(nameStr, execStr, fileStr) {
+        var n = String(nameStr || "").toLowerCase();
+        var e = String(execStr || "").toLowerCase();
+        var f = String(fileStr || "").toLowerCase();
+        return n.indexOf("hde") >= 0 || n.indexOf("hyggshi") >= 0 || n.indexOf("nexwm") >= 0 ||
+               e.indexOf("hde-start") >= 0 || e.indexOf("hde-session") >= 0 || e.indexOf("nexwm") >= 0 ||
+               f.indexOf("hde") >= 0 || f.indexOf("nexwm") >= 0;
+    }
+
     function formatSessionName(rawName, proto) {
         var n = String(rawName || "");
         if (proto === "Wayland") {
@@ -51,55 +61,55 @@ Column {
 
     function syncComboIndex() {
         if (root.modelIndices.length === 0) return;
+        if (combo.index >= 0 && combo.index < root.modelIndices.length &&
+            root.modelIndices[combo.index] === root.currentIndex) {
+            return;
+        }
         var mapped = root.modelIndices.indexOf(root.currentIndex);
-        if (mapped >= 0 && combo.index !== mapped) {
+        if (mapped >= 0) {
             combo.index = mapped;
-        } else if (mapped < 0 && (combo.index < 0 || combo.index >= root.names.length)) {
+        } else {
             combo.index = 0;
+            if (root.modelIndices[0] >= 0 && root.currentIndex !== root.modelIndices[0]) {
+                root.picked(root.modelIndices[0]);
+            }
         }
     }
 
     onCurrentIndexChanged: root.syncComboIndex()
 
     function rebuildSessionList() {
-        var outNames = [];
-        var outProtos = [];
-        var outIndices = [];
-        var outAliases = [];
+        var hdeX11Idx = -1;
+        var hdeX11Alias = true;
+        var hdeWlIdx = -1;
+        var hdeWlAlias = true;
 
         for (var j = 0; j < root.rawEntries.length; j++) {
             var r = root.rawEntries[j];
-            var existing = outNames.indexOf(r.displayName);
-            if (existing >= 0) {
-                // Prefer the primary hde.desktop / hde-wayland.desktop entry over a legacy nexwm alias
-                if (outAliases[existing] && !r.isNexwmAlias) {
-                    outIndices[existing] = r.modelIndex;
-                    outAliases[existing] = false;
+            if (!r.isHde) continue;
+            if (r.proto === "Wayland" || r.displayName === "HDE (Wayland)") {
+                if (hdeWlIdx < 0 || (hdeWlAlias && !r.isNexwmAlias)) {
+                    hdeWlIdx = r.modelIndex;
+                    hdeWlAlias = r.isNexwmAlias;
                 }
-                continue;
+            } else {
+                if (hdeX11Idx < 0 || (hdeX11Alias && !r.isNexwmAlias)) {
+                    hdeX11Idx = r.modelIndex;
+                    hdeX11Alias = r.isNexwmAlias;
+                }
             }
-            outNames.push(r.displayName);
-            outProtos.push(r.proto);
-            outIndices.push(r.modelIndex);
-            outAliases.push(r.isNexwmAlias);
         }
 
-        // Ensure both HDE (X11) and HDE (Wayland) are always visible in the login chooser
-        if (outNames.indexOf("HDE (X11)") < 0) {
-            outNames.unshift("HDE (X11)");
-            outProtos.unshift("X11");
-            outIndices.unshift(outIndices.length > 0 ? outIndices[0] : 0);
-        }
-        if (outNames.indexOf("HDE (Wayland)") < 0) {
-            var insertAt = outNames.indexOf("HDE (X11)") + 1;
-            outNames.splice(insertAt, 0, "HDE (Wayland)");
-            outProtos.splice(insertAt, 0, "Wayland");
-            outIndices.splice(insertAt, 0, outIndices.length > 0 ? outIndices[0] : 0);
-        }
+        // Fall back between HDE (X11) and HDE (Wayland) if only one HDE entry is in sessionModel
+        // (never fall back to index 0 when index 0 is a non-HDE session such as Ubuntu).
+        if (hdeX11Idx < 0 && hdeWlIdx >= 0) hdeX11Idx = hdeWlIdx;
+        if (hdeWlIdx < 0 && hdeX11Idx >= 0) hdeWlIdx = hdeX11Idx;
+        if (hdeX11Idx < 0) hdeX11Idx = 0;
+        if (hdeWlIdx < 0) hdeWlIdx = hdeX11Idx;
 
-        root.names = outNames;
-        root.protocols = outProtos;
-        root.modelIndices = outIndices;
+        root.names = ["HDE (X11)", "HDE (Wayland)"];
+        root.protocols = ["X11", "Wayland"];
+        root.modelIndices = [hdeX11Idx, hdeWlIdx];
         root.syncComboIndex();
     }
 
@@ -142,13 +152,15 @@ Column {
                 var pr = root.detectProtocol(rawNm, rawEx, rawFl, rawTp);
                 var disp = root.formatSessionName(rawNm, pr);
                 var isAlias = rawNm.toLowerCase().indexOf("nexwm") >= 0 || rawFl.toLowerCase().indexOf("nexwm") >= 0;
+                var hdeMatch = root.isHdeSession(rawNm, rawEx, rawFl);
                 var next = root.rawEntries.slice();
                 next.push({
                     modelIndex: index,
                     rawName: rawNm,
                     displayName: disp,
                     proto: pr,
-                    isNexwmAlias: isAlias
+                    isNexwmAlias: isAlias,
+                    isHde: hdeMatch
                 });
                 next.sort(function (a, b) { return a.modelIndex - b.modelIndex; });
                 root.rawEntries = next;

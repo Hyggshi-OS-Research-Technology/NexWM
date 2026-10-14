@@ -191,12 +191,14 @@ ${SESSION_LINE}EOF"
         PREF="/usr/local"
         [ -x /usr/bin/hde-session ] && [ ! -x /usr/local/bin/hde-session ] && PREF="/usr"
         if [ -n "$DATA_DIR" ] && [ -f "$DATA_DIR/hde.desktop" ] && [ -f "$DATA_DIR/hde-wayland.desktop" ]; then
-            mkdir -p /usr/share/xsessions /usr/share/wayland-sessions
+            mkdir -p /usr/share/xsessions /usr/share/wayland-sessions "$PREF/bin"
+            [ -f "$DATA_DIR/hde-start" ] && install -m 755 "$DATA_DIR/hde-start" "$PREF/bin/hde-start"
+            [ -f "$DATA_DIR/hde-start-wayland" ] && install -m 755 "$DATA_DIR/hde-start-wayland" "$PREF/bin/hde-start-wayland"
             sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde.desktop" > /usr/share/xsessions/hde.desktop
             sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/wayland-sessions/hde-wayland.desktop
             if ! command -v labwc >/dev/null 2>&1; then
                 sed -i 's|^TryExec=.*|TryExec=labwc|' /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true
-                sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/xsessions/hde-wayland.desktop
+                sed -e "s|@PREFIX@|$PREF|g" -e 's|hde-start --wayland|hde-start-wayland|g' "$DATA_DIR/hde-wayland.desktop" > /usr/share/xsessions/hde-wayland.desktop
                 chmod 644 /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
             else
                 rm -f /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true

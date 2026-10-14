@@ -501,6 +501,7 @@ install: all
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
+	install -m755 data/hde-start-wayland $(DESTDIR)$(PREFIX)/bin/hde-start-wayland
 	@if [ -x $(BUILD)/hde-lock ]; then install -m755 $(BUILD)/hde-lock $(DESTDIR)$(PREFIX)/bin/hde-lock; \
 	 else echo "NOTE: hde-lock was not built (needs pkg-config cairo and libxcb1-dev, or wayland-client + xkbcommon, and libpam0g-dev for the password check)"; fi
 	@if [ -x $(BUILD)/hde-idle ]; then install -m755 $(BUILD)/hde-idle $(DESTDIR)$(PREFIX)/bin/hde-idle; \
@@ -523,7 +524,7 @@ install: all
 	install -m644 data/hde-portals.conf $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
 	@if ! command -v labwc >/dev/null 2>&1; then \
 	  sed -i 's|^TryExec=.*|TryExec=labwc|' $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
-	  sed 's|@PREFIX@|$(PREFIX)|g' data/hde-wayland.desktop > $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop; \
+	  sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|hde-start --wayland|hde-start-wayland|g' data/hde-wayland.desktop > $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop; \
 	  chmod 644 $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
 	  echo "NOTE: installed $(XSESSIONS)/hde-wayland.desktop so HDE (Wayland) can start even before labwc is installed"; \
 	else \
@@ -583,7 +584,7 @@ dev: all
 reload:
 	$(PREFIX)/bin/hde-session restart
 uninstall:
-	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
+	for b in $(PROGRAMS) hde-start hde-start-wayland; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
 	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-support.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-clock.desktop $(DESTDIR)$(APPS_DIR)/hde-camera.desktop $(DESTDIR)$(APPS_DIR)/hde-calc.desktop \
