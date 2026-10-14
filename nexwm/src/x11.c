@@ -323,6 +323,18 @@ static void client_ping_start(NexwmClient *c, uint64_t now)
     xcb_flush(wm.conn);
 }
 
+static int window_get_pid(Nexwm *w, xcb_window_t win)
+{
+    static xcb_atom_t pid_atom = XCB_NONE;
+    if (pid_atom == XCB_NONE && w->conn) {
+        xcb_intern_atom_cookie_t ck = xcb_intern_atom(w->conn, 0, 11, "_NET_WM_PID");
+        xcb_intern_atom_reply_t *r = xcb_intern_atom_reply(w->conn, ck, NULL);
+        if (r) { pid_atom = r->atom; free(r); }
+    }
+    if (pid_atom == XCB_NONE) return 0;
+    return (int)prop_get_cardinal(w, win, pid_atom, 0);
+}
+
 static void clients_check_responsive(void)
 {
     uint64_t now = monotonic_ms();
@@ -335,7 +347,7 @@ static void clients_check_responsive(void)
                 c->unresponsive = 1;
                 wm_log("warning: 0x%x '%s' is not responding to WM_PROTOCOLS _NET_WM_PING",
                        (unsigned)c->id, c->title);
-                nexwm_notify_app_unresponsive(c->title);
+                nexwm_notify_app_unresponsive_ex(c->title, (unsigned long)c->id, window_get_pid(&wm, c->id));
             }
             continue;
         }
@@ -929,6 +941,35 @@ static void frame_paint(NexwmClient *c)
     }
 }
 
+static void client_animate_frame(NexwmClient *c, int fx0, int fy0, int fw0, int fh0,
+                                 int fx1, int fy1, int fw1, int fh1)
+{
+    if (!c || !c->framed || !c->frame || wm.cfg.animation_ms <= 0) return;
+    if (getenv("NEXWM_NOTIFY_LOG") || getenv("HDE_TEST_OUT") || getenv("HDE_NEXWM_CONF")) return;
+    int ms = wm.cfg.animation_ms > 400 ? 400 : wm.cfg.animation_ms;
+    int steps = ms / 18;
+    if (steps < 3) steps = 3;
+    if (steps > 12) steps = 12;
+    struct timespec ts = { 0, (long)(ms * 1000000L / steps) };
+    for (int s = 1; s < steps; s++) {
+        double t = (double)s / (double)steps;
+        double inv = 1.0 - t;
+        double ease = 1.0 - inv * inv * inv;
+        int cx = fx0 + (int)((fx1 - fx0) * ease);
+        int cy = fy0 + (int)((fy1 - fy0) * ease);
+        int cw = fw0 + (int)((fw1 - fw0) * ease);
+        int ch = fh0 + (int)((fh1 - fh0) * ease);
+        if (cw < 32) cw = 32;
+        if (ch < 24) ch = 24;
+        uint32_t fv[4] = { (uint32_t)cx, (uint32_t)cy, (uint32_t)cw, (uint32_t)ch };
+        xcb_configure_window(wm.conn, c->frame,
+                             XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                             XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, fv);
+        xcb_flush(wm.conn);
+        nanosleep(&ts, NULL);
+    }
+}
+
 /* Move and size the frame and the window inside it. A window sits at (border, border + title bar) of its frame, so
  * the frame is the window plus the frame around it. The X server is told only when something really changed — a drag
  * asks for the same numbers again and again — and a frame that changed size is painted again, because a resize
@@ -989,9 +1030,17 @@ static void client_mapped_set(NexwmClient *c, int want)
     }
     if (want == c->mapped) return;
     if (want) {
+        int fx0 = c->fx, fy0 = c->fy, fw0 = c->fw, fh0 = c->fh;
         xcb_map_window(wm.conn, c->id);            /* the client first, so the frame never shows an empty hole */
         xcb_map_window(wm.conn, c->frame);
         c->mapped = 1;
+        if (fw0 > 64 && fh0 > 48) {
+            client_animate_frame(c, fx0 + fw0 / 16, fy0 + fh0 / 16, fw0 * 7 / 8, fh0 * 7 / 8, fx0, fy0, fw0, fh0);
+            uint32_t fv[4] = { (uint32_t)fx0, (uint32_t)fy0, (uint32_t)fw0, (uint32_t)fh0 };
+            xcb_configure_window(wm.conn, c->frame,
+                                 XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                                 XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, fv);
+        }
     } else {
         c->mapped = 0;                             /* before the requests: the UnmapNotify they cause is ours */
         c->ping_pending = 0;
@@ -1361,6 +1410,11 @@ static void action_close(NexwmClient *c, int politely)
     if (politely && window_supports(&wm, c->id, NEXWM_ATOM_WM_DELETE_WINDOW)) {
         client_send_protocol(c->id, NEXWM_ATOM_WM_DELETE_WINDOW, XCB_CURRENT_TIME);
         wm_log("asked 0x%x '%s' to close", (unsigned)c->id, c->title);
+        if (c->unresponsive) {
+            nexwm_notify_app_unresponsive_ex(c->title, (unsigned long)c->id, window_get_pid(&wm, c->id));
+        } else if (!c->ping_pending && window_supports(&wm, c->id, NEXWM_ATOM_NET_WM_PING)) {
+            client_ping_start(c, monotonic_ms());
+        }
         return;
     }
     wm_log("kill 0x%x '%s'", (unsigned)c->id, c->title);
@@ -1409,6 +1463,7 @@ static void action_maximize(NexwmClient *c, int on)
         return;
     }
     if (on && !c->maximized) {
+        int fx0 = c->fx, fy0 = c->fy, fw0 = c->fw, fh0 = c->fh;
         c->sx = c->x; c->sy = c->y; c->sw = c->w; c->sh = c->h;
         c->has_saved = 1;
         /* the *frame* covers the work area: the window is that much smaller than it (the title bar is above it, and the
@@ -1417,15 +1472,19 @@ static void action_maximize(NexwmClient *c, int on)
         NexwmRect r = client_in_area(c, area);
         c->x = r.x; c->y = r.y; c->w = r.w; c->h = r.h;
         c->maximized = 1;
+        client_animate_frame(c, fx0, fy0, fw0, fh0, wm.wx, wm.wy, wm.ww, wm.wh);
         client_place(c);
         client_set_state(&wm, c);
         wm_log("maximized 0x%x '%s' (%dx%d at %d,%d: the workarea without the panel's struts and without its frame)",
                (unsigned)c->id, c->title, c->w, c->h, c->x, c->y);
     } else if (!on && c->maximized) {
+        int fx0 = c->fx, fy0 = c->fy, fw0 = c->fw, fh0 = c->fh;
         c->maximized = 0;
         if (c->has_saved) {
             c->x = c->sx; c->y = c->sy; c->w = c->sw; c->h = c->sh;
         }
+        NexwmRect f1 = frame_rect(c);
+        client_animate_frame(c, fx0, fy0, fw0, fh0, f1.x, f1.y, f1.w, f1.h);
         client_place(c);
         client_set_state(&wm, c);
         wm_log("unmaximized 0x%x '%s' (%dx%d at %d,%d)", (unsigned)c->id, c->title, c->w, c->h, c->x, c->y);
@@ -1438,6 +1497,7 @@ static void action_snap(NexwmClient *c, int edge)
         wm_log("no window to snap");
         return;
     }
+    int fx0 = c->fx, fy0 = c->fy, fw0 = c->fw, fh0 = c->fh;
     if (!c->has_saved) {
         c->sx = c->x; c->sy = c->y; c->sw = c->w; c->sh = c->h;
         c->has_saved = 1;
@@ -1462,6 +1522,7 @@ static void action_snap(NexwmClient *c, int edge)
     }
     NexwmRect r = client_in_area(c, area);
     c->x = r.x; c->y = r.y; c->w = r.w; c->h = r.h;
+    client_animate_frame(c, fx0, fy0, fw0, fh0, area.x, area.y, area.w, area.h);
     client_place(c);
     client_set_state(&wm, c);
     static const char *names[] = { "left", "right", "up", "down" };

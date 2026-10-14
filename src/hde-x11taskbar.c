@@ -416,6 +416,40 @@ static void on_menu_close_all(GtkMenuItem *i, gpointer d)
     group_close_all((Group *)d);
 }
 
+static void task_open_unresponsive_dialog(Task *t)
+{
+    if (!t || !t->win) return;
+    unsigned long xid = wnck_window_get_xid(t->win);
+    int pid = wnck_window_get_pid(t->win);
+    const char *title = (t->title && *t->title) ? t->title : "Application";
+    char xid_buf[32], pid_buf[32];
+    g_snprintf(xid_buf, sizeof xid_buf, "0x%lx", xid);
+    g_snprintf(pid_buf, sizeof pid_buf, "%d", pid);
+    char *argv[] = {
+        (char *)"hde-settings",
+        (char *)"--unresponsive-dialog",
+        (char *)"--title", (char *)title,
+        (char *)"--xid", xid_buf,
+        (char *)"--pid", pid_buf,
+        NULL
+    };
+    g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL);
+}
+
+static void on_menu_force_quit(GtkMenuItem *i, gpointer d)
+{
+    (void)i;
+    task_open_unresponsive_dialog((Task *)d);
+}
+
+static void on_menu_force_quit_all(GtkMenuItem *i, gpointer d)
+{
+    (void)i;
+    Group *g = d;
+    if (!g || g->tasks->len == 0) return;
+    task_open_unresponsive_dialog(g_ptr_array_index(g->tasks, 0));
+}
+
 /* a window with its name in front of it: which of the windows of one application this is */
 static GtkWidget *window_item(Task *t)
 {
@@ -595,14 +629,16 @@ static gboolean on_button_press(GtkWidget *w, GdkEventButton *e, gpointer d)
         menu_item(sh, "Minimize _all", G_CALLBACK(on_menu_minimize_all), g);
         menu_item(sh, "_Restore all", G_CALLBACK(on_menu_restore_all), g);
         menu_item(sh, "_Close all", G_CALLBACK(on_menu_close_all), g);
+        menu_item(sh, "Force _Quit All…", G_CALLBACK(on_menu_force_quit_all), g);
     } else if (g->tasks->len == 1) {
         Task *t = g_ptr_array_index(g->tasks, 0);
         const struct { const char *label; GCallback cb; } items[] = {
             { t->minimized ? "_Restore" : "Mi_nimize", G_CALLBACK(on_menu_minimize) },
             { t->maximized ? "Unma_ximize" : "Ma_ximize", G_CALLBACK(on_menu_maximize) },
-            { "_Close", G_CALLBACK(on_menu_close) } };
+            { "_Close", G_CALLBACK(on_menu_close) },
+            { "Force _Quit…", G_CALLBACK(on_menu_force_quit) } };
         for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
-            if (i == G_N_ELEMENTS(items) - 1) gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
+            if (i == 2) gtk_menu_shell_append(sh, gtk_separator_menu_item_new());
             menu_item(sh, items[i].label, items[i].cb, t);
         }
     }

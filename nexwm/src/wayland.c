@@ -1201,8 +1201,11 @@ static void view_ping_timeout(struct wl_listener *listener, void *data)
     if (!view->mapped || view->unresponsive) return;
     view->unresponsive = true;
     const char *title = view->xdg->title ? view->xdg->title : "(untitled)";
+    pid_t pid = 0;
+    if (view->xdg && view->xdg->base && view->xdg->base->client && view->xdg->base->client->client)
+        wl_client_get_credentials(view->xdg->base->client->client, &pid, NULL, NULL);
     log_message("warning", "'%s' is not responding to an xdg-shell ping", title);
-    nexwm_notify_app_unresponsive(title);
+    nexwm_notify_app_unresponsive_ex(title, 0, (int)pid);
 }
 
 static void view_commit(struct wl_listener *listener, void *data)

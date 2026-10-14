@@ -469,12 +469,19 @@ char **hde_menu_default_favorites(void)
         add_first(a, fm);
     }
     before = a->len;
-    static const char *const terms[] = { "org.gnome.Terminal.desktop", "org.gnome.Console.desktop", "xfce4-terminal.desktop",
+    static const char *const terms[] = { "hde-cmd.desktop", "org.gnome.Terminal.desktop", "org.gnome.Console.desktop", "xfce4-terminal.desktop",
         "mate-terminal.desktop", "org.kde.konsole.desktop", "lxterminal.desktop", "qterminal.desktop", "tilix.desktop",
         "terminator.desktop", "kitty.desktop", "Alacritty.desktop", "foot.desktop", "xterm.desktop", "debian-xterm.desktop", NULL };
     add_first(a, terms);
     if (a->len == before) add_category(a, "TerminalEmulator");
     add_id(a, "hyggshi-settings.desktop");
+    add_id(a, "hde-video.desktop");
+    add_id(a, "hde-editor.desktop");
+    add_id(a, "hde-calc.desktop");
+    add_id(a, "hde-clock.desktop");
+    add_id(a, "hde-camera.desktop");
+    add_id(a, "hde-resources.desktop");
+    add_id(a, "hde-partition.desktop");
     static const char *const stores[] = { "mintinstall.desktop", "org.gnome.Software.desktop", "org.kde.discover.desktop",
         "io.elementary.appcenter.desktop", "pop-shop.desktop", "snap-store_snap-store.desktop", "synaptic.desktop", NULL };
     add_first(a, stores);

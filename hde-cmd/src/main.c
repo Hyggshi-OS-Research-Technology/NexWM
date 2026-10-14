@@ -14,8 +14,9 @@ static void usage(FILE *out)
             "\n"
             "Options:\n"
             "  -d, -C, --directory DIR      start in DIR (also --cwd, --working-directory)\n"
-            "  -t, --title TITLE            set the initial window title\n"
-            "  -e, --execute COMMAND        run COMMAND instead of the user's shell (also --command)\n"
+            "  -t, -T, --title TITLE        set the initial window title\n"
+            "  -g, --geometry COLSxROWS     set initial terminal grid size (e.g. 100x30)\n"
+            "  -e, -x, --execute COMMAND    run COMMAND instead of the user's shell (also --command)\n"
             "      --vte                    use the optional VTE backend (when built with VTE)\n"
             "  -h, --help                   show this help\n"
             "      --version                show the version and available backends\n"
@@ -84,7 +85,7 @@ int main(int argc, char **argv)
             options.working_directory = arg + 6;
             continue;
         }
-        if (!strcmp(arg, "-t") || !strcmp(arg, "--title")) {
+        if (!strcmp(arg, "-t") || !strcmp(arg, "-T") || !strcmp(arg, "--title")) {
             if (++i >= argc) return fail("missing title after", arg);
             options.title = argv[i];
             continue;
@@ -93,7 +94,17 @@ int main(int argc, char **argv)
             options.title = arg + 8;
             continue;
         }
-        if (!strcmp(arg, "-e") || !strcmp(arg, "--execute") || !strcmp(arg, "--command")) {
+        if (!strcmp(arg, "-g") || !strcmp(arg, "--geometry") || !strncmp(arg, "--geometry=", 11)) {
+            const char *g = !strncmp(arg, "--geometry=", 11) ? arg + 11 : (++i < argc ? argv[i] : NULL);
+            if (!g) return fail("missing COLSxROWS after", arg);
+            int cols = 0, rows = 0;
+            if (sscanf(g, "%dx%d", &cols, &rows) != 2 || cols < 10 || rows < 4)
+                return fail("invalid geometry (expected COLSxROWS)", g);
+            options.initial_columns = cols;
+            options.initial_rows = rows;
+            continue;
+        }
+        if (!strcmp(arg, "-e") || !strcmp(arg, "-x") || !strcmp(arg, "--execute") || !strcmp(arg, "--command")) {
             if (++i >= argc) return fail("missing command after", arg);
             options.command = &argv[i];
             break;

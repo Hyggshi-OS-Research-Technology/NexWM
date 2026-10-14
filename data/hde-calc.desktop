@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Calculator
+GenericName=Calculator
+Comment=Standard, Scientific, Programmer, and Unit Converter calculator for HDE
+Exec=@PREFIX@/bin/hde-calc
+Icon=accessories-calculator
+Terminal=false
+Categories=GTK;Utility;Calculator;Science;Math;
+Keywords=calculator;math;scientific;programmer;hex;binary;converter;units;
+StartupNotify=true
+StartupWMClass=hde-calc

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Partition Manager
+GenericName=Disk & Partition Manager
+Comment=Inspect, create, resize, format, and manage disk partitions in HDE
+Exec=@PREFIX@/bin/hde-partition
+Icon=drive-harddisk
+Terminal=false
+Categories=GTK;System;Filesystem;
+Keywords=disk;partition;format;resize;ext4;btrfs;ntfs;fat32;gpt;drive;storage;
+StartupNotify=true
+StartupWMClass=hde-partition

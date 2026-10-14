@@ -38,11 +38,33 @@
 #define PTY_BUFFER_SIZE 16384
 
 typedef struct {
+    const char *name;
+    double bg_r, bg_g, bg_b;
+    double fg_r, fg_g, fg_b;
+    double cur_r, cur_g, cur_b;
+    double sel_r, sel_g, sel_b;
+} CmdTheme;
+
+static const CmdTheme CMD_THEMES[] = {
+    { "Hyggshi Dark",   0.090, 0.102, 0.125,  0.855, 0.878, 0.914,  0.470, 0.670, 0.980,  0.240, 0.470, 0.780 },
+    { "Hyggshi Light",  0.973, 0.976, 0.984,  0.118, 0.133, 0.165,  0.110, 0.443, 0.847,  0.208, 0.518, 0.894 },
+    { "Monokai Pro",    0.118, 0.122, 0.110,  0.973, 0.973, 0.949,  0.651, 0.886, 0.180,  0.340, 0.360, 0.280 },
+    { "Solarized Dark", 0.000, 0.169, 0.212,  0.576, 0.631, 0.631,  0.149, 0.545, 0.824,  0.090, 0.340, 0.420 },
+    { "Nord",           0.180, 0.204, 0.251,  0.847, 0.871, 0.914,  0.533, 0.753, 0.816,  0.298, 0.337, 0.416 },
+    { "Matrix Green",   0.027, 0.071, 0.035,  0.200, 1.000, 0.400,  0.000, 0.902, 0.302,  0.078, 0.360, 0.141 },
+};
+
+typedef struct {
     GtkApplication *application;
     GtkWidget *window;
     GtkWidget *terminal_widget;
     GtkWidget *header;
     GtkWidget *context_menu;
+    GtkWidget *open_url_item;
+    GtkWidget *copy_url_item;
+    GtkWidget *find_bar;
+    GtkWidget *find_entry;
+    GtkWidget *find_status;
     HdeCmdVt *vt;
     HdeCmdOptions options;
     const char *program_name;
@@ -62,12 +84,19 @@ typedef struct {
     int cell_width;
     int cell_height;
     int font_size;
+    int theme_index;
+    int cursor_style;
     PangoFontDescription *font;
     char *title;
+    char *hovered_url;
 
     int selecting;
     int selection_x1, selection_y1;
     int selection_x2, selection_y2;
+
+    int find_match_abs_row;
+    int find_match_col;
+    int find_match_len;
 
 #ifdef HDE_CMD_HAVE_VTE
     VteTerminal *vte;
@@ -76,15 +105,68 @@ typedef struct {
 #endif
 } CmdWindow;
 
-static const double DEFAULT_BG_R = 0.090;
-static const double DEFAULT_BG_G = 0.102;
-static const double DEFAULT_BG_B = 0.125;
-static const double DEFAULT_FG_R = 0.855;
-static const double DEFAULT_FG_G = 0.878;
-static const double DEFAULT_FG_B = 0.914;
-
 static void menu_new(GtkMenuItem *item, gpointer userdata);
 static void menu_open_folder(GtkMenuItem *item, gpointer userdata);
+static void toggle_find_bar(CmdWindow *app, gboolean show);
+
+static const CmdTheme *current_theme(const CmdWindow *app)
+{
+    int idx = app ? CLAMP(app->theme_index, 0, (int)G_N_ELEMENTS(CMD_THEMES) - 1) : 0;
+    return &CMD_THEMES[idx];
+}
+
+static char *cmd_config_path(void)
+{
+    return g_build_filename(g_get_user_config_dir(), "hde", "cmd.ini", NULL);
+}
+
+static void load_preferences(CmdWindow *app)
+{
+    char *path = cmd_config_path();
+    GKeyFile *kf = g_key_file_new();
+    if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL)) {
+        if (g_key_file_has_key(kf, "cmd", "font_size", NULL))
+            app->font_size = CLAMP(g_key_file_get_integer(kf, "cmd", "font_size", NULL), MIN_FONT_SIZE, MAX_FONT_SIZE);
+        if (g_key_file_has_key(kf, "cmd", "theme_index", NULL))
+            app->theme_index = CLAMP(g_key_file_get_integer(kf, "cmd", "theme_index", NULL), 0, (int)G_N_ELEMENTS(CMD_THEMES) - 1);
+        if (g_key_file_has_key(kf, "cmd", "cursor_style", NULL))
+            app->cursor_style = CLAMP(g_key_file_get_integer(kf, "cmd", "cursor_style", NULL), 0, 2);
+    }
+    g_key_file_free(kf);
+    g_free(path);
+}
+
+static void save_preferences(const CmdWindow *app)
+{
+    char *path = cmd_config_path();
+    char *dir = g_path_get_dirname(path);
+    g_mkdir_with_parents(dir, 0755);
+    GKeyFile *kf = g_key_file_new();
+    g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_set_integer(kf, "cmd", "font_size", app->font_size);
+    g_key_file_set_integer(kf, "cmd", "theme_index", app->theme_index);
+    g_key_file_set_integer(kf, "cmd", "cursor_style", app->cursor_style);
+    g_key_file_save_to_file(kf, path, NULL);
+    g_key_file_free(kf);
+    g_free(dir);
+    g_free(path);
+}
+
+static void update_subtitle(CmdWindow *app)
+{
+    if (!app || !app->header) return;
+    if (app->options.use_vte || !app->vt) {
+        gtk_header_bar_set_subtitle(GTK_HEADER_BAR(app->header), "Terminal");
+        return;
+    }
+    int off = hde_cmd_vt_view_offset(app->vt);
+    char sub[96];
+    if (off > 0)
+        g_snprintf(sub, sizeof sub, "Terminal · %d×%d · History -%d", app->columns, app->rows, off);
+    else
+        g_snprintf(sub, sizeof sub, "Terminal · %d×%d", app->columns, app->rows);
+    gtk_header_bar_set_subtitle(GTK_HEADER_BAR(app->header), sub);
+}
 
 static void queue_draw(CmdWindow *app)
 {
@@ -267,6 +349,7 @@ static void update_pty_size(CmdWindow *app)
         size.ws_col = (unsigned short)columns;
         ioctl(app->pty_fd, TIOCSWINSZ, &size); /* the kernel sends SIGWINCH to the foreground process group */
     }
+    update_subtitle(app);
     queue_draw(app);
 }
 
@@ -324,20 +407,24 @@ static gboolean draw_terminal(GtkWidget *widget, cairo_t *cr, gpointer userdata)
     if (!app->vt) return FALSE;
     update_pty_size(app);
 
-    cairo_set_source_rgb(cr, DEFAULT_BG_R, DEFAULT_BG_G, DEFAULT_BG_B);
+    const CmdTheme *th = current_theme(app);
+    cairo_set_source_rgb(cr, th->bg_r, th->bg_g, th->bg_b);
     cairo_paint(cr);
 
     int rows = hde_cmd_vt_rows(app->vt);
     int columns = hde_cmd_vt_columns(app->vt);
+    int history = hde_cmd_vt_scrollback(app->vt);
+    int view_offset = hde_cmd_vt_view_offset(app->vt);
     for (int y = 0; y < rows; y++) {
         const HdeCmdVtCell *line = hde_cmd_vt_line(app->vt, y);
+        int abs_row = history - view_offset + y;
         for (int x = 0; x < columns; x++) {
             const HdeCmdVtCell *cell = &line[x];
             int inverse = (cell->attributes & HDE_CMD_VT_INVERSE) != 0;
             uint32_t bg = inverse ? cell->foreground : cell->background;
-            double r = DEFAULT_BG_R, g = DEFAULT_BG_G, b = DEFAULT_BG_B;
+            double r = th->bg_r, g = th->bg_g, b = th->bg_b;
             if (bg == HDE_CMD_VT_DEFAULT_COLOR && inverse) {
-                r = DEFAULT_FG_R; g = DEFAULT_FG_G; b = DEFAULT_FG_B;
+                r = th->fg_r; g = th->fg_g; b = th->fg_b;
             } else if (bg != HDE_CMD_VT_DEFAULT_COLOR) {
                 rgba_from_color(bg, &r, &g, &b);
             }
@@ -347,8 +434,15 @@ static gboolean draw_terminal(GtkWidget *widget, cairo_t *cr, gpointer userdata)
                                 app->cell_width + 1, app->cell_height + 1);
                 cairo_fill(cr);
             }
+            if (app->find_match_abs_row >= 0 && abs_row == app->find_match_abs_row &&
+                x >= app->find_match_col && x < app->find_match_col + app->find_match_len) {
+                cairo_set_source_rgba(cr, 0.96, 0.76, 0.07, 0.55);
+                cairo_rectangle(cr, PAD_X + x * app->cell_width, PAD_Y + y * app->cell_height,
+                                app->cell_width + 1, app->cell_height + 1);
+                cairo_fill(cr);
+            }
             if (selection_contains(app, y, x)) {
-                cairo_set_source_rgba(cr, 0.24, 0.47, 0.78, 0.75);
+                cairo_set_source_rgba(cr, th->sel_r, th->sel_g, th->sel_b, 0.75);
                 cairo_rectangle(cr, PAD_X + x * app->cell_width, PAD_Y + y * app->cell_height,
                                 app->cell_width + 1, app->cell_height + 1);
                 cairo_fill(cr);
@@ -385,11 +479,16 @@ static gboolean draw_terminal(GtkWidget *widget, cairo_t *cr, gpointer userdata)
             if (cell->attributes & HDE_CMD_VT_WIDE_CONT) continue;
             int inverse = (cell->attributes & HDE_CMD_VT_INVERSE) != 0;
             uint32_t fg = inverse ? cell->background : cell->foreground;
-            double r = DEFAULT_FG_R, g = DEFAULT_FG_G, b = DEFAULT_FG_B;
+            double r = th->fg_r, g = th->fg_g, b = th->fg_b;
             if (fg == HDE_CMD_VT_DEFAULT_COLOR && inverse) {
-                r = DEFAULT_BG_R; g = DEFAULT_BG_G; b = DEFAULT_BG_B;
+                r = th->bg_r; g = th->bg_g; b = th->bg_b;
             } else if (fg != HDE_CMD_VT_DEFAULT_COLOR) {
                 rgba_from_color(fg, &r, &g, &b);
+            }
+            if (cell->attributes & HDE_CMD_VT_DIM) {
+                r = r * 0.58 + th->bg_r * 0.42;
+                g = g * 0.58 + th->bg_g * 0.42;
+                b = b * 0.58 + th->bg_b * 0.42;
             }
             add_foreground_attribute(attributes, (guint16)(r * 65535.0), (guint16)(g * 65535.0),
                                      (guint16)(b * 65535.0), starts[x], ends[x]);
@@ -411,7 +510,7 @@ static gboolean draw_terminal(GtkWidget *widget, cairo_t *cr, gpointer userdata)
             }
         }
         pango_layout_set_attributes(layout, attributes);
-        cairo_set_source_rgb(cr, DEFAULT_FG_R, DEFAULT_FG_G, DEFAULT_FG_B);
+        cairo_set_source_rgb(cr, th->fg_r, th->fg_g, th->fg_b);
         cairo_move_to(cr, PAD_X, PAD_Y + y * app->cell_height);
         pango_cairo_show_layout(cr, layout);
         pango_attr_list_unref(attributes);
@@ -422,14 +521,39 @@ static gboolean draw_terminal(GtkWidget *widget, cairo_t *cr, gpointer userdata)
     g_object_unref(layout);
 
     if (app->focused && app->cursor_phase && hde_cmd_vt_cursor_visible(app->vt) &&
-        hde_cmd_vt_view_offset(app->vt) == 0) {
+        view_offset == 0) {
         int x = hde_cmd_vt_cursor_x(app->vt);
         int y = hde_cmd_vt_cursor_y(app->vt);
-        cairo_set_source_rgba(cr, 0.47, 0.67, 0.98, 0.9);
-        cairo_set_line_width(cr, 1.0);
-        cairo_rectangle(cr, PAD_X + x * app->cell_width + 0.5, PAD_Y + y * app->cell_height + 0.5,
-                        app->cell_width - 1, app->cell_height - 1);
-        cairo_stroke(cr);
+        HdeCmdVtCursorShape shape = hde_cmd_vt_cursor_shape(app->vt);
+        if (shape == HDE_CMD_VT_CURSOR_BLOCK && app->cursor_style == 1) shape = HDE_CMD_VT_CURSOR_BEAM;
+        else if (shape == HDE_CMD_VT_CURSOR_BLOCK && app->cursor_style == 2) shape = HDE_CMD_VT_CURSOR_UNDERLINE;
+        cairo_set_source_rgba(cr, th->cur_r, th->cur_g, th->cur_b, 0.92);
+        double cx = PAD_X + x * app->cell_width;
+        double cy = PAD_Y + y * app->cell_height;
+        if (shape == HDE_CMD_VT_CURSOR_BEAM) {
+            cairo_rectangle(cr, cx, cy, 2.0, app->cell_height);
+            cairo_fill(cr);
+        } else if (shape == HDE_CMD_VT_CURSOR_UNDERLINE) {
+            cairo_rectangle(cr, cx, cy + app->cell_height - 2.0, app->cell_width, 2.0);
+            cairo_fill(cr);
+        } else {
+            cairo_set_line_width(cr, 1.0);
+            cairo_rectangle(cr, cx + 0.5, cy + 0.5, app->cell_width - 1, app->cell_height - 1);
+            cairo_stroke(cr);
+        }
+    }
+
+    if (history > 0) {
+        GtkAllocation alloc;
+        gtk_widget_get_allocation(widget, &alloc);
+        double track_h = MAX(24.0, (double)alloc.height - 2 * PAD_Y);
+        double total = (double)(history + rows);
+        double thumb_h = CLAMP(track_h * ((double)rows / total), 18.0, track_h);
+        double top_frac = (double)(history - view_offset) / MAX(1.0, (double)history);
+        double thumb_y = PAD_Y + (track_h - thumb_h) * top_frac;
+        cairo_set_source_rgba(cr, th->fg_r, th->fg_g, th->fg_b, view_offset > 0 ? 0.42 : 0.16);
+        cairo_rectangle(cr, alloc.width - 5.0, thumb_y, 3.0, thumb_h);
+        cairo_fill(cr);
     }
     return FALSE;
 }
@@ -507,6 +631,7 @@ static void clipboard_paste(CmdWindow *app)
 static void update_font(CmdWindow *app, int size)
 {
     app->font_size = CLAMP(size, MIN_FONT_SIZE, MAX_FONT_SIZE);
+    save_preferences(app);
     if (app->font) pango_font_description_free(app->font);
     app->font = pango_font_description_from_string("Monospace");
     pango_font_description_set_size(app->font, app->font_size * PANGO_SCALE);
@@ -529,6 +654,105 @@ static void update_font(CmdWindow *app, int size)
     }
 }
 
+static void select_all_cells(CmdWindow *app)
+{
+    if (!app->vt) return;
+    app->selection_x1 = 0;
+    app->selection_y1 = 0;
+    app->selection_x2 = MAX(0, hde_cmd_vt_columns(app->vt) - 1);
+    app->selection_y2 = MAX(0, hde_cmd_vt_rows(app->vt) - 1);
+    app->selecting = 1;
+    char *text = selection_text(app);
+    if (text) {
+        gtk_clipboard_set_text(gtk_clipboard_get(GDK_SELECTION_PRIMARY), text, -1);
+        g_free(text);
+    }
+    queue_draw(app);
+}
+
+static void save_output_dialog(CmdWindow *app)
+{
+    if (!app || !app->vt || !app->window) return;
+    GtkWidget *dialog = gtk_file_chooser_dialog_new("Save Terminal Output", GTK_WINDOW(app->window),
+                                                     GTK_FILE_CHOOSER_ACTION_SAVE,
+                                                     "_Cancel", GTK_RESPONSE_CANCEL,
+                                                     "_Save", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), "terminal-output.txt");
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        if (filename) {
+            int total = hde_cmd_vt_scrollback(app->vt) + hde_cmd_vt_rows(app->vt);
+            int cols = hde_cmd_vt_columns(app->vt);
+            GString *out = g_string_new(NULL);
+            for (int r = 0; r < total; r++) {
+                const HdeCmdVtCell *line = hde_cmd_vt_history_line(app->vt, r);
+                if (!line) continue;
+                guint before = (guint)out->len;
+                for (int x = 0; x < cols; x++) {
+                    if (line[x].attributes & HDE_CMD_VT_WIDE_CONT) continue;
+                    append_cell_text(out, &line[x]);
+                }
+                while (out->len > before && out->str[out->len - 1] == ' ')
+                    g_string_truncate(out, out->len - 1);
+                g_string_append_c(out, '\n');
+            }
+            GError *err = NULL;
+            if (!g_file_set_contents(filename, out->str, (gssize)out->len, &err)) {
+                g_printerr("hde-cmd: cannot save output: %s\n", err ? err->message : "error");
+                g_clear_error(&err);
+            }
+            g_string_free(out, TRUE);
+            g_free(filename);
+        }
+    }
+    gtk_widget_destroy(dialog);
+}
+
+static gboolean is_word_char(uint32_t cp)
+{
+    if (cp <= 0x20 || cp == 0x7f) return FALSE;
+    return strchr(" \t\r\n\"'`<>()[]{}|,;!", (int)cp) == NULL;
+}
+
+static char *extract_word_at(const CmdWindow *app, int row, int col, int *out_x1, int *out_x2)
+{
+    if (!app->vt) return NULL;
+    const HdeCmdVtCell *line = hde_cmd_vt_line(app->vt, row);
+    int cols = hde_cmd_vt_columns(app->vt);
+    if (!line || col < 0 || col >= cols) return NULL;
+    uint32_t cp = line[col].codepoint ? line[col].codepoint : ' ';
+    if (!is_word_char(cp)) return NULL;
+    int x1 = col, x2 = col;
+    while (x1 > 0 && is_word_char(line[x1 - 1].codepoint ? line[x1 - 1].codepoint : ' ')) x1--;
+    while (x2 + 1 < cols && is_word_char(line[x2 + 1].codepoint ? line[x2 + 1].codepoint : ' ')) x2++;
+    if (out_x1) *out_x1 = x1;
+    if (out_x2) *out_x2 = x2;
+    GString *s = g_string_new(NULL);
+    for (int x = x1; x <= x2; x++) {
+        if (line[x].attributes & HDE_CMD_VT_WIDE_CONT) continue;
+        append_cell_text(s, &line[x]);
+    }
+    while (s->len > 0 && strchr(".,;:!?)>]}", s->str[s->len - 1]))
+        g_string_truncate(s, s->len - 1);
+    return g_string_free(s, FALSE);
+}
+
+static char *url_at_cell(const CmdWindow *app, int row, int col)
+{
+    char *w = extract_word_at(app, row, col, NULL, NULL);
+    if (!w) return NULL;
+    if (g_str_has_prefix(w, "http://") || g_str_has_prefix(w, "https://") || g_str_has_prefix(w, "file://"))
+        return w;
+    if (g_str_has_prefix(w, "www.")) {
+        char *u = g_strdup_printf("https://%s", w);
+        g_free(w);
+        return u;
+    }
+    g_free(w);
+    return NULL;
+}
+
 static gboolean app_key_press(GtkWidget *widget, GdkEventKey *event, gpointer userdata)
 {
     CmdWindow *app = userdata;
@@ -542,8 +766,19 @@ static gboolean app_key_press(GtkWidget *widget, GdkEventKey *event, gpointer us
     if (ctrl && shift) {
         switch (gdk_keyval_to_lower(key)) {
         case GDK_KEY_t: menu_new(NULL, app); return TRUE;
+        case GDK_KEY_n: menu_new(NULL, app); return TRUE;
         case GDK_KEY_o: menu_open_folder(NULL, app); return TRUE;
         case GDK_KEY_w: gtk_widget_destroy(app->window); return TRUE;
+        case GDK_KEY_f: toggle_find_bar(app, TRUE); return TRUE;
+        case GDK_KEY_a: select_all_cells(app); return TRUE;
+        case GDK_KEY_s: save_output_dialog(app); return TRUE;
+        case GDK_KEY_k:
+            if (app->vt) {
+                hde_cmd_vt_clear_scrollback(app->vt);
+                update_subtitle(app);
+                queue_draw(app);
+            }
+            return TRUE;
         default: break;
         }
     }
@@ -591,6 +826,7 @@ static gboolean app_key_press(GtkWidget *widget, GdkEventKey *event, gpointer us
     if (shift && (key == GDK_KEY_Page_Up || key == GDK_KEY_Page_Down)) {
         int amount = MAX(1, hde_cmd_vt_rows(app->vt) - 2);
         hde_cmd_vt_scroll_view(app->vt, key == GDK_KEY_Page_Up ? amount : -amount);
+        update_subtitle(app);
         queue_draw(app);
         return TRUE;
     }
@@ -697,6 +933,14 @@ static gboolean button_press(GtkWidget *widget, GdkEventButton *event, gpointer 
             mouse_send(app, 2, column, row, 0);
             return TRUE;
         }
+        if (!app->options.use_vte && app->vt) {
+            int column, row;
+            event_cell(app, event->x, event->y, &column, &row);
+            g_free(app->hovered_url);
+            app->hovered_url = url_at_cell(app, row, column);
+            if (app->open_url_item) gtk_widget_set_visible(app->open_url_item, app->hovered_url != NULL);
+            if (app->copy_url_item) gtk_widget_set_visible(app->copy_url_item, app->hovered_url != NULL);
+        }
         gtk_widget_grab_focus(app->terminal_widget);
         if (app->context_menu) {
             gtk_menu_popup(GTK_MENU(app->context_menu), NULL, NULL, NULL, NULL, event->button, event->time);
@@ -708,11 +952,48 @@ static gboolean button_press(GtkWidget *widget, GdkEventButton *event, gpointer 
     if (event->button == 1) {
         int column, row;
         event_cell(app, event->x, event->y, &column, &row);
+        if ((event->state & GDK_CONTROL_MASK) && event->type == GDK_BUTTON_PRESS) {
+            char *url = url_at_cell(app, row, column);
+            if (url) {
+                g_app_info_launch_default_for_uri(url, NULL, NULL);
+                g_free(url);
+                return TRUE;
+            }
+        }
         if (hde_cmd_vt_mouse_mode(app->vt) && !(event->state & GDK_SHIFT_MASK)) {
             mouse_send(app, 0, column, row, 0);
             return TRUE;
         }
         gtk_widget_grab_focus(app->terminal_widget);
+        if (event->type == GDK_2BUTTON_PRESS) {
+            int x1 = column, x2 = column;
+            char *w = extract_word_at(app, row, column, &x1, &x2);
+            g_free(w);
+            app->selection_y1 = app->selection_y2 = row;
+            app->selection_x1 = x1;
+            app->selection_x2 = x2;
+            app->selecting = 1;
+            char *text = selection_text(app);
+            if (text) {
+                gtk_clipboard_set_text(gtk_clipboard_get(GDK_SELECTION_PRIMARY), text, -1);
+                g_free(text);
+            }
+            queue_draw(app);
+            return TRUE;
+        }
+        if (event->type == GDK_3BUTTON_PRESS) {
+            app->selection_y1 = app->selection_y2 = row;
+            app->selection_x1 = 0;
+            app->selection_x2 = MAX(0, app->columns - 1);
+            app->selecting = 1;
+            char *text = selection_text(app);
+            if (text) {
+                gtk_clipboard_set_text(gtk_clipboard_get(GDK_SELECTION_PRIMARY), text, -1);
+                g_free(text);
+            }
+            queue_draw(app);
+            return TRUE;
+        }
         app->selection_x1 = app->selection_x2 = column;
         app->selection_y1 = app->selection_y2 = row;
         app->selecting = 1;
@@ -781,6 +1062,7 @@ static gboolean scroll_event(GtkWidget *widget, GdkEventScroll *event, gpointer 
         mouse_send(app, direction < 0 ? 64 : 65, column, row, 0);
     } else {
         hde_cmd_vt_scroll_view(app->vt, direction * 3);
+        update_subtitle(app);
         queue_draw(app);
     }
     return TRUE;
@@ -933,6 +1215,218 @@ static GtkWidget *menu_item(GtkWidget *menu, const char *label, GCallback callba
     return item;
 }
 
+static void run_find(CmdWindow *app, int direction)
+{
+    if (!app || !app->vt || !app->find_entry) return;
+    const char *q = gtk_entry_get_text(GTK_ENTRY(app->find_entry));
+    if (!q || !*q) {
+        app->find_match_abs_row = -1;
+        if (app->find_status) gtk_label_set_text(GTK_LABEL(app->find_status), "");
+        queue_draw(app);
+        return;
+    }
+    int total = hde_cmd_vt_scrollback(app->vt) + hde_cmd_vt_rows(app->vt);
+    int start = app->find_match_abs_row >= 0 ? app->find_match_abs_row + direction
+              : (direction < 0 ? total - 1 : 0);
+    if (start < 0) start = total - 1;
+    if (start >= total) start = 0;
+
+    int col = 0, len = 0;
+    int r = hde_cmd_vt_find(app->vt, q, start, direction, &col, &len);
+    if (r >= 0) {
+        app->find_match_abs_row = r;
+        app->find_match_col = col;
+        app->find_match_len = len;
+        int history = hde_cmd_vt_scrollback(app->vt);
+        int rows = hde_cmd_vt_rows(app->vt);
+        int cur_off = hde_cmd_vt_view_offset(app->vt);
+        int top_abs = history - cur_off;
+        if (r < top_abs || r >= top_abs + rows) {
+            int target_top = CLAMP(r - rows / 2, 0, history);
+            int target_off = history - target_top;
+            hde_cmd_vt_scroll_view(app->vt, target_off - cur_off);
+            update_subtitle(app);
+        }
+        char st[48];
+        g_snprintf(st, sizeof st, "Row %d", r + 1);
+        if (app->find_status) gtk_label_set_text(GTK_LABEL(app->find_status), st);
+    } else {
+        app->find_match_abs_row = -1;
+        if (app->find_status) gtk_label_set_text(GTK_LABEL(app->find_status), "No match");
+    }
+    queue_draw(app);
+}
+
+static void on_find_changed(GtkSearchEntry *e, gpointer userdata)
+{
+    (void)e;
+    CmdWindow *app = userdata;
+    app->find_match_abs_row = -1;
+    run_find(app, -1);
+}
+
+static void on_find_next(GtkWidget *w, gpointer userdata)
+{
+    (void)w;
+    run_find(userdata, 1);
+}
+
+static void on_find_prev(GtkWidget *w, gpointer userdata)
+{
+    (void)w;
+    run_find(userdata, -1);
+}
+
+static void on_find_close(GtkWidget *w, gpointer userdata)
+{
+    (void)w;
+    toggle_find_bar(userdata, FALSE);
+}
+
+static gboolean on_find_key_press(GtkWidget *w, GdkEventKey *ev, gpointer userdata)
+{
+    (void)w;
+    CmdWindow *app = userdata;
+    if (ev->keyval == GDK_KEY_Escape) {
+        toggle_find_bar(app, FALSE);
+        return TRUE;
+    }
+    if (ev->keyval == GDK_KEY_Return || ev->keyval == GDK_KEY_KP_Enter) {
+        run_find(app, (ev->state & GDK_SHIFT_MASK) ? -1 : 1);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void toggle_find_bar(CmdWindow *app, gboolean show)
+{
+    if (!app || !app->find_bar) return;
+    if (show) {
+        gtk_widget_show_all(app->find_bar);
+        if (app->find_entry) gtk_widget_grab_focus(app->find_entry);
+    } else {
+        app->find_match_abs_row = -1;
+        gtk_widget_hide(app->find_bar);
+        if (app->terminal_widget) gtk_widget_grab_focus(app->terminal_widget);
+        queue_draw(app);
+    }
+}
+
+static GtkWidget *build_find_bar(CmdWindow *app)
+{
+    GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_container_set_border_width(GTK_CONTAINER(bar), 6);
+    gtk_widget_set_no_show_all(bar, TRUE);
+
+    app->find_entry = gtk_search_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(app->find_entry), "Find in terminal…");
+    gtk_widget_set_hexpand(app->find_entry, TRUE);
+    g_signal_connect(app->find_entry, "search-changed", G_CALLBACK(on_find_changed), app);
+    g_signal_connect(app->find_entry, "key-press-event", G_CALLBACK(on_find_key_press), app);
+    gtk_box_pack_start(GTK_BOX(bar), app->find_entry, TRUE, TRUE, 0);
+
+    app->find_status = gtk_label_new("");
+    gtk_box_pack_start(GTK_BOX(bar), app->find_status, FALSE, FALSE, 4);
+
+    GtkWidget *prev = gtk_button_new_from_icon_name("go-up-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(prev, "Previous match (Shift+Enter)");
+    g_signal_connect(prev, "clicked", G_CALLBACK(on_find_prev), app);
+    gtk_box_pack_start(GTK_BOX(bar), prev, FALSE, FALSE, 0);
+
+    GtkWidget *next = gtk_button_new_from_icon_name("go-down-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(next, "Next match (Enter)");
+    g_signal_connect(next, "clicked", G_CALLBACK(on_find_next), app);
+    gtk_box_pack_start(GTK_BOX(bar), next, FALSE, FALSE, 0);
+
+    GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(close, "Close search bar (Escape)");
+    g_signal_connect(close, "clicked", G_CALLBACK(on_find_close), app);
+    gtk_box_pack_start(GTK_BOX(bar), close, FALSE, FALSE, 0);
+
+    app->find_bar = bar;
+    return bar;
+}
+
+static void menu_find(GtkMenuItem *item, gpointer userdata)
+{
+    (void)item;
+    toggle_find_bar(userdata, TRUE);
+}
+
+static void menu_select_all(GtkMenuItem *item, gpointer userdata)
+{
+    (void)item;
+    select_all_cells(userdata);
+}
+
+static void menu_save_output(GtkMenuItem *item, gpointer userdata)
+{
+    (void)item;
+    save_output_dialog(userdata);
+}
+
+static void menu_clear_scrollback(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    (void)item;
+    if (app->vt) {
+        hde_cmd_vt_clear_scrollback(app->vt);
+        update_subtitle(app);
+        queue_draw(app);
+    }
+}
+
+static void menu_reset_terminal(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    (void)item;
+#ifdef HDE_CMD_HAVE_VTE
+    if (app->options.use_vte && app->vte) {
+        vte_terminal_reset(app->vte, TRUE, TRUE);
+        return;
+    }
+#endif
+    if (app->vt) {
+        hde_cmd_vt_reset(app->vt);
+        pty_write(app, "\014", 1);
+        update_subtitle(app);
+        queue_draw(app);
+    }
+}
+
+static void menu_open_url(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    (void)item;
+    if (app->hovered_url) g_app_info_launch_default_for_uri(app->hovered_url, NULL, NULL);
+}
+
+static void menu_copy_url(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    (void)item;
+    if (app->hovered_url)
+        gtk_clipboard_set_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), app->hovered_url, -1);
+}
+
+static void menu_set_theme(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "hde-theme-idx"));
+    app->theme_index = CLAMP(idx, 0, (int)G_N_ELEMENTS(CMD_THEMES) - 1);
+    save_preferences(app);
+    queue_draw(app);
+}
+
+static void menu_set_cursor(GtkMenuItem *item, gpointer userdata)
+{
+    CmdWindow *app = userdata;
+    int style = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "hde-cursor-style"));
+    app->cursor_style = CLAMP(style, 0, 2);
+    save_preferences(app);
+    queue_draw(app);
+}
+
 static void menu_fullscreen(GtkMenuItem *item, gpointer userdata)
 {
     CmdWindow *app = userdata;
@@ -965,22 +1459,62 @@ static GtkWidget *build_header(CmdWindow *app)
     g_signal_connect(new_button, "clicked", G_CALLBACK(menu_new), app);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_button);
 
+    GtkWidget *find_button = gtk_button_new_from_icon_name("edit-find-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(find_button, "Find in terminal (Ctrl+Shift+F)");
+    g_signal_connect(find_button, "clicked", G_CALLBACK(menu_find), app);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), find_button);
+
     GtkWidget *button = gtk_menu_button_new();
     gtk_button_set_image(GTK_BUTTON(button), gtk_image_new_from_icon_name("open-menu-symbolic", GTK_ICON_SIZE_BUTTON));
     gtk_widget_set_tooltip_text(button, "Terminal actions and keyboard shortcuts");
     GtkWidget *menu = gtk_menu_new();
+    app->open_url_item = menu_item(menu, "Open Link", G_CALLBACK(menu_open_url), app);
+    app->copy_url_item = menu_item(menu, "Copy Link Address", G_CALLBACK(menu_copy_url), app);
+    gtk_widget_set_no_show_all(app->open_url_item, TRUE);
+    gtk_widget_set_no_show_all(app->copy_url_item, TRUE);
     menu_item(menu, "New Terminal Window  Ctrl+Shift+T", G_CALLBACK(menu_new), app);
     menu_item(menu, "Open Folder in New Terminal…  Ctrl+Shift+O", G_CALLBACK(menu_open_folder), app);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
     menu_item(menu, "Copy  Ctrl+Shift+C", G_CALLBACK(menu_copy), app);
     menu_item(menu, "Paste  Ctrl+Shift+V", G_CALLBACK(menu_paste), app);
+    menu_item(menu, "Select All  Ctrl+Shift+A", G_CALLBACK(menu_select_all), app);
+    menu_item(menu, "Find…  Ctrl+Shift+F", G_CALLBACK(menu_find), app);
+    menu_item(menu, "Save Output to File…  Ctrl+Shift+S", G_CALLBACK(menu_save_output), app);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+
+    GtkWidget *theme_mi = gtk_menu_item_new_with_label("Color Theme");
+    GtkWidget *theme_sub = gtk_menu_new();
+    for (guint i = 0; i < G_N_ELEMENTS(CMD_THEMES); i++) {
+        GtkWidget *ti = gtk_menu_item_new_with_label(CMD_THEMES[i].name);
+        g_object_set_data(G_OBJECT(ti), "hde-theme-idx", GINT_TO_POINTER((int)i));
+        g_signal_connect(ti, "activate", G_CALLBACK(menu_set_theme), app);
+        gtk_menu_shell_append(GTK_MENU_SHELL(theme_sub), ti);
+    }
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(theme_mi), theme_sub);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), theme_mi);
+
+    GtkWidget *cur_mi = gtk_menu_item_new_with_label("Cursor Style");
+    GtkWidget *cur_sub = gtk_menu_new();
+    static const char *const cur_names[] = { "Block (Default)", "Beam (│)", "Underline (_)" };
+    for (int i = 0; i < 3; i++) {
+        GtkWidget *ci = gtk_menu_item_new_with_label(cur_names[i]);
+        g_object_set_data(G_OBJECT(ci), "hde-cursor-style", GINT_TO_POINTER(i));
+        g_signal_connect(ci, "activate", G_CALLBACK(menu_set_cursor), app);
+        gtk_menu_shell_append(GTK_MENU_SHELL(cur_sub), ci);
+    }
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(cur_mi), cur_sub);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), cur_mi);
+
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
     menu_item(menu, "Zoom In  Ctrl++", G_CALLBACK(menu_font_up), app);
     menu_item(menu, "Zoom Out  Ctrl+-", G_CALLBACK(menu_font_down), app);
     menu_item(menu, "Reset Zoom  Ctrl+0", G_CALLBACK(menu_font_reset), app);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+    menu_item(menu, "Clear Scrollback  Ctrl+Shift+K", G_CALLBACK(menu_clear_scrollback), app);
+    menu_item(menu, "Reset Terminal", G_CALLBACK(menu_reset_terminal), app);
     menu_item(menu, "Toggle Full Screen  F11", G_CALLBACK(menu_fullscreen), app);
     menu_item(menu, "Close Window  Ctrl+Shift+W", G_CALLBACK(menu_close), app);
+    gtk_widget_show_all(menu);
     gtk_menu_button_set_popup(GTK_MENU_BUTTON(button), menu);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), button);
     app->context_menu = menu;
@@ -1093,12 +1627,16 @@ static void activate(GtkApplication *application, gpointer userdata)
 #endif
     }
 
-    app->vt = hde_cmd_vt_new(DEFAULT_ROWS, DEFAULT_COLUMNS);
+    int init_cols = app->options.initial_columns > 0 ? app->options.initial_columns : DEFAULT_COLUMNS;
+    int init_rows = app->options.initial_rows > 0 ? app->options.initial_rows : DEFAULT_ROWS;
+    app->vt = hde_cmd_vt_new(init_rows, init_cols);
     if (!app->vt) {
         g_printerr("hde-cmd: cannot allocate the terminal screen\n");
         g_application_quit(G_APPLICATION(application));
         return;
     }
+    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_pack_start(GTK_BOX(vbox), build_find_bar(app), FALSE, FALSE, 0);
     app->terminal_widget = gtk_drawing_area_new();
     gtk_widget_set_can_focus(app->terminal_widget, TRUE);
     gtk_widget_set_hexpand(app->terminal_widget, TRUE);
@@ -1115,11 +1653,17 @@ static void activate(GtkApplication *application, gpointer userdata)
     g_signal_connect(app->terminal_widget, "scroll-event", G_CALLBACK(scroll_event), app);
     g_signal_connect(app->terminal_widget, "focus-in-event", G_CALLBACK(focus_in), app);
     g_signal_connect(app->terminal_widget, "focus-out-event", G_CALLBACK(focus_out), app);
-    gtk_container_add(GTK_CONTAINER(app->window), app->terminal_widget);
-    app->rows = DEFAULT_ROWS;
-    app->columns = DEFAULT_COLUMNS;
+    gtk_box_pack_start(GTK_BOX(vbox), app->terminal_widget, TRUE, TRUE, 0);
+    gtk_container_add(GTK_CONTAINER(app->window), vbox);
+    app->rows = init_rows;
+    app->columns = init_cols;
     app->cursor_phase = 1;
-    update_font(app, DEFAULT_FONT_SIZE);
+    update_font(app, app->font_size);
+    if (app->options.initial_columns > 0 && app->options.initial_rows > 0 && app->cell_width > 0 && app->cell_height > 0) {
+        gtk_window_resize(GTK_WINDOW(app->window),
+                          2 * PAD_X + init_cols * app->cell_width,
+                          2 * PAD_Y + init_rows * app->cell_height + 42);
+    }
     gtk_widget_show_all(app->window);
     gtk_widget_grab_focus(app->terminal_widget);
     if (app->options.title) set_title(app, app->options.title);
@@ -1141,6 +1685,8 @@ int hde_cmd_ui_run(const HdeCmdOptions *options, const char *program_name)
     app.pty_fd = -1;
     app.font_size = DEFAULT_FONT_SIZE;
     app.cursor_phase = 1;
+    app.find_match_abs_row = -1;
+    load_preferences(&app);
 
     GtkApplication *application = gtk_application_new(APP_ID, G_APPLICATION_NON_UNIQUE);
     g_signal_connect(application, "activate", G_CALLBACK(activate), &app);
@@ -1157,6 +1703,7 @@ int hde_cmd_ui_run(const HdeCmdOptions *options, const char *program_name)
     g_clear_pointer(&app.spawn_argv, g_strfreev);
     g_clear_pointer(&app.spawn_environment, g_strfreev);
 #endif
+    g_free(app.hovered_url);
     g_free(app.title);
     g_object_unref(application);
     return status;

@@ -70,6 +70,29 @@ static void nexwm_ini_set_string(const char *key, const char *val)
     g_free(p);
 }
 
+static void on_nexwm_anim_switch(GObject *sw, GParamSpec *ps, gpointer user_data)
+{
+    (void)ps;
+    gboolean on = gtk_switch_get_active(GTK_SWITCH(sw));
+    GtkWidget *spin = user_data;
+    cfg_set_bool("enable_animations", on);
+    int ms = on ? 140 : 0;
+    if (spin) {
+        if (on && gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(spin)) > 0)
+            ms = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(spin));
+        else
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin), ms);
+        gtk_widget_set_sensitive(spin, on);
+    }
+    nexwm_ini_set_int("animation_ms", ms);
+    HdeThemeInfo info;
+    hde_theme_info_load(&info);
+    hde_theme_write_system(&info);
+    hde_theme_info_clear(&info);
+    hde_theme_apply_process();
+    settings_status(on ? "Window and desktop animations enabled (%d ms)" : "Window and desktop animations disabled", ms);
+}
+
 static void on_nexwm_spin_changed(GtkSpinButton *sb, gpointer user_data)
 {
     const char *key = (const char *)user_data;
@@ -106,6 +129,20 @@ static void on_nexwm_align_combo(GtkComboBox *combo, gpointer user_data)
     if (idx >= 0 && idx < (int)G_N_ELEMENTS(align_values)) {
         nexwm_ini_set_string("title_align", align_values[idx]);
         settings_status("NexWM title alignment updated: %s", align_values[idx]);
+    }
+}
+
+static void on_nexwm_focus_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    static const char *const focus_values[] = {
+        "click",
+        "mouse"
+    };
+    int idx = gtk_combo_box_get_active(combo);
+    if (idx >= 0 && idx < (int)G_N_ELEMENTS(focus_values)) {
+        nexwm_ini_set_string("focus", focus_values[idx]);
+        settings_status("NexWM focus mode updated: %s", focus_values[idx]);
     }
 }
 
@@ -373,6 +410,49 @@ GtkWidget *page_windows_new(void)
     g_signal_connect(rg_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"resize_grip");
     gtk_container_add(GTK_CONTAINER(nexcard),
                       row_box("Corner resize grab", "Size of window corner resize zone in pixels (default 6)", rg_spin));
+
+    int cur_ws = nexwm_ini_get_int("desktops", 4);
+    GtkWidget *ws_spin = gtk_spin_button_new_with_range(1, 16, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ws_spin), cur_ws);
+    gtk_widget_set_valign(ws_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(ws_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"desktops");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Workspaces", "Number of virtual desktops managed by NexWM (1–16, default 4)", ws_spin));
+
+    char *cur_focus = nexwm_ini_get_string("focus", "click");
+    GtkWidget *focus_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(focus_combo), "Click to focus (Default)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(focus_combo), "Focus follows mouse");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(focus_combo), !g_strcmp0(cur_focus, "mouse") ? 1 : 0);
+    g_free(cur_focus);
+    gtk_widget_set_valign(focus_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(focus_combo, "changed", G_CALLBACK(on_nexwm_focus_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Window focus mode", "How windows receive keyboard focus", focus_combo));
+
+    int cur_snap = nexwm_ini_get_int("snap_distance", 32);
+    GtkWidget *snap_spin = gtk_spin_button_new_with_range(0, 256, 4);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(snap_spin), cur_snap);
+    gtk_widget_set_valign(snap_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(snap_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"snap_distance");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Edge snap distance", "Distance in pixels from screen edges to trigger window snapping (0 = disabled, default 32)", snap_spin));
+
+    int cur_anim = nexwm_ini_get_int("animation_ms", cfg_get_bool("enable_animations", TRUE) ? 140 : 0);
+    GtkWidget *anim_spin = gtk_spin_button_new_with_range(0, 2000, 20);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(anim_spin), cur_anim);
+    gtk_widget_set_valign(anim_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(anim_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"animation_ms");
+
+    GtkWidget *win_anim_sw = gtk_switch_new();
+    gtk_widget_set_valign(win_anim_sw, GTK_ALIGN_CENTER);
+    gtk_switch_set_active(GTK_SWITCH(win_anim_sw), cfg_get_bool("enable_animations", TRUE) && cur_anim > 0);
+    g_signal_connect(win_anim_sw, "notify::active", G_CALLBACK(on_nexwm_anim_switch), anim_spin);
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Enable window & desktop animations",
+                              "Smooth animations when opening, maximizing, snapping, and restoring windows", win_anim_sw));
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Window animation duration", "Transition time in milliseconds for window actions (0 = instant)", anim_spin));
 
     gtk_box_pack_start(GTK_BOX(box), nexcard, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), info_label("NexWM customizations are stored in ~/.config/hde/nexwm.ini and take effect immediately or on the next window manager reload."), FALSE, FALSE, 4);

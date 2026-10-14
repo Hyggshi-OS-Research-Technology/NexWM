@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 gboolean files_debug;
 FilesPrefs prefs;
@@ -528,6 +529,21 @@ void files_menu_sep(GtkWidget *menu)
 }
 
 /* ------------------------------------------------------------------ the terminal, bookmarks */
+static char *find_program_or_sibling(const char *name)
+{
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    if (n > 0) {
+        self[n] = '\0';
+        char *dir = g_path_get_dirname(self);
+        char *sib = g_build_filename(dir, name, NULL);
+        g_free(dir);
+        if (g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE)) return sib;
+        g_free(sib);
+    }
+    return g_find_program_in_path(name);
+}
+
 gboolean files_open_terminal(GFile *dir, GtkWindow *parent)
 {
     char *path = dir ? g_file_get_path(dir) : NULL;
@@ -536,7 +552,7 @@ gboolean files_open_terminal(GFile *dir, GtkWindow *parent)
         return FALSE;
     }
     /* Keep the folder as cwd while letting HDE ask which terminal to use when there is more than one. */
-    char *chooser = g_find_program_in_path("hde-choose");
+    char *chooser = find_program_or_sibling("hde-choose");
     gboolean ok = FALSE;
     if (chooser) {
         char *argv[] = { chooser, (char *)"terminal", NULL };
@@ -552,7 +568,7 @@ gboolean files_open_terminal(GFile *dir, GtkWindow *parent)
     static const char *const terms[] = { "hde-cmd", "x-terminal-emulator", "gnome-terminal", "xfce4-terminal", "mate-terminal",
         "tilix", "konsole", "lxterminal", "qterminal", "terminator", "alacritty", "kitty", "foot", "xterm", NULL };
     for (int i = 0; terms[i] && !ok; i++) {
-        char *prog = g_find_program_in_path(terms[i]);
+        char *prog = find_program_or_sibling(terms[i]);
         if (!prog) continue;
         char *argv[] = { prog, NULL };
         GError *e = NULL;
@@ -564,7 +580,7 @@ gboolean files_open_terminal(GFile *dir, GtkWindow *parent)
         }
         g_free(prog);
     }
-    if (!ok) files_error(parent, "No terminal found", "Install a terminal, for example xfce4-terminal or xterm.");
+    if (!ok) files_error(parent, "No terminal found", "Install a terminal, for example hde-cmd, xfce4-terminal or xterm.");
     g_free(path);
     return ok;
 }

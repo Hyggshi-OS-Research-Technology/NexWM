@@ -979,9 +979,25 @@ static GtkWidget *power_button(const char *icon, const char *tip, int action, co
     return b;
 }
 
+static void on_support_clicked(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    DBG("support button");
+    hde_startmenu_hide();
+    if (acts.open_settings) acts.open_settings("support");
+}
+
 static GtkWidget *power_row(void)
 {
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *sup = gtk_button_new();
+    gtk_button_set_relief(GTK_BUTTON(sup), GTK_RELIEF_NONE);
+    gtk_widget_set_can_focus(sup, FALSE);
+    gtk_container_add(GTK_CONTAINER(sup), icon_image("help-browser-symbolic|help-faq-symbolic|dialog-question-symbolic|help-browser", 18));
+    add_class(sup, "sm-power");
+    gtk_widget_set_tooltip_text(sup, "Help & Support");
+    g_signal_connect(sup, "clicked", G_CALLBACK(on_support_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(row), sup, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), power_button("system-lock-screen-symbolic|system-lock-screen", "Lock Screen (Super+L)", 5, NULL), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), power_button("system-log-out-symbolic|system-log-out|application-exit-symbolic", "Log Out", 1, NULL), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), power_button("system-shutdown-symbolic|system-shutdown", "Shut Down, Restart, Suspend…", 0, NULL), FALSE, FALSE, 0);

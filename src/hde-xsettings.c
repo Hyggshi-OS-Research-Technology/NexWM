@@ -135,6 +135,26 @@ static GPtrArray *read_settings(void)
 
     char *icons = kf_string(hde, "settings", "icon_theme_name");
     if (!icons) icons = kf_string(gtk, "Settings", "gtk-icon-theme-name");
+    if (!icons) {
+        static const char *const sys_ic[] = {
+            "/usr/share/icons/Adwaita/index.theme",
+            "/usr/share/icons/Papirus/index.theme",
+            "/usr/share/icons/breeze/index.theme",
+            "/usr/share/icons/Yaru/index.theme",
+            "/usr/share/icons/Mint-Y/index.theme",
+            "/usr/share/icons/elementary/index.theme",
+            NULL
+        };
+        gboolean have_sys = FALSE;
+        for (int i = 0; sys_ic[i] && !have_sys; i++)
+            have_sys = g_file_test(sys_ic[i], G_FILE_TEST_EXISTS);
+        if (!have_sys) {
+            char *fb = g_build_filename(g_get_user_data_dir(), "icons", "Hyggshi-Icons", "index.theme", NULL);
+            if (g_file_test(fb, G_FILE_TEST_EXISTS))
+                icons = g_strdup("Hyggshi-Icons");
+            g_free(fb);
+        }
+    }
     add_string(a, "Net/IconThemeName", icons);
 
     char *font = kf_string(hde, "settings", "font");
@@ -147,7 +167,12 @@ static GPtrArray *read_settings(void)
 
     char *layout = kf_string(hde, "settings", "decoration_layout");
     add_string(a, "Gtk/DecorationLayout", layout ? layout : g_strdup("menu:minimize,maximize,close"));
-    add_int(a, "Gtk/EnableAnimations", 1);
+    gboolean anim = TRUE;
+    if (hde && g_key_file_has_key(hde, "settings", "enable_animations", NULL))
+        anim = g_key_file_get_boolean(hde, "settings", "enable_animations", NULL);
+    else if (gtk && g_key_file_has_key(gtk, "Settings", "gtk-enable-animations", NULL))
+        anim = g_key_file_get_boolean(gtk, "Settings", "gtk-enable-animations", NULL);
+    add_int(a, "Gtk/EnableAnimations", anim ? 1 : 0);
 
     /* Settings > Display > Scale: 0=100% (not set, keep the user's Xft.dpi), 1=125%, 2=150%, 3=200% */
     int scale = hde ? g_key_file_get_integer(hde, "settings", "scale", NULL) : 0;

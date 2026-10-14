@@ -85,7 +85,7 @@ static void update_actions(FilesWindow *w)
     enable(w, "copy", n > 0 && !p->is_trash);
     enable(w, "paste", drop && files_clipboard_can_paste());
     enable(w, "paste-into", n == 1 && pane_selected_is_dir(p) && !p->is_trash && files_clipboard_can_paste());
-    enable(w, "rename", n == 1 && !p->is_trash);
+    enable(w, "rename", n > 0 && !p->is_trash && !p->is_recent);
     enable(w, "trash", n > 0 && !p->is_trash);
     enable(w, "delete", n > 0);
     enable(w, "restore", n > 0 && p->is_trash);
@@ -912,12 +912,14 @@ static void act_copy_location(GSimpleAction *a, GVariant *v, gpointer d)
 
 static void act_select_all(GSimpleAction *a, GVariant *v, gpointer d) { W; pane_select_all(w->pane); }
 static void act_invert(GSimpleAction *a, GVariant *v, gpointer d) { W; pane_invert_selection(w->pane); }
+static void act_select_pattern(GSimpleAction *a, GVariant *v, gpointer d) { W; files_select_pattern_dialog(w); }
 
 static void act_rename(GSimpleAction *a, GVariant *v, gpointer d)
 {
     W;
     SEL;
     if (sel && !sel->next) files_rename_dialog(w, sel->data);
+    else if (sel) files_batch_rename_dialog(w, sel);
     files_list_free(sel);
 }
 
@@ -1092,6 +1094,7 @@ static const GActionEntry win_actions[] = {
     { "copy-location", act_copy_location, NULL, NULL, NULL, { 0 } },
     { "select-all", act_select_all, NULL, NULL, NULL, { 0 } },
     { "invert-selection", act_invert, NULL, NULL, NULL, { 0 } },
+    { "select-pattern", act_select_pattern, NULL, NULL, NULL, { 0 } },
     { "rename", act_rename, NULL, NULL, NULL, { 0 } },
     { "trash", act_trash, NULL, NULL, NULL, { 0 } },
     { "delete", act_delete, NULL, NULL, NULL, { 0 } },
@@ -1125,7 +1128,9 @@ void files_window_set_accels(GtkApplication *app)
         { "win.zoom-out", { "<Control>minus", "<Control>KP_Subtract" } },
         { "win.zoom-normal", { "<Control>0", "<Control>KP_0" } }, { "win.show-sidebar", { "F9" } },
         { "win.cut", { "<Control>x" } }, { "win.copy", { "<Control>c" } }, { "win.paste", { "<Control>v" } },
+        { "win.copy-location", { "<Control><Shift>c" } }, { "win.open-terminal", { "F4" } },
         { "win.select-all", { "<Control>a" } }, { "win.invert-selection", { "<Control><Shift>i" } },
+        { "win.select-pattern", { "<Control>s" } },
         { "win.rename", { "F2" } }, { "win.trash", { "Delete", "KP_Delete" } },
         { "win.delete", { "<Shift>Delete", "<Shift>KP_Delete" } }, { "win.new-folder", { "<Control><Shift>n" } },
         { "win.properties", { "<Alt>Return", "<Control>i" } }, { "win.bookmark", { "<Control>d" } },
@@ -1408,6 +1413,7 @@ static void fill_main_menu(GtkWidget *menu, FilesWindow *w)
     add_item(m, menu, "edit-paste", "_Paste", "Ctrl+V", "paste", NULL);
     add_item(m, menu, "edit-select-all", "Select _All", "Ctrl+A", "select-all", NULL);
     add_item(m, menu, "edit-select-all", "_Invert Selection", "Ctrl+Shift+I", "invert-selection", NULL);
+    add_item(m, menu, "edit-find", "Select Matching _Pattern…", "Ctrl+S", "select-pattern", NULL);
     files_menu_sep(menu);
     add_check(m, menu, "Show _Hidden Files", prefs.show_hidden, "Ctrl+H", "show-hidden");
     add_check(m, menu, "Show Side_bar", prefs.show_sidebar, "F9", "show-sidebar");

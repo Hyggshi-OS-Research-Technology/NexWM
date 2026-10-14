@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Text Editor
+GenericName=Text Editor
+Comment=Simple, beginner-friendly text editor for HDE
+Exec=@PREFIX@/bin/hde-editor %F
+Icon=accessories-text-editor
+Terminal=false
+Categories=GTK;Utility;TextEditor;
+MimeType=text/plain;text/markdown;text/x-csrc;text/x-chdr;text/x-shellscript;text/x-python;application/json;
+Keywords=text;editor;notes;write;document;notepad;
+StartupNotify=true
+StartupWMClass=hde-editor

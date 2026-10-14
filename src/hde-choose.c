@@ -54,6 +54,7 @@ static const HdeChooseCandidate files_cands[] = {
 };
 
 static const HdeChooseCandidate monitor_cands[] = {
+    { "hde-resources", NULL, HDE_OWN },     /* Hyggshi Resources: HDE's own system resource & process monitor */
     { "gnome-system-monitor", NULL, NULL },
     { "mate-system-monitor", NULL, NULL },
     { "xfce4-taskmanager", NULL, NULL },

@@ -59,11 +59,14 @@ typedef enum {
 
 static SortMode sort_mode = SORT_NAME;
 static gboolean keep_arranged = FALSE;
+static gboolean show_home_icon = TRUE;
+static gboolean show_support_icon = TRUE;
 static gint cmp_file_paths(gconstpointer a, gconstpointer b);
 static void reload_icons(void);
 static void queue_reload(void);
 static void m_arrange_icons(GtkMenuItem *i, gpointer d);
 static void popup_icon_menu(GtkWidget *icon, const GdkEvent *trigger);
+static void launch_settings_arg(const char *arg);
 
 /* ---------- configuration ---------- */
 static char *config_file(void)
@@ -100,9 +103,15 @@ static void load_config(void)
     char *cf = config_file();
     char *wp = NULL;
     wallpaper_mode = 0;
+    show_home_icon = TRUE;
+    show_support_icon = TRUE;
     if (g_key_file_load_from_file(kf, cf, G_KEY_FILE_NONE, NULL)) {
         wp = g_key_file_get_string(kf, "desktop", "wallpaper", NULL);
         wallpaper_mode = CLAMP(g_key_file_get_integer(kf, "desktop", "wallpaper_mode", NULL), 0, 3);
+        if (g_key_file_has_key(kf, "desktop", "show_home", NULL))
+            show_home_icon = g_key_file_get_boolean(kf, "desktop", "show_home", NULL);
+        if (g_key_file_has_key(kf, "desktop", "show_support", NULL))
+            show_support_icon = g_key_file_get_boolean(kf, "desktop", "show_support", NULL);
     }
     if (!wp) {
         /* The old Settings only saved the wallpaper in settings.ini */
@@ -126,6 +135,8 @@ static void save_config(void)
     char *cf = config_file();
     g_key_file_load_from_file(kf, cf, G_KEY_FILE_NONE, NULL);
     if (wallpaper_path) g_key_file_set_string(kf, "desktop", "wallpaper", wallpaper_path);
+    g_key_file_set_boolean(kf, "desktop", "show_home", show_home_icon);
+    g_key_file_set_boolean(kf, "desktop", "show_support", show_support_icon);
     char *dir = g_path_get_dirname(cf);
     g_mkdir_with_parents(dir, 0755);
     g_key_file_save_to_file(kf, cf, NULL);
@@ -216,6 +227,11 @@ static char *desktop_link_url(const char *path, char **name, char **icon)
 
 static void activate_target(const char *path)
 {
+    if (!path) return;
+    if (!strcmp(path, "hde-support:")) {
+        launch_settings_arg("--support-window");
+        return;
+    }
     GError *err = NULL;
     if (g_str_has_suffix(path, ".desktop")) {
         GDesktopAppInfo *a = g_desktop_app_info_new_from_filename(path);
@@ -679,12 +695,14 @@ static void reload_icons(void)
         idx++; \
     } while (0)
 
-    /* The Home folder is always present */
-    GIcon *home_icon = g_themed_icon_new("user-home");
-    GtkWidget *home = make_icon("Home", home_icon, g_get_home_dir());
-    g_object_unref(home_icon);
-    g_object_set_data(G_OBJECT(home), "home", GINT_TO_POINTER(1));   /* no Cut / Rename / Trash for Home */
-    PLACE(home);
+    /* The Home folder is present by default */
+    if (show_home_icon) {
+        GIcon *home_icon = g_themed_icon_new("user-home");
+        GtkWidget *home = make_icon("Home", home_icon, g_get_home_dir());
+        g_object_unref(home_icon);
+        g_object_set_data(G_OBJECT(home), "home", GINT_TO_POINTER(1));   /* no Cut / Rename / Trash for Home */
+        PLACE(home);
+    }
 
     const char *ddir = g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP);
     GDir *d = ddir ? g_dir_open(ddir, 0, NULL) : NULL;
@@ -704,8 +722,8 @@ static void reload_icons(void)
             if (g_str_has_suffix(path, ".desktop")) {
                 GDesktopAppInfo *a = g_desktop_app_info_new_from_filename(path);
                 if (a) {
-                    icon = g_object_ref(g_app_info_get_icon(G_APP_INFO(a)) ?
-                                        g_app_info_get_icon(G_APP_INFO(a)) : g_themed_icon_new("application-x-executable"));
+                    GIcon *ai = g_app_info_get_icon(G_APP_INFO(a));
+                    icon = ai ? g_object_ref(ai) : g_themed_icon_new("application-x-executable");
                     g_free(label);
                     label = g_strdup(g_app_info_get_display_name(G_APP_INFO(a)));
                     g_object_unref(a);
@@ -743,6 +761,18 @@ static void reload_icons(void)
             g_object_unref(icon); g_free(label); g_free(path);
         }
         g_list_free_full(names, g_free);
+    }
+
+    /* Built-in Support desktop icon: opens the HDE Support & Help Center */
+    if (show_support_icon) {
+        const char * const sup_names[] = { "help-browser", "help-faq", "system-help", "dialog-question", NULL };
+        GIcon *sup_icon = g_themed_icon_new_from_names((char **)sup_names, -1);
+        GtkWidget *sup = make_icon("Support", sup_icon, "hde-support:");
+        g_object_unref(sup_icon);
+        gtk_widget_set_tooltip_text(sup, "Help & Support — System Diagnostics, Quick Fixes & Documentation");
+        g_object_set_data(G_OBJECT(sup), "home", GINT_TO_POINTER(1));     /* no Cut / Rename / Trash for Support */
+        g_object_set_data(G_OBJECT(sup), "support", GINT_TO_POINTER(1));
+        PLACE(sup);
     }
     #undef PLACE
     g_hash_table_unref(keep);
@@ -1499,7 +1529,24 @@ static void show_properties(GPtrArray *paths)
     gtk_box_pack_start(GTK_BOX(content), grid, TRUE, TRUE, 0);
     int row = 0;
 
-    if (paths->len == 1) {
+    if (paths->len == 1 && !strcmp(first, "hde-support:")) {
+        gtk_window_set_title(GTK_WINDOW(dlg), "Support — Properties");
+        GtkWidget *head = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        GtkWidget *img = gtk_image_new_from_icon_name("help-browser", GTK_ICON_SIZE_DIALOG);
+        gtk_image_set_pixel_size(GTK_IMAGE(img), 48);
+        GtkWidget *name = gtk_label_new(NULL);
+        gtk_label_set_markup(GTK_LABEL(name), "<b><big>Support</big></b>");
+        gtk_label_set_selectable(GTK_LABEL(name), TRUE);
+        gtk_label_set_xalign(GTK_LABEL(name), 0);
+        gtk_box_pack_start(GTK_BOX(head), img, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(head), name, TRUE, TRUE, 0);
+        gtk_grid_attach(GTK_GRID(grid), head, 0, row++, 2, 1);
+        gtk_grid_attach(GTK_GRID(grid), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), 0, row++, 2, 1);
+        prop_row(grid, row++, "Type:", "Built-in Desktop Shortcut (Help & Support)");
+        prop_row(grid, row++, "Command:", "hde-settings --support-window");
+        prop_row(grid, row++, "Address:", "https://github.com/Hyggshi-OS-Research-Technology/NexWM/issues");
+        prop_row(grid, row++, "Comment:", "Help & Support Center: system diagnostics, quick self-repair tools, keyboard shortcuts, and issue reporting.");
+    } else if (paths->len == 1) {
         GFile *f = g_file_new_for_path(first);
         GFileInfo *fi = g_file_query_info(f, "standard::*,time::modified,access::*,unix::mode", G_FILE_QUERY_INFO_NONE, NULL, NULL);
         gboolean launcher = is_launcher(first);
@@ -1746,6 +1793,9 @@ static void log_menu(const char *what, GtkWidget *menu)
     g_string_free(s, TRUE);
 }
 
+static void m_support_settings(GtkMenuItem *i, gpointer d) { (void)i; (void)d; launch_settings_arg("support"); }
+static void m_about_settings(GtkMenuItem *i, gpointer d) { (void)i; (void)d; launch_settings_arg("about"); }
+
 /* The menu of a desktop icon (or of all selected icons). The paths are copied into the menu items, so the
  * actions still work when the desktop reloads its icons while the menu or a dialog is open. */
 static void popup_icon_menu(GtkWidget *icon, const GdkEvent *trigger)
@@ -1764,12 +1814,16 @@ static void popup_icon_menu(GtkWidget *icon, const GdkEvent *trigger)
     if (!all->len) { g_ptr_array_unref(all); g_ptr_array_unref(ops); return; }
     const char *first = g_ptr_array_index(all, 0);
     gboolean single = all->len == 1, folder = single && is_dir(first), launcher = single && is_launcher(first);
+    gboolean is_sup = single && !strcmp(first, "hde-support:");
 
     GtkWidget *menu = gtk_menu_new();
     gtk_style_context_add_class(gtk_widget_get_style_context(menu), "hde-icon-menu");
     GtkWidget *it = menu_add(menu, "_Open", GDK_KEY_Return, 0, G_CALLBACK(m_open), all);
     gtk_label_set_markup_with_mnemonic(GTK_LABEL(gtk_bin_get_child(GTK_BIN(it))), "<b>_Open</b>");
-    if (single && !launcher) {
+    if (is_sup) {
+        menu_add(menu, "Support in _Settings…", 0, 0, G_CALLBACK(m_support_settings), NULL);
+        menu_add(menu, "System _Information…", 0, 0, G_CALLBACK(m_about_settings), NULL);
+    } else if (single && !launcher) {
         GFile *f = g_file_new_for_path(first);
         GFileInfo *fi = g_file_query_info(f, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
         const char *ct = fi ? g_file_info_get_content_type(fi) : NULL;
@@ -1865,6 +1919,22 @@ static void on_settings_sort_changed(GtkComboBox *c, gpointer d)
     if (keep_arranged) reload_icons();
 }
 
+static void on_show_home_toggled(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    show_home_icon = gtk_toggle_button_get_active(b);
+    save_config();
+    reload_icons();
+}
+
+static void on_show_support_toggled(GtkToggleButton *b, gpointer d)
+{
+    (void)d;
+    show_support_icon = gtk_toggle_button_get_active(b);
+    save_config();
+    reload_icons();
+}
+
 static void m_settings(GtkMenuItem *i, gpointer d)
 {
     (void)i; (void)d;
@@ -1879,18 +1949,28 @@ static void m_settings(GtkMenuItem *i, gpointer d)
     gtk_box_pack_start(GTK_BOX(content), grid, TRUE, TRUE, 0);
 
     GtkWidget *title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(title), "<b>Desktop</b>");
+    gtk_label_set_markup(GTK_LABEL(title), "<b>Desktop Icons</b>");
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(grid), title, 0, 0, 2, 1);
+
+    GtkWidget *sh_home = gtk_check_button_new_with_label("Show Home icon on desktop");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(sh_home), show_home_icon);
+    g_signal_connect(sh_home, "toggled", G_CALLBACK(on_show_home_toggled), NULL);
+    gtk_grid_attach(GTK_GRID(grid), sh_home, 0, 1, 2, 1);
+
+    GtkWidget *sh_sup = gtk_check_button_new_with_label("Show Support icon on desktop");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(sh_sup), show_support_icon);
+    g_signal_connect(sh_sup, "toggled", G_CALLBACK(on_show_support_toggled), NULL);
+    gtk_grid_attach(GTK_GRID(grid), sh_sup, 0, 2, 2, 1);
 
     GtkWidget *arr = gtk_check_button_new_with_label("Keep icons arranged");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(arr), keep_arranged);
     g_signal_connect(arr, "toggled", G_CALLBACK(m_keep_arranged), NULL);
-    gtk_grid_attach(GTK_GRID(grid), arr, 0, 1, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), arr, 0, 3, 2, 1);
 
     GtkWidget *sort_label = gtk_label_new("Default sorting:");
     gtk_widget_set_halign(sort_label, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), sort_label, 0, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), sort_label, 0, 4, 1, 1);
     GtkWidget *sort = gtk_combo_box_text_new();
     gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sort), "Name");
     gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sort), "Name descending");
@@ -1899,15 +1979,34 @@ static void m_settings(GtkMenuItem *i, gpointer d)
     gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sort), "Size");
     gtk_combo_box_set_active(GTK_COMBO_BOX(sort), (gint)sort_mode);
     g_signal_connect(sort, "changed", G_CALLBACK(on_settings_sort_changed), NULL);
-    gtk_grid_attach(GTK_GRID(grid), sort, 1, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), sort, 1, 4, 1, 1);
 
     GtkWidget *wall = gtk_button_new_with_label("Change Background…");
     g_signal_connect(wall, "clicked", G_CALLBACK(m_wallpaper), NULL);
-    gtk_grid_attach(GTK_GRID(grid), wall, 0, 3, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), wall, 0, 5, 2, 1);
 
     gtk_widget_show_all(dlg);
     gtk_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);
+}
+
+static void launch_settings_arg(const char *arg)
+{
+    char *self = g_file_read_link("/proc/self/exe", NULL);
+    char *dir = self ? g_path_get_dirname(self) : NULL;
+    char *sib = dir ? g_build_filename(dir, "hde-settings", NULL) : NULL;
+    char *prog = sib && g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE) ? g_strdup(sib) : g_find_program_in_path("hde-settings");
+    if (prog) {
+        char *argv[] = { prog, (char *)arg, NULL };
+        GError *e = NULL;
+        if (!g_spawn_async(NULL, argv, NULL, 0, NULL, NULL, NULL, &e)) {
+            g_printerr("hde-desktop: cannot start %s: %s\n", prog, e ? e->message : "?");
+            g_clear_error(&e);
+        }
+    } else {
+        g_printerr("hde-desktop: hde-settings not found\n");
+    }
+    g_free(prog); g_free(sib); g_free(dir); g_free(self);
 }
 
 static void m_hyggshi_settings(GtkMenuItem *i, gpointer d)
@@ -1918,6 +2017,19 @@ static void m_hyggshi_settings(GtkMenuItem *i, gpointer d)
 static void m_display_settings(GtkMenuItem *i, gpointer d)
 {
     (void)i; (void)d;
+    char *self = g_file_read_link("/proc/self/exe", NULL);
+    char *dir = self ? g_path_get_dirname(self) : NULL;
+    char *sib = dir ? g_build_filename(dir, "hde-settings", NULL) : NULL;
+    char *prog = sib && g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE) ? g_strdup(sib) : g_find_program_in_path("hde-settings");
+    g_free(sib); g_free(dir); g_free(self);
+    if (prog) {
+        char *argv[] = { prog, (char *)"display", NULL };
+        if (g_spawn_async(NULL, argv, NULL, 0, NULL, NULL, NULL, NULL)) {
+            g_free(prog);
+            return;
+        }
+        g_free(prog);
+    }
     const char *commands[] = { "gnome-control-center", "xfce4-display-settings",
                               "lxqt-config-monitor", "arandr", NULL };
     for (int k = 0; commands[k]; k++) {
@@ -1937,25 +2049,18 @@ static void m_display_settings(GtkMenuItem *i, gpointer d)
     }
 }
 
+/* "Help & Support": opens the Support & Help Center window */
+static void m_support(GtkMenuItem *i, gpointer d)
+{
+    (void)i; (void)d;
+    launch_settings_arg("--support-window");
+}
+
 /* "About HDE": the About window (logo of the system, HDE version, credits; "System details…" opens Settings > About) */
 static void m_about(GtkMenuItem *i, gpointer d)
 {
     (void)i; (void)d;
-    char *self = g_file_read_link("/proc/self/exe", NULL);
-    char *dir = self ? g_path_get_dirname(self) : NULL;
-    char *sib = dir ? g_build_filename(dir, "hde-settings", NULL) : NULL;
-    char *prog = sib && g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE) ? g_strdup(sib) : g_find_program_in_path("hde-settings");
-    if (prog) {
-        char *argv[] = { prog, (char *)"--about-window", NULL };
-        GError *e = NULL;
-        if (!g_spawn_async(NULL, argv, NULL, 0, NULL, NULL, NULL, &e)) {
-            g_printerr("hde-desktop: cannot start %s: %s\n", prog, e ? e->message : "?");
-            g_clear_error(&e);
-        }
-    } else {
-        g_printerr("hde-desktop: hde-settings not found\n");
-    }
-    g_free(prog); g_free(sib); g_free(dir); g_free(self);
+    launch_settings_arg("--about-window");
 }
 
 /* ---------- screens changed (F8, a monitor plugged in or out): cover the whole desktop again ---------- */
@@ -2123,6 +2228,10 @@ static void popup_desktop_menu(const GdkEvent *e)
 
     item = gtk_menu_item_new_with_label("Settings");
     g_signal_connect(item, "activate", G_CALLBACK(m_hyggshi_settings), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Help & Support");
+    g_signal_connect(item, "activate", G_CALLBACK(m_support), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
     item = gtk_menu_item_new_with_label("About HDE");

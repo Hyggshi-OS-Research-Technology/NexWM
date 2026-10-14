@@ -17,10 +17,21 @@
 #define SH_LIST_SINKS \
     "pactl info 2>/dev/null | sed -n 's/^Default Sink: /DEFAULT\\t/p'; " \
     "pactl list sinks 2>/dev/null | awk -F': ' '/^[ \\t]*Name: /{n=$2} /^[ \\t]*Description: /{print n \"\\t\" $2}'"
+#define SH_LIST_SOURCES \
+    "pactl info 2>/dev/null | sed -n 's/^Default Source: /DEFAULT\\t/p'; " \
+    "pactl list sources 2>/dev/null | awk -F': ' '/^[ \\t]*Name: /{n=$2} /^[ \\t]*Description: /{if(n!~\"\\\\.monitor$\") print n \"\\t\" $2}'"
+#define SH_MIC_VOL_GET \
+    "if " HDE_SH_HAVE_PACTL "; then pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i~/%$/){gsub(/%/,\"\",$i); print $i; exit}}'; " \
+    "elif command -v wpctl >/dev/null 2>&1; then wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | awk '{printf \"%d\\n\", $2*100}'; " \
+    "else amixer sget Capture 2>/dev/null | awk -F'[][]' '/%/ {gsub(/%/,\"\",$2); print $2; exit}'; fi"
+#define SH_MIC_VOL_SET_FMT \
+    "if " HDE_SH_HAVE_PACTL "; then pactl set-source-volume @DEFAULT_SOURCE@ %d%%; " \
+    "elif command -v wpctl >/dev/null 2>&1; then wpctl set-volume @DEFAULT_AUDIO_SOURCE@ %d%%; " \
+    "else amixer -q sset Capture %d%%; fi"
 
-static GtkWidget *vol_scale, *vol_label, *mute_sw, *mic_sw, *out_combo, *out_row, *status_row;
-static guint vol_timer, poll_timer;
-static int pending_vol = -1;
+static GtkWidget *vol_scale, *vol_label, *mute_sw, *over_sw, *mic_sw, *mic_scale, *mic_label, *out_combo, *out_row, *in_combo, *in_row, *status_row;
+static guint vol_timer, mic_timer, poll_timer;
+static int pending_vol = -1, pending_mic = -1;
 static gboolean loading, user_dragging;
 
 static void set_mute_quiet(GtkWidget *sw, gboolean v);
@@ -51,10 +62,23 @@ static void on_mic_get(gboolean ok, int st, const char *out, const char *err, gp
     if (ok) set_mute_quiet(mic_sw, atoi(out) > 0);
 }
 
+static void on_mic_vol_get(gboolean ok, int st, const char *out, const char *err, gpointer d)
+{
+    (void)st; (void)err; (void)d;
+    if (!mic_scale) return;
+    int v = ok && out && *out ? atoi(out) : -1;
+    gtk_widget_set_sensitive(mic_scale, v >= 0);
+    if (v < 0 || user_dragging || pending_mic >= 0) return;
+    loading = TRUE;
+    gtk_range_set_value(GTK_RANGE(mic_scale), CLAMP(v, 0, 150));
+    loading = FALSE;
+}
+
 static void refresh_volume(void)
 {
     run_shell_async(HDE_SH_VOLUME_GET, on_vol_get, NULL);
     run_shell_async(HDE_SH_MIC_GET, on_mic_get, NULL);
+    run_shell_async(SH_MIC_VOL_GET, on_mic_vol_get, NULL);
 }
 
 static gboolean vol_apply(gpointer d)
@@ -70,6 +94,19 @@ static gboolean vol_apply(gpointer d)
     return G_SOURCE_REMOVE;
 }
 
+static gboolean mic_apply(gpointer d)
+{
+    (void)d;
+    mic_timer = 0;
+    if (pending_mic < 0) return G_SOURCE_REMOVE;
+    int v = pending_mic;
+    pending_mic = -1;
+    char *cmd = g_strdup_printf(SH_MIC_VOL_SET_FMT, v, v, v);
+    run_shell_async(cmd, NULL, NULL);
+    g_free(cmd);
+    return G_SOURCE_REMOVE;
+}
+
 static void on_vol_changed(GtkRange *r, gpointer d)
 {
     (void)d;
@@ -80,6 +117,54 @@ static void on_vol_changed(GtkRange *r, gpointer d)
     if (loading) return;
     pending_vol = v;
     if (!vol_timer) vol_timer = g_timeout_add(120, vol_apply, NULL);
+}
+
+static void on_mic_vol_changed(GtkRange *r, gpointer d)
+{
+    (void)d;
+    int v = (int)gtk_range_get_value(r);
+    char buf[16];
+    g_snprintf(buf, sizeof buf, "%d%%", v);
+    if (mic_label) gtk_label_set_text(GTK_LABEL(mic_label), buf);
+    if (loading) return;
+    pending_mic = v;
+    if (!mic_timer) mic_timer = g_timeout_add(120, mic_apply, NULL);
+}
+
+static gboolean on_overamplify(GtkSwitch *s, gboolean v, gpointer d)
+{
+    (void)s; (void)d;
+    cfg_set_bool("sound_overamplify", v);
+    if (vol_scale) {
+        double cur = gtk_range_get_value(GTK_RANGE(vol_scale));
+        gtk_range_set_range(GTK_RANGE(vol_scale), 0, v ? 150 : 100);
+        if (!v && cur > 100) gtk_range_set_value(GTK_RANGE(vol_scale), 100);
+    }
+    settings_status(v ? "Over-amplification enabled (up to 150%%)" : "Volume range limited to 100%%");
+    return FALSE;
+}
+
+static void on_test_sound(GtkButton *b, gpointer side_ptr)
+{
+    (void)b;
+    int side = GPOINTER_TO_INT(side_ptr); /* 0 = chime, 1 = left, 2 = right */
+    if (side == 1 || side == 2) {
+        char *cmd = g_strdup_printf(
+            "if command -v speaker-test >/dev/null 2>&1; then speaker-test -t wav -c 2 -l 1 -s %d >/dev/null 2>&1; "
+            "elif command -v canberra-gtk-play >/dev/null 2>&1; then canberra-gtk-play -i audio-channel-front-%s >/dev/null 2>&1; "
+            "fi", side, side == 1 ? "left" : "right");
+        run_shell_async(cmd, NULL, NULL);
+        g_free(cmd);
+        settings_status("Playing %s speaker test…", side == 1 ? "left" : "right");
+    } else {
+        run_shell_async("if command -v canberra-gtk-play >/dev/null 2>&1; then canberra-gtk-play -i audio-volume-change >/dev/null 2>&1; "
+                        "elif command -v paplay >/dev/null 2>&1; then for f in /usr/share/sounds/freedesktop/stereo/audio-volume-change.oga "
+                        "/usr/share/sounds/freedesktop/stereo/bell.oga; do [ -f \"$f\" ] && { paplay \"$f\"; break; }; done; fi",
+                        NULL, NULL);
+        GdkDisplay *dpy = gdk_display_get_default();
+        if (dpy) gdk_display_beep(dpy);
+        settings_status("Playing test sound…");
+    }
 }
 
 static gboolean on_scale_press(GtkWidget *w, GdkEvent *e, gpointer d) { (void)w; (void)e; (void)d; user_dragging = TRUE; return FALSE; }
@@ -160,6 +245,52 @@ static void on_output(GtkComboBox *c, gpointer d)
     g_free(q);
 }
 
+static void on_sources(gboolean ok, int st, const char *out, const char *err, gpointer d)
+{
+    (void)st; (void)err; (void)d;
+    if (!in_combo) return;
+    loading = TRUE;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(in_combo));
+    char *def = NULL;
+    int n = 0;
+    gchar **lines = g_strsplit(ok ? out : "", "\n", -1);
+    for (int i = 0; lines[i]; i++) {
+        char *tab = strchr(lines[i], '\t');
+        if (!tab) continue;
+        *tab = '\0';
+        if (!strcmp(lines[i], "DEFAULT")) { g_free(def); def = g_strdup(tab + 1); continue; }
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(in_combo), lines[i], tab + 1);
+        n++;
+    }
+    g_strfreev(lines);
+    if (def) gtk_combo_box_set_active_id(GTK_COMBO_BOX(in_combo), def);
+    g_free(def);
+    gtk_widget_set_visible(in_row, n > 0);
+    loading = FALSE;
+}
+
+static void on_source_set(gboolean ok, int st, const char *out, const char *err, gpointer d)
+{
+    (void)st; (void)out; (void)d;
+    if (!ok) settings_status("Could not change input device: %s", err);
+    else settings_status("Input device changed");
+    refresh_volume();
+}
+
+static void on_input(GtkComboBox *c, gpointer d)
+{
+    (void)d;
+    if (loading) return;
+    const char *id = gtk_combo_box_get_active_id(c);
+    if (!id) return;
+    char *q = g_shell_quote(id);
+    char *cmd = g_strdup_printf("pactl set-default-source %s && for i in $(pactl list short source-outputs 2>/dev/null | cut -f1); "
+                                "do pactl move-source-output \"$i\" %s; done; exit 0", q, q);
+    run_shell_async(cmd, on_source_set, NULL);
+    g_free(cmd);
+    g_free(q);
+}
+
 static void on_mixer(GtkButton *b, gpointer d)
 {
     (void)b; (void)d;
@@ -178,7 +309,10 @@ static void on_map(GtkWidget *w, gpointer d)
 {
     (void)w; (void)d;
     refresh_volume();
-    if (have_program("pactl")) run_shell_async(SH_LIST_SINKS, on_sinks, NULL);
+    if (have_program("pactl")) {
+        run_shell_async(SH_LIST_SINKS, on_sinks, NULL);
+        run_shell_async(SH_LIST_SOURCES, on_sources, NULL);
+    }
     if (!poll_timer) poll_timer = g_timeout_add_seconds(3, poll_cb, NULL);
 }
 
@@ -191,6 +325,7 @@ static void on_unmap(GtkWidget *w, gpointer d)
 GtkWidget *page_sound_new(void)
 {
     GtkWidget *box = page_base();
+    gboolean over = cfg_get_bool("sound_overamplify", FALSE);
     gtk_box_pack_start(GTK_BOX(box), section("Output"), FALSE, FALSE, 0);
     status_row = row_box("Sound", "Checking…", NULL);
     gtk_box_pack_start(GTK_BOX(box), status_row, FALSE, FALSE, 0);
@@ -202,7 +337,7 @@ GtkWidget *page_sound_new(void)
     gtk_widget_set_no_show_all(out_row, TRUE);
 
     GtkWidget *vb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    vol_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
+    vol_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, over ? 150 : 100, 1);
     gtk_scale_set_draw_value(GTK_SCALE(vol_scale), FALSE);
     gtk_widget_set_size_request(vol_scale, 220, -1);
     vol_label = gtk_label_new("—");
@@ -217,7 +352,45 @@ GtkWidget *page_sound_new(void)
     g_signal_connect(mute_sw, "state-set", G_CALLBACK(on_mute), NULL);
     gtk_box_pack_start(GTK_BOX(box), row_box("Mute", "Mute audio output.", mute_sw), FALSE, FALSE, 0);
 
+    over_sw = gtk_switch_new();
+    gtk_switch_set_active(GTK_SWITCH(over_sw), over);
+    g_signal_connect(over_sw, "state-set", G_CALLBACK(on_overamplify), NULL);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Over-amplification",
+        "Allow volume levels above 100% (up to 150%) for quiet speakers or recordings.", over_sw), FALSE, FALSE, 0);
+
+    GtkWidget *tbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *tl = gtk_button_new_with_label("Test Left");
+    GtkWidget *tr = gtk_button_new_with_label("Test Right");
+    GtkWidget *tb = gtk_button_new_with_label("Test Sound");
+    g_signal_connect(tl, "clicked", G_CALLBACK(on_test_sound), GINT_TO_POINTER(1));
+    g_signal_connect(tr, "clicked", G_CALLBACK(on_test_sound), GINT_TO_POINTER(2));
+    g_signal_connect(tb, "clicked", G_CALLBACK(on_test_sound), GINT_TO_POINTER(0));
+    gtk_box_pack_start(GTK_BOX(tbox), tl, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(tbox), tr, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(tbox), tb, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Test speakers", "Play a test tone on the left, right or both channels.", tbox), FALSE, FALSE, 0);
+
     gtk_box_pack_start(GTK_BOX(box), section("Input"), FALSE, FALSE, 0);
+    in_combo = gtk_combo_box_text_new();
+    gtk_widget_set_size_request(in_combo, 260, -1);
+    g_signal_connect(in_combo, "changed", G_CALLBACK(on_input), NULL);
+    in_row = row_box("Input device", "Built-in microphone, headset or USB audio input.", in_combo);
+    gtk_box_pack_start(GTK_BOX(box), in_row, FALSE, FALSE, 0);
+    gtk_widget_set_no_show_all(in_row, TRUE);
+
+    GtkWidget *mvb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    mic_scale = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
+    gtk_scale_set_draw_value(GTK_SCALE(mic_scale), FALSE);
+    gtk_widget_set_size_request(mic_scale, 220, -1);
+    mic_label = gtk_label_new("—");
+    gtk_label_set_width_chars(GTK_LABEL(mic_label), 5);
+    g_signal_connect(mic_scale, "value-changed", G_CALLBACK(on_mic_vol_changed), NULL);
+    g_signal_connect(mic_scale, "button-press-event", G_CALLBACK(on_scale_press), NULL);
+    g_signal_connect(mic_scale, "button-release-event", G_CALLBACK(on_scale_release), NULL);
+    gtk_box_pack_start(GTK_BOX(mvb), mic_scale, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(mvb), mic_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row_box("Microphone volume", "Input gain level for the default microphone.", mvb), FALSE, FALSE, 0);
+
     mic_sw = gtk_switch_new();
     g_signal_connect(mic_sw, "state-set", G_CALLBACK(on_mic), NULL);
     gtk_box_pack_start(GTK_BOX(box), row_box("Microphone mute", "Mute the default microphone.", mic_sw), FALSE, FALSE, 0);

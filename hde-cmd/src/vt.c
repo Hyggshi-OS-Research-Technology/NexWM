@@ -18,13 +18,19 @@
 #define VT_MAX_PARAMS 16
 #define VT_OSC_SIZE 4096
 #define VT_ATTRS (HDE_CMD_VT_BOLD | HDE_CMD_VT_ITALIC | HDE_CMD_VT_UNDERLINE | HDE_CMD_VT_BLINK | \
-                 HDE_CMD_VT_INVERSE | HDE_CMD_VT_STRIKE)
+                 HDE_CMD_VT_INVERSE | HDE_CMD_VT_STRIKE | HDE_CMD_VT_DIM)
 
 typedef struct {
     HdeCmdVtCell *cells;
     int rows, columns;
     int capacity, first, history, view_offset;
     int x, y, saved_x, saved_y;
+    uint32_t saved_fg, saved_bg;
+    uint8_t saved_attrs;
+    int saved_origin;
+    char saved_g0, saved_g1;
+    int saved_gl;
+    int has_saved;
     int scroll_top, scroll_bottom;
     int wrap_pending;
     int history_enabled;
@@ -44,6 +50,7 @@ struct HdeCmdVt {
     uint32_t last_character;
 
     int cursor_visible;
+    HdeCmdVtCursorShape cursor_shape;
     int application_cursor;
     int origin_mode;
     int autowrap;
@@ -52,6 +59,10 @@ struct HdeCmdVt {
     int bracketed_paste;
     int mouse_mode;
     int sgr_mouse;
+    char charset_g0;
+    char charset_g1;
+    int charset_gl;
+    unsigned char charset_target;
 
     int parser;
     int csi_params[VT_MAX_PARAMS];
@@ -290,10 +301,26 @@ static int unicode_width(uint32_t codepoint)
     return width < 0 ? 1 : width;
 }
 
+static uint32_t translate_charset(const HdeCmdVt *vt, uint32_t codepoint)
+{
+    char cs = vt->charset_gl ? vt->charset_g1 : vt->charset_g0;
+    if (cs == '0' && codepoint >= 0x60 && codepoint <= 0x7e) {
+        static const uint32_t dec_gfx[31] = {
+            0x25c6, 0x2592, 0x2409, 0x240c, 0x240d, 0x240a, 0x00b0, 0x00b1,
+            0x2424, 0x240b, 0x2518, 0x2510, 0x250c, 0x2514, 0x253c, 0x23ba,
+            0x23bb, 0x2500, 0x23bc, 0x23bd, 0x251c, 0x2524, 0x2534, 0x252c,
+            0x2502, 0x2264, 0x2265, 0x03c0, 0x2260, 0x00a3, 0x00b7
+        };
+        return dec_gfx[codepoint - 0x60];
+    }
+    return codepoint;
+}
+
 static void put_codepoint(HdeCmdVt *vt, uint32_t codepoint)
 {
     VtScreen *s = vt->screen;
     if (codepoint == 0) return;
+    codepoint = translate_charset(vt, codepoint);
     int width = unicode_width(codepoint);
     if (width <= 0) {
         int x = s->wrap_pending ? s->x : s->x - 1;
@@ -407,6 +434,36 @@ static int parameter(const HdeCmdVt *vt, int index, int fallback)
     return vt->csi_params[index];
 }
 
+static void save_cursor(HdeCmdVt *vt, VtScreen *s)
+{
+    s->saved_x = s->x;
+    s->saved_y = s->y;
+    s->saved_fg = vt->foreground;
+    s->saved_bg = vt->background;
+    s->saved_attrs = vt->attributes;
+    s->saved_origin = vt->origin_mode;
+    s->saved_g0 = vt->charset_g0;
+    s->saved_g1 = vt->charset_g1;
+    s->saved_gl = vt->charset_gl;
+    s->has_saved = 1;
+}
+
+static void restore_cursor(HdeCmdVt *vt, VtScreen *s)
+{
+    s->x = clamp_int(s->saved_x, 0, s->columns - 1);
+    s->y = clamp_int(s->saved_y, 0, s->rows - 1);
+    s->wrap_pending = 0;
+    if (s->has_saved) {
+        vt->foreground = s->saved_fg;
+        vt->background = s->saved_bg;
+        vt->attributes = s->saved_attrs;
+        vt->origin_mode = s->saved_origin;
+        vt->charset_g0 = s->saved_g0 ? s->saved_g0 : 'B';
+        vt->charset_g1 = s->saved_g1 ? s->saved_g1 : 'B';
+        vt->charset_gl = s->saved_gl;
+    }
+}
+
 static void set_mode(HdeCmdVt *vt, int mode, int enabled)
 {
     switch (mode) {
@@ -418,12 +475,14 @@ static void set_mode(HdeCmdVt *vt, int mode, int enabled)
     case 1047:
     case 1049:
         if (enabled && !vt->alternate_active) {
+            if (mode == 1049) save_cursor(vt, &vt->main_screen);
             if (mode != 47) screen_reset(&vt->alternate_screen);
             vt->alternate_active = 1;
             vt->screen = &vt->alternate_screen;
         } else if (!enabled && vt->alternate_active) {
             vt->alternate_active = 0;
             vt->screen = &vt->main_screen;
+            if (mode == 1049) restore_cursor(vt, &vt->main_screen);
             vt->screen->view_offset = 0;
         }
         break;
@@ -449,12 +508,14 @@ static void set_sgr(HdeCmdVt *vt)
             vt->background = HDE_CMD_VT_DEFAULT_COLOR;
             vt->attributes = 0;
         } else if (p == 1) vt->attributes |= HDE_CMD_VT_BOLD;
+        else if (p == 2) vt->attributes |= HDE_CMD_VT_DIM;
         else if (p == 3) vt->attributes |= HDE_CMD_VT_ITALIC;
         else if (p == 4) vt->attributes |= HDE_CMD_VT_UNDERLINE;
         else if (p == 5 || p == 6) vt->attributes |= HDE_CMD_VT_BLINK;
         else if (p == 7) vt->attributes |= HDE_CMD_VT_INVERSE;
         else if (p == 9) vt->attributes |= HDE_CMD_VT_STRIKE;
-        else if (p == 22) vt->attributes &= (uint8_t)~HDE_CMD_VT_BOLD;
+        else if (p == 21) vt->attributes |= HDE_CMD_VT_UNDERLINE;
+        else if (p == 22) vt->attributes &= (uint8_t)~(HDE_CMD_VT_BOLD | HDE_CMD_VT_DIM);
         else if (p == 23) vt->attributes &= (uint8_t)~HDE_CMD_VT_ITALIC;
         else if (p == 24) vt->attributes &= (uint8_t)~HDE_CMD_VT_UNDERLINE;
         else if (p == 25) vt->attributes &= (uint8_t)~HDE_CMD_VT_BLINK;
@@ -483,19 +544,6 @@ static void set_sgr(HdeCmdVt *vt)
             else vt->background = color;
         }
     }
-}
-
-static void save_cursor(VtScreen *s)
-{
-    s->saved_x = s->x;
-    s->saved_y = s->y;
-}
-
-static void restore_cursor(VtScreen *s)
-{
-    s->x = clamp_int(s->saved_x, 0, s->columns - 1);
-    s->y = clamp_int(s->saved_y, 0, s->rows - 1);
-    s->wrap_pending = 0;
 }
 
 static void insert_chars(HdeCmdVt *vt, int count)
@@ -584,8 +632,32 @@ static void dispatch_csi(HdeCmdVt *vt, unsigned char final, HdeCmdVtReply reply,
         }
         break;
     }
-    case 's': save_cursor(s); break;
-    case 'u': restore_cursor(s); break;
+    case 's': save_cursor(vt, s); break;
+    case 'u': restore_cursor(vt, s); break;
+    case 'I': {
+        for (int i = 0; i < n; i++) {
+            int next = ((s->x / 8) + 1) * 8;
+            s->x = next < s->columns ? next : s->columns - 1;
+        }
+        s->wrap_pending = 0;
+        break;
+    }
+    case 'Z': {
+        for (int i = 0; i < n; i++) {
+            int prev = s->x > 0 ? ((s->x - 1) / 8) * 8 : 0;
+            s->x = prev;
+        }
+        s->wrap_pending = 0;
+        break;
+    }
+    case 'q':
+        if (vt->csi_intermediate == ' ') {
+            int ps = parameter(vt, 0, 0);
+            if (ps == 3 || ps == 4) vt->cursor_shape = HDE_CMD_VT_CURSOR_UNDERLINE;
+            else if (ps == 5 || ps == 6) vt->cursor_shape = HDE_CMD_VT_CURSOR_BEAM;
+            else vt->cursor_shape = HDE_CMD_VT_CURSOR_BLOCK;
+        }
+        break;
     case 'h': case 'l': {
         int enabled = final == 'h';
         if (vt->csi_private) {
@@ -685,7 +757,8 @@ static void ground_control(HdeCmdVt *vt, unsigned char byte)
     }
     case 0x0a: case 0x0b: case 0x0c: line_feed(vt, vt->newline_mode); break;
     case 0x0d: s->x = 0; s->wrap_pending = 0; break;
-    case 0x0e: case 0x0f: break;
+    case 0x0e: vt->charset_gl = 1; break;           /* SO: shift out (G1) */
+    case 0x0f: vt->charset_gl = 0; break;           /* SI: shift in (G0) */
     case 0x1b: vt->parser = PARSER_ESCAPE; break;
     default: break;
     }
@@ -746,9 +819,12 @@ static void escape_byte(HdeCmdVt *vt, unsigned char byte)
     case '[': csi_begin(vt); break;
     case ']': vt->parser = PARSER_OSC; vt->osc_length = 0; break;
     case 'P': case '^': case '_': vt->parser = PARSER_STRING; break;
-    case '(': case ')': case '*': case '+': vt->parser = PARSER_CHARSET; break;
-    case '7': save_cursor(s); break;
-    case '8': restore_cursor(s); break;
+    case '(': case ')': case '*': case '+':
+        vt->charset_target = byte;
+        vt->parser = PARSER_CHARSET;
+        break;
+    case '7': save_cursor(vt, s); break;
+    case '8': restore_cursor(vt, s); break;
     case 'D': line_feed(vt, 0); break;              /* IND */
     case 'E': line_feed(vt, 1); break;              /* NEL */
     case 'M':                                       /* RI */
@@ -806,6 +882,8 @@ static void parse_byte(HdeCmdVt *vt, unsigned char byte, HdeCmdVtReply reply,
         vt->parser = byte == '\\' ? PARSER_GROUND : PARSER_STRING;
         break;
     case PARSER_CHARSET:
+        if (vt->charset_target == '(') vt->charset_g0 = (char)byte;
+        else if (vt->charset_target == ')') vt->charset_g1 = (char)byte;
         vt->parser = PARSER_GROUND;
         break;
     default:
@@ -849,6 +927,7 @@ void hde_cmd_vt_reset(HdeCmdVt *vt)
     vt->attributes = 0;
     vt->last_character = ' ';
     vt->cursor_visible = 1;
+    vt->cursor_shape = HDE_CMD_VT_CURSOR_BLOCK;
     vt->application_cursor = 0;
     vt->origin_mode = 0;
     vt->autowrap = 1;
@@ -857,6 +936,10 @@ void hde_cmd_vt_reset(HdeCmdVt *vt)
     vt->bracketed_paste = 0;
     vt->mouse_mode = 0;
     vt->sgr_mouse = 0;
+    vt->charset_g0 = 'B';
+    vt->charset_g1 = 'B';
+    vt->charset_gl = 0;
+    vt->charset_target = 0;
     vt->parser = PARSER_GROUND;
     vt->csi_count = 0;
     vt->csi_private = 0;
@@ -905,10 +988,98 @@ int hde_cmd_vt_application_cursor(const HdeCmdVt *vt) { return vt ? vt->applicat
 int hde_cmd_vt_bracketed_paste(const HdeCmdVt *vt) { return vt ? vt->bracketed_paste : 0; }
 int hde_cmd_vt_mouse_mode(const HdeCmdVt *vt) { return vt ? vt->mouse_mode : 0; }
 int hde_cmd_vt_sgr_mouse(const HdeCmdVt *vt) { return vt ? vt->sgr_mouse : 0; }
+HdeCmdVtCursorShape hde_cmd_vt_cursor_shape(const HdeCmdVt *vt)
+{
+    return vt ? vt->cursor_shape : HDE_CMD_VT_CURSOR_BLOCK;
+}
 
 void hde_cmd_vt_scroll_view(HdeCmdVt *vt, int lines)
 {
     if (!vt) return;
     VtScreen *s = vt->screen;
     s->view_offset = clamp_int(s->view_offset + lines, 0, s->history);
+}
+
+void hde_cmd_vt_clear_scrollback(HdeCmdVt *vt)
+{
+    if (!vt) return;
+    VtScreen *s = &vt->main_screen;
+    s->first = screen_index(s, s->history);
+    s->history = 0;
+    s->view_offset = 0;
+}
+
+const HdeCmdVtCell *hde_cmd_vt_history_line(const HdeCmdVt *vt, int abs_row)
+{
+    if (!vt) return NULL;
+    const VtScreen *s = vt->screen;
+    if (abs_row < 0 || abs_row >= s->history + s->rows) return NULL;
+    return physical_line_const(s, screen_index(s, abs_row));
+}
+
+static uint32_t ascii_fold(uint32_t cp)
+{
+    return (cp >= 'A' && cp <= 'Z') ? (cp + 32) : cp;
+}
+
+static uint32_t decode_utf8_step(const char **p)
+{
+    const unsigned char *s = (const unsigned char *)*p;
+    if (!*s) return 0;
+    if (*s < 0x80) { (*p)++; return *s; }
+    uint32_t cp = 0;
+    int rem = 0;
+    if ((*s & 0xe0) == 0xc0) { cp = *s & 0x1f; rem = 1; }
+    else if ((*s & 0xf0) == 0xe0) { cp = *s & 0x0f; rem = 2; }
+    else if ((*s & 0xf8) == 0xf0) { cp = *s & 0x07; rem = 3; }
+    else { (*p)++; return 0xfffd; }
+    (*p)++;
+    while (rem > 0 && ((unsigned char)**p & 0xc0) == 0x80) {
+        cp = (cp << 6) | ((unsigned char)**p & 0x3f);
+        (*p)++;
+        rem--;
+    }
+    return cp;
+}
+
+int hde_cmd_vt_find(const HdeCmdVt *vt, const char *needle, int start_abs_row,
+                    int direction, int *out_col, int *out_len)
+{
+    if (!vt || !needle || !*needle) return -1;
+    uint32_t q[256];
+    int qlen = 0;
+    const char *p = needle;
+    while (*p && qlen < 256)
+        q[qlen++] = ascii_fold(decode_utf8_step(&p));
+    if (qlen == 0) return -1;
+
+    const VtScreen *s = vt->screen;
+    int total = s->history + s->rows;
+    if (total <= 0) return -1;
+    int step = direction < 0 ? -1 : 1;
+    int start = clamp_int(start_abs_row, 0, total - 1);
+
+    for (int count = 0; count < total; count++) {
+        int r = (start + count * step) % total;
+        if (r < 0) r += total;
+        const HdeCmdVtCell *line = physical_line_const(s, screen_index(s, r));
+        for (int c = 0; c <= s->columns - qlen; c++) {
+            if (line[c].attributes & HDE_CMD_VT_WIDE_CONT) continue;
+            int col = c;
+            int matched = 1;
+            for (int k = 0; k < qlen; k++) {
+                while (col < s->columns && (line[col].attributes & HDE_CMD_VT_WIDE_CONT)) col++;
+                if (col >= s->columns) { matched = 0; break; }
+                uint32_t cp = line[col].codepoint ? line[col].codepoint : ' ';
+                if (ascii_fold(cp) != q[k]) { matched = 0; break; }
+                col++;
+            }
+            if (matched) {
+                if (out_col) *out_col = c;
+                if (out_len) *out_len = col - c;
+                return r;
+            }
+        }
+    }
+    return -1;
 }

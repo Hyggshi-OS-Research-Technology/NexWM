@@ -21,11 +21,12 @@ install: hde-media
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(APPS_DIR)
 	install -m755 hde-media $(DESTDIR)$(PREFIX)/bin/hde-media
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-media.desktop > $(DESTDIR)$(APPS_DIR)/hde-media.desktop
-	chmod 644 $(DESTDIR)$(APPS_DIR)/hde-media.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' hde-video.desktop > $(DESTDIR)$(APPS_DIR)/hde-video.desktop
+	chmod 644 $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-video.desktop
 	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/hde-media $(DESTDIR)$(APPS_DIR)/hde-media.desktop
+	rm -f $(DESTDIR)$(PREFIX)/bin/hde-media $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-video.desktop
 
 clean:
 	rm -f hde-media

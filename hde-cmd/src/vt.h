@@ -17,8 +17,15 @@ enum {
     HDE_CMD_VT_BLINK      = 1u << 3,
     HDE_CMD_VT_INVERSE    = 1u << 4,
     HDE_CMD_VT_STRIKE     = 1u << 5,
+    HDE_CMD_VT_DIM        = 1u << 6,
     HDE_CMD_VT_WIDE_CONT  = 1u << 7
 };
+
+typedef enum {
+    HDE_CMD_VT_CURSOR_BLOCK     = 0,
+    HDE_CMD_VT_CURSOR_BEAM      = 1,
+    HDE_CMD_VT_CURSOR_UNDERLINE = 2
+} HdeCmdVtCursorShape;
 
 #define HDE_CMD_VT_DEFAULT_COLOR UINT32_C(0xffffffff)
 #define HDE_CMD_VT_SCROLLBACK 2000
@@ -56,5 +63,10 @@ int                   hde_cmd_vt_application_cursor(const HdeCmdVt *vt);
 int                   hde_cmd_vt_bracketed_paste(const HdeCmdVt *vt);
 int                   hde_cmd_vt_mouse_mode(const HdeCmdVt *vt);
 int                   hde_cmd_vt_sgr_mouse(const HdeCmdVt *vt);
+HdeCmdVtCursorShape   hde_cmd_vt_cursor_shape(const HdeCmdVt *vt);
+void                  hde_cmd_vt_clear_scrollback(HdeCmdVt *vt);
+const HdeCmdVtCell   *hde_cmd_vt_history_line(const HdeCmdVt *vt, int abs_row);
+int                   hde_cmd_vt_find(const HdeCmdVt *vt, const char *needle, int start_abs_row,
+                                      int direction, int *out_col, int *out_len);
 
 #endif /* HDE_CMD_VT_H */
