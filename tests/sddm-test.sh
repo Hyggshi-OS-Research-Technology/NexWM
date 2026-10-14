@@ -128,6 +128,21 @@ if [ -n "$(meta Name)" ] && [ -n "$(meta Description)" ]; then
 else
     fail "metadata.desktop: Name and Description are needed to find the theme"
 fi
+if [ -n "$(meta Author)" ] && echo "$(meta Copyright)" | grep -q "$(meta Author)"; then
+    pass "metadata.desktop: Author and Copyright match ($(meta Author))"
+else
+    fail "metadata.desktop: Author ($(meta Author)) and Copyright ($(meta Copyright)) do not match"
+fi
+if grep -q "screenModel" "$THEME/Main.qml" && grep -q "activeScreenGeometry" "$THEME/Main.qml"; then
+    pass "Main.qml: uses screenModel for multi-monitor geometry and active screen placement"
+else
+    fail "Main.qml: does not use screenModel for multi-monitor support"
+fi
+if grep -q "selectProtocol" "$THEME/components/HdeSessions.qml"; then
+    pass "HdeSessions.qml: provides X11 and Wayland session detection and quick switching"
+else
+    fail "HdeSessions.qml: missing X11 / Wayland protocol switching"
+fi
 
 # the QML of the theme: imports, balance, and what it refers to
 for f in "$THEME"/Main.qml "$THEME"/components/*.qml; do
@@ -257,6 +272,18 @@ if [ -x "$INSTALL" ] || [ -f "$INSTALL" ]; then
         pass "--default-session preselects HDE (DefaultSession=hde.desktop)"
     else
         fail "--default-session did not write DefaultSession"
+    fi
+    sh "$INSTALL" --root "$ROOT" --session wayland >/dev/null 2>&1
+    if grep -q "^DefaultSession=hde-wayland.desktop" "$ROOT/etc/sddm.conf.d/50-hde-theme.conf"; then
+        pass "--session wayland preselects HDE (Wayland) (DefaultSession=hde-wayland.desktop)"
+    else
+        fail "--session wayland did not write DefaultSession=hde-wayland.desktop"
+    fi
+    sh "$INSTALL" --root "$ROOT" --session nexwm-wayland >/dev/null 2>&1
+    if grep -q "^DefaultSession=nexwm-wayland.desktop" "$ROOT/etc/sddm.conf.d/50-hde-theme.conf"; then
+        pass "--session nexwm-wayland preselects NexWM (Wayland) (DefaultSession=nexwm-wayland.desktop)"
+    else
+        fail "--session nexwm-wayland did not write DefaultSession=nexwm-wayland.desktop"
     fi
     # the theme of an installed HDE is the theme of this checkout: every file the installer put there is identical to
     # its source (the documentation stays in the checkout, and metadata.desktop may have QtVersion rewritten for the

@@ -257,7 +257,23 @@ static int wayland_launch(void)
     config_path(g_labwc_dir, sizeof g_labwc_dir, "labwc");
     char cmd[8300];
     snprintf(cmd, sizeof cmd, "'%s/hde-session' --wayland-inner", g_bindir);   /* labwc: no shell, quotes ok */
-    if (g_wm_arg[0] && !strcmp(g_wm_arg, "nexwm")) {
+    int want_nexwm = (g_wm_arg[0] && !strcmp(g_wm_arg, "nexwm"));
+    if (!want_nexwm) {
+        char ini[4096];
+        config_path(ini, sizeof ini, "settings.ini");
+        FILE *fp = fopen(ini, "r");
+        if (fp) {
+            char line[256];
+            while (fgets(line, sizeof line, fp)) {
+                if (strncmp(line, "wayland_compositor=nexwm", 24) == 0) {
+                    want_nexwm = 1;
+                    break;
+                }
+            }
+            fclose(fp);
+        }
+    }
+    if (want_nexwm) {
         int rc = wayland_launch_nexwm(cmd);
         if (rc >= 0) return rc;                    /* NexWM had the screen: the session ended with it */
     }

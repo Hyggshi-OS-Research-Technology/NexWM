@@ -1,8 +1,7 @@
 [Desktop Entry]
 Name=NexWM
-Comment=HDE with NexWM — light frames, workspaces and key bindings, configurable via ~/.config/hde/nexwm.ini
+Comment=HDE on X11 with NexWM — light frames, workspaces and key bindings, configurable via ~/.config/hde/nexwm.ini
 Exec=@PREFIX@/bin/hde-start --wm nexwm
 TryExec=@PREFIX@/bin/hde-session
 Type=Application
 DesktopNames=HDE
-NoDisplay=true

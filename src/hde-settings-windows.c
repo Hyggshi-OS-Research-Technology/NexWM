@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static GtkWidget *running_row, *apply_btn;
 static guint running_timer;
@@ -149,10 +150,81 @@ static void on_nexwm_focus_combo(GtkComboBox *combo, gpointer user_data)
 
 static char *running_wm(void)
 {
+    if (g_getenv("WAYLAND_DISPLAY") && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland")) {
+        char *wc = cfg_get_string("wayland_compositor", "labwc");
+        char *res = g_strdup_printf("%s (Wayland compositor)", (wc && !g_strcmp0(wc, "nexwm")) ? "NexWM" : "labwc");
+        g_free(wc);
+        return res;
+    }
     GdkScreen *s = gdk_screen_get_default();
     if (!GDK_IS_X11_SCREEN(s)) return NULL;
     const char *n = gdk_x11_screen_get_window_manager_name(s);
     return n && g_ascii_strcasecmp(n, "unknown") ? g_strdup(n) : NULL;
+}
+
+static void on_default_session_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    static const char *const session_files[] = {
+        "hde.desktop",
+        "hde-wayland.desktop",
+        "nexwm.desktop",
+        "nexwm-wayland.desktop"
+    };
+    static const char *const dmrc_names[] = {
+        "hde",
+        "hde-wayland",
+        "nexwm",
+        "nexwm-wayland"
+    };
+    int idx = gtk_combo_box_get_active(combo);
+    if (idx < 0 || idx >= (int)G_N_ELEMENTS(session_files)) return;
+
+    cfg_set_string("default_session", session_files[idx]);
+    cfg_set_string("session_type", (idx == 1 || idx == 3) ? "wayland" : "x11");
+    if (idx == 3) cfg_set_string("wayland_compositor", "nexwm");
+    else if (idx == 1) cfg_set_string("wayland_compositor", "labwc");
+
+    /* Also write ~/.dmrc so display managers remember the user's preferred session */
+    char *dmrc = g_build_filename(g_get_home_dir(), ".dmrc", NULL);
+    char *dmrc_body = g_strdup_printf("[Desktop]\nSession=%s\n", dmrc_names[idx]);
+    g_file_set_contents(dmrc, dmrc_body, -1, NULL);
+    g_free(dmrc_body);
+    g_free(dmrc);
+
+    settings_status("Default login session set to %s (%s). Select it on SDDM or click 'Apply to SDDM'.",
+                    session_files[idx], (idx == 1 || idx == 3) ? "Wayland" : "X11");
+}
+
+static void on_wayland_compositor_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    int idx = gtk_combo_box_get_active(combo);
+    const char *comp = (idx == 1) ? "nexwm" : "labwc";
+    cfg_set_string("wayland_compositor", comp);
+    settings_status("Preferred Wayland compositor set to '%s'. Takes effect on next Wayland login.", comp);
+}
+
+static void on_apply_sddm_session(GtkButton *btn, gpointer user_data)
+{
+    (void)btn; (void)user_data;
+    char *sess = cfg_get_string("default_session", "hde.desktop");
+    char *login_bin = g_find_program_in_path("hde-login");
+    const char *script = login_bin ? login_bin : "login/sddm/install.sh";
+    if (geteuid() == 0) {
+        const char *argv[] = { "sh", script, "--session", sess, NULL };
+        run_argv_async(argv, NULL, 15, NULL, NULL);
+        settings_status("Updated SDDM default session to %s.", sess);
+    } else if (have_program("pkexec")) {
+        const char *argv[] = { "pkexec", "sh", script, "--session", sess, NULL };
+        run_argv_async(argv, NULL, 30, NULL, NULL);
+        settings_status("Updating SDDM default session to %s…", sess);
+    } else {
+        settings_status("Saved %s to ~/.dmrc and settings.ini (run 'sudo hde-login --session %s' to set system-wide).",
+                        sess, sess);
+    }
+    g_free(login_bin);
+    g_free(sess);
 }
 
 static gboolean update_running(gpointer d)
@@ -290,15 +362,63 @@ static GtkWidget *wm_row(GtkWidget **group, const char *id, const char *title, c
 GtkWidget *page_windows_new(void)
 {
     GtkWidget *box = page_base();
-    if (g_getenv("WAYLAND_DISPLAY") && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland")) {
-        gtk_box_pack_start(GTK_BOX(box), section("Wayland session"), FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(box), info_label(
-            "In the HDE (Wayland) session the labwc compositor manages the windows (title bars in HDE's colours, "
-            "Alt+Tab, snapping with Super+Left / Super+Right, Super+Up to maximize). The window manager chosen below "
-            "is used in the HDE session on X11."), FALSE, FALSE, 0);
-    }
+    gboolean is_wayland = (g_getenv("WAYLAND_DISPLAY") && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland"));
+
+    /* ---- Display Server & Session Switcher (X11 / Wayland) ---- */
+    gtk_box_pack_start(GTK_BOX(box), section("Display Server & Session (X11 / Wayland)"), FALSE, FALSE, 0);
+    GtkWidget *sess_card = card_new();
+
+    GtkWidget *proto_badge = badge(is_wayland ? "Wayland Active" : "X11 Active", TRUE);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("Current display server",
+                              is_wayland
+                                  ? "Running on Wayland (layer-shell desktop & panel, native Wayland + Xwayland support)"
+                                  : "Running on X11 (Xorg display server with instant live window manager switching)",
+                              proto_badge));
+
+    char *cur_sess = cfg_get_string("default_session", is_wayland ? "hde-wayland.desktop" : "hde.desktop");
+    GtkWidget *sess_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sess_combo), "HDE (X11 — Standard Window Manager)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sess_combo), "HDE (Wayland — labwc Compositor)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sess_combo), "NexWM (X11 — NexWM Window Manager)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sess_combo), "NexWM (Wayland — NexWM Compositor)");
+    if (!g_strcmp0(cur_sess, "hde-wayland.desktop")) gtk_combo_box_set_active(GTK_COMBO_BOX(sess_combo), 1);
+    else if (!g_strcmp0(cur_sess, "nexwm.desktop")) gtk_combo_box_set_active(GTK_COMBO_BOX(sess_combo), 2);
+    else if (!g_strcmp0(cur_sess, "nexwm-wayland.desktop")) gtk_combo_box_set_active(GTK_COMBO_BOX(sess_combo), 3);
+    else gtk_combo_box_set_active(GTK_COMBO_BOX(sess_combo), 0);
+    g_free(cur_sess);
+    gtk_widget_set_valign(sess_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(sess_combo, "changed", G_CALLBACK(on_default_session_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("Default login session",
+                              "Choose between X11 and Wayland sessions for SDDM and display managers",
+                              sess_combo));
+
+    char *cur_wc = cfg_get_string("wayland_compositor", "labwc");
+    GtkWidget *wc_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wc_combo), "labwc (Recommended Wayland Compositor)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wc_combo), "NexWM (Built-in HDE Wayland Compositor)");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(wc_combo), !g_strcmp0(cur_wc, "nexwm") ? 1 : 0);
+    g_free(cur_wc);
+    gtk_widget_set_valign(wc_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(wc_combo, "changed", G_CALLBACK(on_wayland_compositor_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("Wayland compositor",
+                              "Compositor used when starting an HDE Wayland session (falls back to labwc automatically)",
+                              wc_combo));
+
+    GtkWidget *sddm_btn = gtk_button_new_with_label("Set as SDDM Default");
+    gtk_widget_set_valign(sddm_btn, GTK_ALIGN_CENTER);
+    g_signal_connect(sddm_btn, "clicked", G_CALLBACK(on_apply_sddm_session), NULL);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("SDDM login screen preselection",
+                              "Preselect the chosen X11 or Wayland session on the SDDM login screen (or use the X11 | Wayland switcher on SDDM)",
+                              sddm_btn));
+
+    gtk_box_pack_start(GTK_BOX(box), sess_card, FALSE, FALSE, 0);
+
     gtk_box_pack_start(GTK_BOX(box), section("Current"), FALSE, FALSE, 0);
-    running_row = row_box("Running window manager", "Checking…", NULL);
+    running_row = row_box("Running window manager / compositor", "Checking…", NULL);
     gtk_box_pack_start(GTK_BOX(box), running_row, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Window manager"), FALSE, FALSE, 0);

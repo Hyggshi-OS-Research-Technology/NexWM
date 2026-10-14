@@ -9,7 +9,7 @@
 // list or a plain user name field, the session and the keyboard layout choosers, the power buttons, the greeting.
 //
 // The context objects come from the greeter: sddm (the proxy: login(...), powerOff(), ...), userModel, sessionModel,
-// keyboard (SDDM >= 0.19; guarded below) and config (theme.conf).
+// screenModel (multi-monitor geometry and primary screen), keyboard (SDDM >= 0.19; guarded below) and config (theme.conf).
 import QtQuick 2.0
 import "components"
 
@@ -72,13 +72,30 @@ Rectangle {
 
     // the user the password will be checked for, the session to start, and what the greeter told us
     property string userName: ""
-    property int sessionIndex: (typeof sessionModel !== "undefined" && sessionModel.count > 0)
+    property int sessionIndex: (typeof sessionModel !== "undefined" && sessionModel !== null && sessionModel.count > 0)
                                ? Math.max(0, sessionModel.lastIndex) : -1
     property string message: ""
     property bool messageIsError: false
     property bool busy: false
     property bool toldAboutTheKeyboard: false   // the greeter took the keyboard: said once in the greeter's log
     property bool reportedTheKeyboard: false    // where the keyboard really is: said once, too
+
+    // ------------------------------------------------------------------ multi-monitor support via screenModel
+    readonly property bool haveScreenModel: (typeof screenModel !== "undefined") && screenModel !== null
+    property int activeScreen: (haveScreenModel && screenModel.primary !== undefined) ? screenModel.primary : 0
+    property var screenGeometries: []
+
+    function activeScreenGeometry() {
+        if (root.activeScreen >= 0 && root.activeScreen < root.screenGeometries.length
+            && root.screenGeometries[root.activeScreen]) {
+            return root.screenGeometries[root.activeScreen];
+        }
+        if (root.haveScreenModel && typeof screenModel.geometry === "function") {
+            var g = screenModel.geometry(root.activeScreen);
+            if (g && g.width > 0 && g.height > 0) return g;
+        }
+        return { x: 0, y: 0, width: root.width, height: root.height };
+    }
 
     // The users the greeter handed over, and whether it is worth showing them: a greeter can give none at all (SDDM
     // leaves accounts out of its list by uid range — [Users] MinimumUid / MaximumUid — and by HideUsers / HideShells),
@@ -90,30 +107,92 @@ Rectangle {
 
     color: "#0b0f18"
 
-    // ------------------------------------------------------------------ the screens (a background for each of them)
+    // Fallback background when screenModel is not provided by the host (e.g. standalone qmlscene preview)
+    HdeBackground {
+        visible: !root.haveScreenModel || screenRepeater.count === 0
+        x: 0
+        y: 0
+        width: root.width
+        height: root.height
+        source: root.background
+        dim: root.dim
+        accent: root.accent
+    }
+
+    // ------------------------------------------------------------------ the screens (multi-monitor via screenModel)
     Repeater {
-        model: screenModel
-        delegate: HdeBackground {
-            x: model.geometry.x
-            y: model.geometry.y
-            width: model.geometry.width
-            height: model.geometry.height
-            source: root.background
-            dim: root.dim
-            accent: root.accent
+        id: screenRepeater
+        model: root.haveScreenModel ? screenModel : []
+        delegate: Item {
+            id: screenDelegate
+            readonly property var geom: (model.geometry !== undefined && model.geometry !== null)
+                                        ? model.geometry
+                                        : ((root.haveScreenModel && typeof screenModel.geometry === "function")
+                                           ? screenModel.geometry(index)
+                                           : { x: 0, y: 0, width: root.width, height: root.height })
+            x: geom.x !== undefined ? geom.x : 0
+            y: geom.y !== undefined ? geom.y : 0
+            width: (geom.width !== undefined && geom.width > 0) ? geom.width : root.width
+            height: (geom.height !== undefined && geom.height > 0) ? geom.height : root.height
+
+            Component.onCompleted: {
+                var copy = root.screenGeometries.slice();
+                copy[index] = { x: screenDelegate.x, y: screenDelegate.y,
+                                width: screenDelegate.width, height: screenDelegate.height };
+                root.screenGeometries = copy;
+            }
+
+            HdeBackground {
+                anchors.fill: parent
+                source: root.background
+                dim: root.dim
+                accent: root.accent
+            }
+
+            // Clicking a secondary monitor brings the active login screen to that monitor
+            MouseArea {
+                anchors.fill: parent
+                enabled: index !== root.activeScreen
+                onPressed: {
+                    root.activeScreen = index;
+                    root.focusFirst(false);
+                }
+            }
+
+            // Secondary monitors also display the clock and footer so multi-monitor setups look complete
+            HdeClock {
+                visible: root.showClock && index !== root.activeScreen
+                use24h: root.clock24h
+                showSeconds: root.clockSeconds
+                showDate: root.clockDate
+                host: root.showHost && sddm ? sddm.hostName : ""
+                fontFamily: root.fontFamily
+                y: root.margin
+                x: root.clockPosition === "top-left" ? root.margin
+                 : root.clockPosition === "top-center" ? Math.round((parent.width - width) / 2)
+                 : parent.width - width - root.margin
+            }
+
+            Text {
+                text: root.footer
+                visible: root.footer !== "" && index !== root.activeScreen
+                color: "#7c8ba3"
+                font.pixelSize: 11
+                font.family: root.fontFamily
+                x: root.margin
+                y: parent.height - height - root.margin
+            }
         }
     }
 
-    // the interface lives on the primary screen
+    // the interface lives on the active screen (primary screen by default, or whichever monitor the user clicked)
     Item {
         id: screen
-        readonly property var g: (typeof screenModel !== "undefined" && typeof screenModel.geometry === "function")
-                                 ? screenModel.geometry(screenModel.primary !== undefined ? screenModel.primary : 0)
-                                 : null
+        readonly property var g: root.activeScreenGeometry()
         x: g ? g.x : 0
         y: g ? g.y : 0
-        width: g ? g.width : root.width
-        height: g ? g.height : root.height
+        width: (g && g.width > 0) ? g.width : root.width
+        height: (g && g.height > 0) ? g.height : root.height
 
         // -------------------------------------------------------------- the clock (time, date, computer name)
         HdeClock {
@@ -122,7 +201,7 @@ Rectangle {
             use24h: root.clock24h
             showSeconds: root.clockSeconds
             showDate: root.clockDate
-            host: root.showHost ? sddm.hostName : ""
+            host: root.showHost && sddm ? sddm.hostName : ""
             fontFamily: root.fontFamily
             y: root.margin
             x: root.clockPosition === "top-left" ? root.margin
@@ -248,7 +327,7 @@ Rectangle {
                     fontFamily: root.fontFamily
                 }
 
-                // the session and the keyboard layout
+                // the session (with X11 | Wayland switcher) and the keyboard layout
                 Row {
                     width: parent.width
                     spacing: 10
@@ -256,18 +335,22 @@ Rectangle {
 
                     HdeSessions {
                         id: sessions
-                        visible: root.showSessions && (typeof sessionModel !== "undefined") && sessionModel.count > 0
-                        width: (parent.width - 10) / 2
+                        visible: root.showSessions && (typeof sessionModel !== "undefined") && sessionModel !== null && sessionModel.count > 0
+                        width: ( layouts.visible && layouts.available ) ? (parent.width - 10) / 2 : parent.width
                         accent: root.accent
                         fontFamily: root.fontFamily
                         currentIndex: root.sessionIndex
-                        onPicked: function (index) { root.sessionIndex = index; field.focusField(); }
+                        onPicked: function (index) {
+                            root.sessionIndex = index;
+                            console.log("hde-login: selected session #" + index + " (" + sessions.currentName + " / " + sessions.currentProtocol + ")");
+                            root.focusFirst(false);
+                        }
                     }
 
                     HdeLayouts {
                         id: layouts
-                        visible: root.showLayouts
-                        width: (parent.width - 10) / 2
+                        visible: root.showLayouts && available
+                        width: sessions.visible ? (parent.width - 10) / 2 : parent.width
                         accent: root.accent
                         fontFamily: root.fontFamily
                     }
@@ -277,7 +360,10 @@ Rectangle {
                 HdeButton {
                     id: loginButton
                     width: root.buttonStyle === "wide" ? parent.width : Math.min(170, parent.width)
-                    text: root.busy ? "Signing in…" : "Sign in"
+                    text: root.busy ? "Signing in…"
+                        : (sessions.visible && sessions.currentProtocol !== ""
+                           ? ("Sign in (" + sessions.currentProtocol + ")")
+                           : "Sign in")
                     accent: root.accent
                     fontFamily: root.fontFamily
                     busy: root.busy
@@ -451,7 +537,13 @@ Rectangle {
 
     // The keyboard on the card itself: the fields handle their own keys, so a key arriving *here* means it is
     // nowhere — the login screen puts it back in the field to type in instead of swallowing what is typed.
+    // F2 cycles through available X11 / Wayland sessions from the keyboard.
     Keys.onPressed: {
+        if (event.key === Qt.Key_F2 && sessions.visible) {
+            sessions.cycleNext();
+            event.accepted = true;
+            return;
+        }
         if (root.keyboardWhere() === "") root.focusFirst(true);
     }
 

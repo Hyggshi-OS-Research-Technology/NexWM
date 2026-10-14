@@ -1,5 +1,6 @@
 // HdeCombo.qml — a chooser of the login screen (the session, the keyboard layout): a field showing what is chosen,
-// a list that opens under it, and the arrow keys / Enter to walk through it and pick.
+// an optional protocol/tag badge (e.g. "X11" / "Wayland"), a list that opens under it, and the arrow keys / Enter
+// to walk through it and pick.
 //
 // It is drawn here instead of using SDDM's own ComboBox for two reasons: that one shows nothing in the field while
 // the list is closed, and this way the theme does not need SDDM's component module at all (it needs nothing but
@@ -10,11 +11,13 @@ Item {
     id: root
     property string label: ""
     property var items: []                   // the texts to choose between
+    property var badges: []                  // optional right-side badge per item (e.g. "X11", "Wayland")
     property int index: 0
     property color accent: "#3584e4"
     property string fontFamily: ""
     property bool open: false
     readonly property string currentText: (index >= 0 && index < items.length) ? items[index] : ""
+    readonly property string currentBadge: (index >= 0 && index < badges.length && badges[index]) ? String(badges[index]) : ""
     signal picked(int index)
     signal closed()
     implicitHeight: (label !== "" ? labelLabel.height + 5 : 0) + field.height
@@ -38,6 +41,7 @@ Item {
 
     Text {
         id: labelLabel
+        visible: root.label !== ""
         text: root.label
         color: "#9fb0c8"
         font.pixelSize: 12
@@ -46,7 +50,7 @@ Item {
 
     Rectangle {
         id: field
-        anchors.top: labelLabel.bottom
+        anchors.top: root.label !== "" ? labelLabel.bottom : parent.top
         anchors.topMargin: root.label !== "" ? 5 : 0
         width: parent.width
         height: 36
@@ -60,7 +64,7 @@ Item {
         Text {
             anchors.left: parent.left
             anchors.leftMargin: 11
-            anchors.right: chevron.left
+            anchors.right: fieldBadge.visible ? fieldBadge.left : chevron.left
             anchors.rightMargin: 6
             anchors.verticalCenter: parent.verticalCenter
             text: root.currentText
@@ -68,6 +72,34 @@ Item {
             font.pixelSize: 13
             font.family: root.fontFamily
             elide: Text.ElideRight
+        }
+
+        Rectangle {
+            id: fieldBadge
+            visible: root.currentBadge !== ""
+            width: fieldBadgeText.implicitWidth + 10
+            height: 18
+            radius: 5
+            anchors.right: chevron.left
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            color: root.currentBadge === "Wayland"
+                   ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.24)
+                   : "#1d283a"
+            border.width: 1
+            border.color: root.currentBadge === "Wayland"
+                          ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.60)
+                          : "#2e3d56"
+
+            Text {
+                id: fieldBadgeText
+                anchors.centerIn: parent
+                text: root.currentBadge
+                color: root.currentBadge === "Wayland" ? "#eef6ff" : "#b0c0d8"
+                font.pixelSize: 10
+                font.bold: true
+                font.family: root.fontFamily
+            }
         }
 
         HdeIcons {
@@ -102,7 +134,7 @@ Item {
         anchors.top: field.bottom
         anchors.topMargin: 3
         width: field.width
-        height: root.open ? Math.min(190, list.implicitHeight + 8) : 0
+        height: root.open ? Math.min(210, list.implicitHeight + 8) : 0
         visible: height > 0
         radius: 9
         color: "#141b29"
@@ -123,22 +155,51 @@ Item {
                 Repeater {
                     model: root.items
                     delegate: Rectangle {
+                        readonly property string rowBadge: (index >= 0 && index < root.badges.length && root.badges[index])
+                                                           ? String(root.badges[index]) : ""
                         width: list.width
-                        height: 30
+                        height: 32
                         radius: 6
                         color: index === root.index ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.25)
                              : rowMouse.containsMouse ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.14)
                              : "transparent"
                         Text {
-                            anchors.fill: parent
+                            anchors.left: parent.left
                             anchors.leftMargin: 8
-                            anchors.rightMargin: 8
-                            verticalAlignment: Text.AlignVCenter
+                            anchors.right: itemBadge.visible ? itemBadge.left : parent.right
+                            anchors.rightMargin: 6
+                            anchors.verticalCenter: parent.verticalCenter
                             text: modelData
                             elide: Text.ElideRight
                             color: index === root.index ? "#ffffff" : "#dbe4f2"
                             font.pixelSize: 13
                             font.family: root.fontFamily
+                        }
+                        Rectangle {
+                            id: itemBadge
+                            visible: parent.rowBadge !== ""
+                            width: itemBadgeText.implicitWidth + 10
+                            height: 18
+                            radius: 5
+                            anchors.right: parent.right
+                            anchors.rightMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: parent.rowBadge === "Wayland"
+                                   ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.28)
+                                   : "#1d283a"
+                            border.width: 1
+                            border.color: parent.rowBadge === "Wayland"
+                                          ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.65)
+                                          : "#2e3d56"
+                            Text {
+                                id: itemBadgeText
+                                anchors.centerIn: parent
+                                text: parent.parent.rowBadge
+                                color: parent.parent.rowBadge === "Wayland" ? "#ffffff" : "#b8c7de"
+                                font.pixelSize: 10
+                                font.bold: true
+                                font.family: root.fontFamily
+                            }
                         }
                         MouseArea {
                             id: rowMouse
