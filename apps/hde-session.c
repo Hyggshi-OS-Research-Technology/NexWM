@@ -298,6 +298,21 @@ static int wayland_launch(void)
             int rc = wayland_launch_nexwm(cmd);
             if (rc >= 0) return rc;
         }
+        if (!getenv("HDE_TEST_OUT")) {
+            char *mutter = resolve_component("mutter", NULL);
+            if (mutter) {
+                char pid_str[32];
+                snprintf(pid_str, sizeof pid_str, "%d", (int)getpid());
+                setenv("LABWC_PID", pid_str, 1);
+                setenv("HDE_WAYLAND_XWAYLAND", "1", 1);
+                printf("hde-session: HDE build %s: labwc not found; starting Wayland compositor: %s --wayland -- /bin/sh -c \"%s\"\n",
+                       HDE_VERSION, mutter, cmd);
+                fflush(stdout);
+                execl(mutter, "mutter", "--wayland", "--", "/bin/sh", "-c", cmd, (char *)NULL);
+                perror("hde-session: mutter");
+                free(mutter);
+            }
+        }
         char *hint = hde_install_hint("labwc");
         fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: %s\n", hint);
         free(hint);
@@ -915,7 +930,10 @@ int main(int argc, char **argv)
     if (!g_wayland && !getenv("HDE_XI2") && (getenv("HDE_CORE_EVENTS") || getenv("WAYLAND_DISPLAY")))
         setenv("GDK_CORE_DEVICE_EVENTS", "1", 1);
     if (g_wayland) {
-        setenv("GDK_BACKEND", "wayland,x11", 1);   /* HDE's programs: layer-shell surfaces need Wayland */
+        if (getenv("HDE_WAYLAND_XWAYLAND"))
+            setenv("GDK_BACKEND", "x11,wayland", 1);
+        else
+            setenv("GDK_BACKEND", "wayland,x11", 1);   /* HDE's programs: layer-shell surfaces need Wayland */
         unsetenv("GDK_CORE_DEVICE_EVENTS");
     } else if (!hde_core_backend() || hde_core_backend()->type != HDE_BACKEND_WAYLAND) {
         unsetenv("WAYLAND_DISPLAY");

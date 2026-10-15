@@ -521,14 +521,17 @@ install: all
 	# nexwm has no compositor yet, so the entry works everywhere (labwc stays the compositor of "HDE (Wayland)")
 	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
 	chmod 644 $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
+	rm -f $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true
 	install -m644 data/hde-portals.conf $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-	@if ! command -v labwc >/dev/null 2>&1; then \
-	  sed -i 's|^TryExec=.*|TryExec=labwc|' $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
-	  sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|hde-start --wayland|hde-start-wayland|g' data/hde-wayland.desktop > $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop; \
-	  chmod 644 $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
-	  echo "NOTE: installed $(XSESSIONS)/hde-wayland.desktop so HDE (Wayland) can start even before labwc is installed"; \
-	else \
-	  rm -f $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true; \
+	@if [ -z "$(DESTDIR)" ] && [ "$$(id -u)" = 0 ] && ! command -v labwc >/dev/null 2>&1; then \
+	  echo "Installing labwc Wayland compositor for HDE (Wayland)..."; \
+	  if command -v apt-get >/dev/null 2>&1; then \
+	    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland || \
+	    (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland) || true; \
+	  elif command -v dnf >/dev/null 2>&1; then dnf install -y labwc xorg-x11-server-Xwayland || true; \
+	  elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm --needed labwc xorg-xwayland || true; \
+	  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install labwc xwayland || true; \
+	  fi; \
 	fi
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
 	# "NexWM" on the login screen: the HDE session with NexWM as its window manager (hde-start --wm nexwm)
@@ -566,6 +569,14 @@ install: all
 	cp -r login/sddm/$(SDDM_THEME)/assets $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)/assets
 	chmod -R a+rX $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
 	install -m755 login/sddm/install.sh $(DESTDIR)$(PREFIX)/bin/hde-login
+	@if [ -z "$(DESTDIR)" ] && [ "$$(id -u)" = 0 ]; then \
+	  if [ "$(PREFIX)" = "/usr/local" ] && { [ -x /usr/bin/hde-session ] || [ -x /usr/bin/hde-settings ]; }; then \
+	    for b in $(PROGRAMS) hde-start hde-start-wayland hde-login; do \
+	      if [ -x $(PREFIX)/bin/$$b ]; then install -m755 $(PREFIX)/bin/$$b /usr/bin/$$b; fi; \
+	    done; \
+	  fi; \
+	  sh login/sddm/install.sh || true; \
+	fi
 	@command -v sddm >/dev/null 2>&1 || echo "NOTE: the HDE login screen needs SDDM (sudo apt install sddm / sudo dnf install sddm), then: sudo hde-login"
 # To see a new build WITHOUT LOGGING OUT:
 #   make dev                     restart desktop+panel+hotkeys+xsettings from ./build (no install needed)

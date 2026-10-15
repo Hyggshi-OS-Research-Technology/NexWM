@@ -97,21 +97,12 @@ if [ "${1:-}" = "--wayland" ]; then
         rc=$?
         [ "$rc" -eq 0 ] && exit 0
         echo "hde-start: Wayland compositor exited with status $rc; attempting X11 session fallback"
-        for d in :0 :1; do
-            if [ -S "/tmp/.X11-unix/X${d#:}" ]; then
-                DISPLAY="$d"
-                export DISPLAY
-                break
-            fi
-        done
-        if [ -z "${DISPLAY:-}" ] && command -v xinit >/dev/null 2>&1; then
+        if command -v xinit >/dev/null 2>&1; then
             VT_ARG=""
             [ -n "${XDG_VTNR:-}" ] && VT_ARG="vt${XDG_VTNR}"
             exec xinit "$SESSION" -- :1 $VT_ARG -keeptty -noreset
         fi
-        if [ -z "${DISPLAY:-}" ]; then
-            exit "$rc"
-        fi
+        exit "$rc"
     fi
 fi
 

@@ -13,8 +13,8 @@ Column {
     property int currentIndex: 0
     readonly property bool open: combo.open          // the list of sessions is open: the keyboard is its
     property var rawEntries: []
-    property var names: []
-    property var protocols: []                       // "Wayland" or "X11" for each displayed item
+    property var names: ["HDE (X11)", "HDE (Wayland)"]
+    property var protocols: ["X11", "Wayland"]       // "Wayland" or "X11" for each displayed item
     property var modelIndices: []                    // index in SDDM's sessionModel for each displayed item
     readonly property string currentName: combo.currentText
     readonly property string currentProtocol: (combo.index >= 0 && combo.index < protocols.length)
@@ -27,13 +27,11 @@ Column {
     function closeCombo() { combo.open = false; }
     spacing: 5
 
-    function detectProtocol(nameStr, execStr, fileStr, typeStr) {
+    function detectProtocol(nameStr, execStr, fileStr) {
         var n = String(nameStr || "").toLowerCase();
         var e = String(execStr || "").toLowerCase();
         var f = String(fileStr || "").toLowerCase();
-        var t = String(typeStr || "").toLowerCase();
-        if (n.indexOf("wayland") >= 0 || e.indexOf("wayland") >= 0 ||
-            f.indexOf("wayland") >= 0 || t.indexOf("wayland") >= 0)
+        if (n.indexOf("wayland") >= 0 || e.indexOf("wayland") >= 0 || f.indexOf("wayland") >= 0)
             return "Wayland";
         return "X11";
     }
@@ -50,11 +48,11 @@ Column {
     function formatSessionName(rawName, proto) {
         var n = String(rawName || "");
         if (proto === "Wayland") {
-            if (n === "HDE" || n === "HDE (Wayland)" || n === "NexWM" || n === "NexWM (Wayland)")
+            if (n.indexOf("HDE") >= 0 || n.indexOf("NexWM") >= 0)
                 return "HDE (Wayland)";
             return n;
         }
-        if (n === "HDE" || n === "HDE (X11)" || n === "NexWM" || n === "NexWM (X11)")
+        if (n.indexOf("HDE") >= 0 || n.indexOf("NexWM") >= 0)
             return "HDE (X11)";
         return n;
     }
@@ -79,6 +77,10 @@ Column {
     onCurrentIndexChanged: root.syncComboIndex()
 
     function rebuildSessionList() {
+        if (rawCollector.count > 0 && root.rawEntries.length < rawCollector.count) {
+            return;
+        }
+
         var hdeX11Idx = -1;
         var hdeX11Alias = true;
         var hdeWlIdx = -1;
@@ -101,16 +103,20 @@ Column {
         }
 
         // Fall back between HDE (X11) and HDE (Wayland) if only one HDE entry is in sessionModel
-        // (never fall back to index 0 when index 0 is a non-HDE session such as Ubuntu).
+        // (never fall back to index 0 when index 0 is a non-HDE session such as gnome-greeter or Ubuntu).
         if (hdeX11Idx < 0 && hdeWlIdx >= 0) hdeX11Idx = hdeWlIdx;
         if (hdeWlIdx < 0 && hdeX11Idx >= 0) hdeWlIdx = hdeX11Idx;
-        if (hdeX11Idx < 0) hdeX11Idx = 0;
-        if (hdeWlIdx < 0) hdeWlIdx = hdeX11Idx;
 
         root.names = ["HDE (X11)", "HDE (Wayland)"];
         root.protocols = ["X11", "Wayland"];
-        root.modelIndices = [hdeX11Idx, hdeWlIdx];
-        root.syncComboIndex();
+        if (hdeX11Idx >= 0 && hdeWlIdx >= 0) {
+            root.modelIndices = [hdeX11Idx, hdeWlIdx];
+            root.syncComboIndex();
+        } else if (root.rawEntries.length > 0) {
+            var lastIdx = root.rawEntries.length - 1;
+            root.modelIndices = [0, lastIdx];
+            root.syncComboIndex();
+        }
     }
 
     // Switch directly to HDE (X11) or HDE (Wayland)
@@ -145,11 +151,13 @@ Column {
             width: 0
             height: 0
             Component.onCompleted: {
-                var rawNm = (model.name !== undefined && model.name !== "") ? String(model.name) : ("Session " + (index + 1));
-                var rawEx = (model.exec !== undefined) ? String(model.exec) : "";
-                var rawFl = (model.file !== undefined) ? String(model.file) : "";
-                var rawTp = (model.type !== undefined) ? String(model.type) : "";
-                var pr = root.detectProtocol(rawNm, rawEx, rawFl, rawTp);
+                var rawNm = (model.name !== undefined && model.name !== null && model.name !== "")
+                            ? String(model.name) : ("Session " + (index + 1));
+                var rawEx = "";
+                var rawFl = "";
+                try { if (model.exec !== undefined && model.exec !== null) rawEx = String(model.exec); } catch (e1) {}
+                try { if (model.file !== undefined && model.file !== null) rawFl = String(model.file); } catch (e2) {}
+                var pr = root.detectProtocol(rawNm, rawEx, rawFl);
                 var disp = root.formatSessionName(rawNm, pr);
                 var isAlias = rawNm.toLowerCase().indexOf("nexwm") >= 0 || rawFl.toLowerCase().indexOf("nexwm") >= 0;
                 var hdeMatch = root.isHdeSession(rawNm, rawEx, rawFl);

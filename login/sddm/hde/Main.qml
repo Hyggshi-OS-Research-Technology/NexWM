@@ -287,7 +287,7 @@ Rectangle {
                     width: parent.width
                     accent: root.accent
                     fontFamily: root.fontFamily
-                    onSelected: function (name) {
+                    onSelected: {
                         if (name && name !== "") root.userName = name;
                         root.message = "";
                         field.focusField();

@@ -173,8 +173,11 @@ fi
 # ---------------------------------------------------------------- SDDM's configuration
 if [ "$DO_CONFIG" = 1 ]; then
     run mkdir -p "$DEST_CONF"
-    SESSION_LINE=""
+    SESSION_LINE="[Users]
+ReuseSession=false
+"
     [ "$DO_SESSION" = 1 ] && SESSION_LINE="[Users]
+ReuseSession=false
 DefaultSession=$SESSION
 "
     run sh -c "cat > '$DEST_CONF_FILE' <<EOF
@@ -185,6 +188,16 @@ Current=$THEME_NAME
 ${SESSION_LINE}EOF"
     say "  wrote:      $DEST_CONF_FILE"
     if [ -z "$ROOT" ] && [ "$DRY" != 1 ]; then
+        if [ "$(id -u)" = 0 ] && ! command -v labwc >/dev/null 2>&1; then
+            say "  wayland:    installing labwc Wayland compositor for HDE (Wayland)..."
+            if command -v apt-get >/dev/null 2>&1; then
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland || \
+                (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland) || true
+            elif command -v dnf >/dev/null 2>&1; then dnf install -y labwc xorg-x11-server-Xwayland || true
+            elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm --needed labwc xorg-xwayland || true
+            elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install labwc xwayland || true
+            fi
+        fi
         DATA_DIR=""
         if [ -d "$HERE/../data" ]; then DATA_DIR=$(cd "$HERE/../data" && pwd);
         elif [ -d "$HERE/../../data" ]; then DATA_DIR=$(cd "$HERE/../../data" && pwd); fi
@@ -196,17 +209,14 @@ ${SESSION_LINE}EOF"
             [ -f "$DATA_DIR/hde-start-wayland" ] && install -m 755 "$DATA_DIR/hde-start-wayland" "$PREF/bin/hde-start-wayland"
             sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde.desktop" > /usr/share/xsessions/hde.desktop
             sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/wayland-sessions/hde-wayland.desktop
-            if ! command -v labwc >/dev/null 2>&1; then
-                sed -i 's|^TryExec=.*|TryExec=labwc|' /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true
-                sed -e "s|@PREFIX@|$PREF|g" -e 's|hde-start --wayland|hde-start-wayland|g' "$DATA_DIR/hde-wayland.desktop" > /usr/share/xsessions/hde-wayland.desktop
-                chmod 644 /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
-            else
-                rm -f /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
-            fi
+            rm -f /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
             [ -f "$DATA_DIR/nexwm.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm.desktop" > /usr/share/xsessions/nexwm.desktop
             [ -f "$DATA_DIR/nexwm-wayland.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm-wayland.desktop" > /usr/share/wayland-sessions/nexwm-wayland.desktop
             chmod 644 /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true
             say "  sessions:   installed HDE (X11) and HDE (Wayland) into /usr/share/{xsessions,wayland-sessions}"
+        fi
+        if [ -f /var/lib/sddm/state.conf ] && grep -qE '^Session=.*(gnome-greeter|ubuntu)' /var/lib/sddm/state.conf 2>/dev/null; then
+            sed -i 's|^Session=.*|Session=/usr/share/wayland-sessions/hde-wayland.desktop|' /var/lib/sddm/state.conf 2>/dev/null || true
         fi
     fi
 fi
