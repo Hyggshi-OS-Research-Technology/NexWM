@@ -51,12 +51,13 @@ GtkWidget *page_windows_new(void);
 GtkWidget *page_keyboard_new(void);
 GtkWidget *page_sound_new(void);
 GtkWidget *page_display_new(void);          /* hde-settings-display.c: brightness, screens, Project, Night Light */
+GtkWidget *page_support_new(void);          /* hde-settings-about.c: Help & Support Center */
 GtkWidget *page_about_new(void);            /* hde-settings-about.c */
 GtkWidget *page_panel_new(void);            /* hde-settings-panel.c: Settings > Panel */
 GtkWidget *page_startmenu_new(void);        /* hde-settings-panel.c: Settings > Start Menu */
 GtkWidget *page_power_new(void);            /* hde-settings-power.c: battery, power mode, battery saver, sleep */
 
-/* ---- screens (hde-settings-display.c) and About (hde-settings-about.c) without the main window ---- */
+/* ---- screens (hde-settings-display.c) and About/Support (hde-settings-about.c) without the main window ---- */
 int display_project_main(int argc, char **argv);   /* hde-settings --project: the F8 window (after gtk_init) */
 int display_cli_displays(void);                    /* --displays */
 int display_cli_mode(const char *id);              /* --display-mode pc|duplicate|extend|second */
@@ -66,6 +67,8 @@ int display_cli_night_light(const char *arg);      /* --night-light [on|off|togg
 int about_cli(void);                               /* --about */
 int power_cli(void);                               /* --power */
 int about_window_main(void);                       /* --about-window: the "About HDE" window (after gtk_init) */
+int support_window_main(void);                     /* --support-window: the "HDE Support" window (after gtk_init) */
+int unresponsive_dialog_main(const char *title, unsigned long xid, int pid); /* --unresponsive-dialog */
 int wayland_config_cli(int argc, char **argv);     /* --wayland-config [DIR] [--reload]: labwc's configuration */
 
 /* Apply the settings that must be re-applied at every login (keyboard, key repeat, screen blanking, ...).

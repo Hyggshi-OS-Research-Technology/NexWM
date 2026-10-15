@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=HDE Support
+Comment=Help, diagnostics and support for Hyggshi Desktop Environment
+Exec=@PREFIX@/bin/hde-settings --support-window
+Icon=help-browser
+Terminal=false
+Type=Application
+Categories=System;Utility;
+Keywords=support;help;diagnostics;troubleshooting;hyggshi;hde;
+StartupNotify=true

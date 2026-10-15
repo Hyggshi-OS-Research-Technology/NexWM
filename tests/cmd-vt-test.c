@@ -142,6 +142,39 @@ int main(void)
     CHECK(hde_cmd_vt_rows(vt) == 4 && hde_cmd_vt_columns(vt) == 12 && cell_char(vt, 1, 0) == 'k',
           "resizing keeps existing screen content and adopts the new dimensions");
 
+    hde_cmd_vt_reset(vt);
+    feed(vt, "\033(0lqk\033(Bbox");
+    CHECK(hde_cmd_vt_line(vt, 0)[0].codepoint == 0x250c &&
+          hde_cmd_vt_line(vt, 0)[1].codepoint == 0x2500 &&
+          hde_cmd_vt_line(vt, 0)[2].codepoint == 0x2510 &&
+          cell_char(vt, 0, 3) == 'b',
+          "DEC Special Graphics charset translates box-drawing characters and returns to ASCII");
+
+    hde_cmd_vt_reset(vt);
+    feed(vt, "\033)0\016x\017x");
+    CHECK(hde_cmd_vt_line(vt, 0)[0].codepoint == 0x2502 && cell_char(vt, 0, 1) == 'x',
+          "SO/SI shifts between G1 DEC Special Graphics and G0 ASCII");
+
+    hde_cmd_vt_reset(vt);
+    feed(vt, "\033[5 q");
+    CHECK(hde_cmd_vt_cursor_shape(vt) == HDE_CMD_VT_CURSOR_BEAM, "DECSCUSR 5 selects beam cursor");
+    feed(vt, "\033[3 q");
+    CHECK(hde_cmd_vt_cursor_shape(vt) == HDE_CMD_VT_CURSOR_UNDERLINE, "DECSCUSR 3 selects underline cursor");
+    feed(vt, "\033[2 q");
+    CHECK(hde_cmd_vt_cursor_shape(vt) == HDE_CMD_VT_CURSOR_BLOCK, "DECSCUSR 2 selects block cursor");
+
+    hde_cmd_vt_reset(vt);
+    feed(vt, "\033[2;31m\0337\033[0mplain\0338dimred");
+    CHECK((hde_cmd_vt_line(vt, 0)[0].attributes & HDE_CMD_VT_DIM) != 0 &&
+          hde_cmd_vt_line(vt, 0)[0].foreground == 0xcd0000,
+          "DECSC/DECRC saves and restores SGR attributes and colours along with cursor position");
+
+    hde_cmd_vt_reset(vt);
+    feed(vt, "alpha\r\nbetaTARGET\r\ngamma");
+    int fcol = -1, flen = -1;
+    int frow = hde_cmd_vt_find(vt, "target", 0, 1, &fcol, &flen);
+    CHECK(frow == 1 && fcol == 4 && flen == 6, "case-insensitive search finds text across rows");
+
     hde_cmd_vt_free(vt);
     printf("\ncmd-vt-test: %d passed, %d failed\n", tests, failed);
     return failed ? 1 : 0;

@@ -224,6 +224,8 @@ static inline const char *hde_distro_pkg(const char *pkg)
         { "python3-dbusmock",        "python3-dbusmock",        "python-dbusmock",      "python3-dbusmock" },
         { "imagemagick",             "ImageMagick",             "imagemagick",          "ImageMagick" },
         { "adwaita-icon-theme",      "adwaita-icon-theme",      "adwaita-icon-theme",   "adwaita-icon-theme" },
+        { "papirus-icon-theme",      "papirus-icon-theme",      "papirus-icon-theme",   "papirus-icon-theme" },
+        { "breeze-icon-theme",       "breeze-icon-theme",       "breeze-icons",         "breeze5-icons" },
         { "librsvg2-common",         "librsvg2",                "librsvg",              "librsvg2" },
         { NULL, NULL, NULL, NULL }
     };
@@ -270,7 +272,8 @@ static inline char *hde_deps_hint(const char *what)
                                              "libxi-dev", "libxrandr-dev", "libx11-dev", "libgtk-layer-shell-dev",
                                              "libwayland-dev", "libxcb1-dev", "libpam0g-dev", "libxext-dev", NULL };
     static const char *const runtime_deb[] = { "metacity", "network-manager", "bluez", "pulseaudio-utils",
-                                               "policykit-1-gnome", "gnome-themes-extra", "libnotify-bin", "playerctl",
+                                               "policykit-1-gnome", "gnome-themes-extra", "adwaita-icon-theme",
+                                               "libnotify-bin", "playerctl",
                                                "labwc", "grim", "slurp",
                                                /* udisks2: mounting a USB stick when it is plugged in;
                                                   gnome-keyring: the one place the session keeps its passwords */
@@ -336,6 +339,35 @@ static inline char *hde_distro_ram_advice(void)
         return hde_distro_dup("Debian asks for at least 1 GB of RAM for a desktop and recommends 2 GB (with swap; a live USB "
                       "stick needs more, it runs from RAM).");
     return hde_distro_dup("A desktop system with a browser wants at least 2 GB of RAM (4 GB is comfortable).");
+}
+
+/* Non-interactive package manager command (to run under root / pkexec / sudo) that installs an icon theme package
+ * such as "adwaita-icon-theme", "papirus-icon-theme", or "breeze-icon-theme" on the current OS family.
+ * Returns a malloc'd string (or NULL if the OS package family is unknown). */
+static inline char *hde_icon_theme_install_cmd(const char *pkg)
+{
+    const char *name = hde_distro_pkg(pkg && *pkg ? pkg : "adwaita-icon-theme");
+    int fam = hde_distro_family();
+    size_t n = strlen(name) + 96;
+    char *r = malloc(n);
+    if (!r) return NULL;
+    switch (fam) {
+    case HDE_FAMILY_DEB:
+        snprintf(r, n, "DEBIAN_FRONTEND=noninteractive apt-get install -y %s", name);
+        return r;
+    case HDE_FAMILY_RPM:
+        snprintf(r, n, "dnf install -y %s", name);
+        return r;
+    case HDE_FAMILY_ARCH:
+        snprintf(r, n, "pacman -S --noconfirm --needed %s", name);
+        return r;
+    case HDE_FAMILY_SUSE:
+        snprintf(r, n, "zypper --non-interactive install %s", name);
+        return r;
+    default:
+        free(r);
+        return NULL;
+    }
 }
 
 #endif

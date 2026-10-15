@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Clock
+GenericName=Clock, Alarms, Stopwatch & Timer
+Comment=World Clock, Alarms, Stopwatch, and Countdown Timer for HDE
+Exec=@PREFIX@/bin/hde-clock
+Icon=preferences-system-time
+Terminal=false
+Categories=GTK;Utility;Clock;
+Keywords=clock;time;alarm;stopwatch;timer;world;timezone;
+StartupNotify=true
+StartupWMClass=hde-clock

@@ -254,6 +254,8 @@ void        files_clipboard_copy_text(const char *text);
 
 /* ------------------------------------------------------------------ dialogs.c */
 void        files_rename_dialog(FilesWindow *w, GFile *file);
+void        files_batch_rename_dialog(FilesWindow *w, GList *files);
+void        files_select_pattern_dialog(FilesWindow *w);
 void        files_new_folder_dialog(FilesWindow *w, GFile *dir);
 void        files_new_document_dialog(FilesWindow *w, GFile *dir, GFile *template_file);
 void        files_properties_dialog(FilesWindow *w, GList *files);

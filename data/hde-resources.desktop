@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Resources
+GenericName=System Monitor & Process Controller
+Comment=Check system resource usage and control running processes and applications
+Exec=@PREFIX@/bin/hde-resources
+Icon=utilities-system-monitor
+Terminal=false
+Categories=GTK;System;Monitor;
+Keywords=resources;system;monitor;processes;applications;cpu;memory;network;task;manager;
+StartupNotify=true
+StartupWMClass=hde-resources

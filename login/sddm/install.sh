@@ -5,7 +5,8 @@
 # 'sudo sh login/sddm/install.sh'.
 #
 #   sudo sh login/sddm/install.sh                    install the theme and make SDDM use it
-#   sudo sh login/sddm/install.sh --default-session   ... and preselect HDE as the session SDDM starts
+#   sudo sh login/sddm/install.sh --default-session   ... and preselect HDE (hde.desktop) as the session SDDM starts
+#   sudo sh login/sddm/install.sh --session NAME      ... and preselect NAME (x11 / hde.desktop or wayland / hde-wayland.desktop)
 #   sudo sh login/sddm/install.sh --no-config         only the theme files (leave SDDM's configuration alone)
 #   sudo sh login/sddm/install.sh --root DIR          install under DIR as if it were /  (packaging, tests, ISOs)
 #   sudo sh login/sddm/install.sh --dir DIR           install the theme into DIR (default /usr/share/sddm/themes)
@@ -52,9 +53,21 @@ usage() {
     exit "${1:-0}"
 }
 
+normalize_session() {
+    case "${1:-}" in
+    x11|hde|hde-x11|hde.desktop)             echo "hde.desktop" ;;
+    wayland|hde-wayland|hde-wayland.desktop) echo "hde-wayland.desktop" ;;
+    *.desktop)                               echo "$1" ;;
+    "")                                      echo "hde.desktop" ;;
+    *)                                       echo "$1.desktop" ;;
+    esac
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
     --default-session) DO_SESSION=1 ;;
+    --session)         shift; DO_SESSION=1; SESSION=$(normalize_session "${1:-}") ;;
+    --session=*)       DO_SESSION=1; SESSION=$(normalize_session "${1#*=}") ;;
     --no-config)       DO_CONFIG=0 ;;
     --dir)             shift; THEME_DIR=${1:-} ;;
     --dir=*)           THEME_DIR=${1#*=} ;;
@@ -160,8 +173,11 @@ fi
 # ---------------------------------------------------------------- SDDM's configuration
 if [ "$DO_CONFIG" = 1 ]; then
     run mkdir -p "$DEST_CONF"
-    SESSION_LINE=""
+    SESSION_LINE="[Users]
+ReuseSession=false
+"
     [ "$DO_SESSION" = 1 ] && SESSION_LINE="[Users]
+ReuseSession=false
 DefaultSession=$SESSION
 "
     run sh -c "cat > '$DEST_CONF_FILE' <<EOF
@@ -171,6 +187,38 @@ DefaultSession=$SESSION
 Current=$THEME_NAME
 ${SESSION_LINE}EOF"
     say "  wrote:      $DEST_CONF_FILE"
+    if [ -z "$ROOT" ] && [ "$DRY" != 1 ]; then
+        if [ "$(id -u)" = 0 ] && ! command -v labwc >/dev/null 2>&1; then
+            say "  wayland:    installing labwc Wayland compositor for HDE (Wayland)..."
+            if command -v apt-get >/dev/null 2>&1; then
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland || \
+                (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland) || true
+            elif command -v dnf >/dev/null 2>&1; then dnf install -y labwc xorg-x11-server-Xwayland || true
+            elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm --needed labwc xorg-xwayland || true
+            elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install labwc xwayland || true
+            fi
+        fi
+        DATA_DIR=""
+        if [ -d "$HERE/../data" ]; then DATA_DIR=$(cd "$HERE/../data" && pwd);
+        elif [ -d "$HERE/../../data" ]; then DATA_DIR=$(cd "$HERE/../../data" && pwd); fi
+        PREF="/usr/local"
+        [ -x /usr/bin/hde-session ] && [ ! -x /usr/local/bin/hde-session ] && PREF="/usr"
+        if [ -n "$DATA_DIR" ] && [ -f "$DATA_DIR/hde.desktop" ] && [ -f "$DATA_DIR/hde-wayland.desktop" ]; then
+            mkdir -p /usr/share/xsessions /usr/share/wayland-sessions "$PREF/bin"
+            [ -f "$DATA_DIR/hde-start" ] && install -m 755 "$DATA_DIR/hde-start" "$PREF/bin/hde-start"
+            [ -f "$DATA_DIR/hde-start-wayland" ] && install -m 755 "$DATA_DIR/hde-start-wayland" "$PREF/bin/hde-start-wayland"
+            sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde.desktop" > /usr/share/xsessions/hde.desktop
+            sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/wayland-sessions/hde-wayland.desktop
+            rm -f /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
+            [ -f "$DATA_DIR/nexwm.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm.desktop" > /usr/share/xsessions/nexwm.desktop
+            [ -f "$DATA_DIR/nexwm-wayland.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm-wayland.desktop" > /usr/share/wayland-sessions/nexwm-wayland.desktop
+            chmod 644 /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true
+            say "  sessions:   installed HDE (X11) and HDE (Wayland) into /usr/share/{xsessions,wayland-sessions}"
+        fi
+        if [ -f /var/lib/sddm/state.conf ] && grep -qE '^Session=.*(gnome-greeter|ubuntu)' /var/lib/sddm/state.conf 2>/dev/null; then
+            sed -i 's|^Session=.*|Session=/usr/share/wayland-sessions/hde-wayland.desktop|' /var/lib/sddm/state.conf 2>/dev/null || true
+        fi
+    fi
 fi
 
 # older SDDM preselects the session of state.conf (SDDM overwrites it after every login, so it is only a first choice)

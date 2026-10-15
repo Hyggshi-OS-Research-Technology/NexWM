@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=HDE (Wayland)
-Comment=Hyggshi Desktop Environment on Wayland, with the labwc compositor
+Comment=Hyggshi Desktop Environment on Wayland
 Exec=@PREFIX@/bin/hde-start --wayland
-TryExec=labwc
+TryExec=@PREFIX@/bin/hde-session
 Type=Application
 DesktopNames=HDE

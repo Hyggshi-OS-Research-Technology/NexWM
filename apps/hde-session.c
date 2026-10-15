@@ -243,6 +243,20 @@ static int wayland_launch_nexwm(const char *inner)
  * compositor with --wm nexwm and falls back to labwc on the machines where it cannot run yet. */
 static int wayland_launch(void)
 {
+    const char *rdir = getenv("XDG_RUNTIME_DIR");
+    char rbuf[256];
+    struct stat rst;
+    if (!rdir || !*rdir || stat(rdir, &rst) != 0) {
+        snprintf(rbuf, sizeof rbuf, "/run/user/%u", (unsigned)getuid());
+        if (stat(rbuf, &rst) != 0 || access(rbuf, W_OK) != 0) {
+            snprintf(rbuf, sizeof rbuf, "/tmp/hde-runtime-%u", (unsigned)getuid());
+            mkdir(rbuf, 0700);
+            chmod(rbuf, 0700);
+        }
+        setenv("XDG_RUNTIME_DIR", rbuf, 1);
+    }
+    setenv("WLR_NO_HARDWARE_CURSORS", "1", 0);
+    setenv("WLR_RENDERER_ALLOW_SOFTWARE", "1", 0);
     setenv("XDG_SESSION_TYPE", "wayland", 1);
     setenv("XDG_CURRENT_DESKTOP", "HDE", 1);
     setenv("XDG_SESSION_DESKTOP", "HDE", 1);
@@ -254,15 +268,51 @@ static int wayland_launch(void)
     setenv("ELECTRON_OZONE_PLATFORM_HINT", "auto", 0);
     unsetenv("GDK_BACKEND");                         /* GTK apps pick Wayland by themselves (X11 through Xwayland) */
     unsetenv("DISPLAY");                             /* labwc sets it for Xwayland */
+    unsetenv("WAYLAND_DISPLAY");                     /* compositor creates its own Wayland socket */
     config_path(g_labwc_dir, sizeof g_labwc_dir, "labwc");
     char cmd[8300];
     snprintf(cmd, sizeof cmd, "'%s/hde-session' --wayland-inner", g_bindir);   /* labwc: no shell, quotes ok */
-    if (g_wm_arg[0] && !strcmp(g_wm_arg, "nexwm")) {
+    int want_nexwm = (g_wm_arg[0] && !strcmp(g_wm_arg, "nexwm"));
+    if (!want_nexwm) {
+        char ini[4096];
+        config_path(ini, sizeof ini, "settings.ini");
+        FILE *fp = fopen(ini, "r");
+        if (fp) {
+            char line[256];
+            while (fgets(line, sizeof line, fp)) {
+                if (strncmp(line, "wayland_compositor=nexwm", 24) == 0) {
+                    want_nexwm = 1;
+                    break;
+                }
+            }
+            fclose(fp);
+        }
+    }
+    if (want_nexwm) {
         int rc = wayland_launch_nexwm(cmd);
         if (rc >= 0) return rc;                    /* NexWM had the screen: the session ended with it */
     }
     char *labwc = resolve_component("labwc", NULL);
     if (!labwc) {
+        if (!want_nexwm) {
+            int rc = wayland_launch_nexwm(cmd);
+            if (rc >= 0) return rc;
+        }
+        if (!getenv("HDE_TEST_OUT")) {
+            char *mutter = resolve_component("mutter", NULL);
+            if (mutter) {
+                char pid_str[32];
+                snprintf(pid_str, sizeof pid_str, "%d", (int)getpid());
+                setenv("LABWC_PID", pid_str, 1);
+                setenv("HDE_WAYLAND_XWAYLAND", "1", 1);
+                printf("hde-session: HDE build %s: labwc not found; starting Wayland compositor: %s --wayland -- /bin/sh -c \"%s\"\n",
+                       HDE_VERSION, mutter, cmd);
+                fflush(stdout);
+                execl(mutter, "mutter", "--wayland", "--", "/bin/sh", "-c", cmd, (char *)NULL);
+                perror("hde-session: mutter");
+                free(mutter);
+            }
+        }
         char *hint = hde_install_hint("labwc");
         fprintf(stderr, "hde-session: the HDE (Wayland) session needs the labwc compositor: %s\n", hint);
         free(hint);
@@ -847,10 +897,15 @@ int main(int argc, char **argv)
             break;
         }
     }
-    if (argc > 1 && (!strcmp(argv[1], "--wayland") || !strcmp(argv[1], "--wayland-inner"))) {
+    int arg_wayland = 0, arg_wayland_inner = 0;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--wayland")) arg_wayland = 1;
+        else if (!strcmp(argv[i], "--wayland-inner")) arg_wayland_inner = 1;
+    }
+    if (arg_wayland || arg_wayland_inner) {
         self_dir(g_bindir, sizeof(g_bindir), argv[0]);
         /* outside the compositor (from the login screen): start labwc, which starts us again inside */
-        if (!strcmp(argv[1], "--wayland") && !getenv("WAYLAND_DISPLAY")) {
+        if (arg_wayland && !arg_wayland_inner && !getenv("WAYLAND_DISPLAY")) {
             start_keyring();        /* before labwc: the compositor and everything it starts inherit it */
             return wayland_launch();
         }
@@ -875,7 +930,10 @@ int main(int argc, char **argv)
     if (!g_wayland && !getenv("HDE_XI2") && (getenv("HDE_CORE_EVENTS") || getenv("WAYLAND_DISPLAY")))
         setenv("GDK_CORE_DEVICE_EVENTS", "1", 1);
     if (g_wayland) {
-        setenv("GDK_BACKEND", "wayland,x11", 1);   /* HDE's programs: layer-shell surfaces need Wayland */
+        if (getenv("HDE_WAYLAND_XWAYLAND"))
+            setenv("GDK_BACKEND", "x11,wayland", 1);
+        else
+            setenv("GDK_BACKEND", "wayland,x11", 1);   /* HDE's programs: layer-shell surfaces need Wayland */
         unsetenv("GDK_CORE_DEVICE_EVENTS");
     } else if (!hde_core_backend() || hde_core_backend()->type != HDE_BACKEND_WAYLAND) {
         unsetenv("WAYLAND_DISPLAY");

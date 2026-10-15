@@ -240,6 +240,26 @@ int main(void)
     CHECK(strstr(name, "Foo OS 2") != NULL, "quoted PRETTY_NAME with spaces: '%s'", name);
     free(name);
 
+    /* icon theme package translation and automatic install command across OS families */
+    write_os_release("Fedora", FEDORA);
+    CHECK(!strcmp(hde_distro_pkg("adwaita-icon-theme"), "adwaita-icon-theme"), "Fedora: adwaita-icon-theme");
+    CHECK(!strcmp(hde_distro_pkg("papirus-icon-theme"), "papirus-icon-theme"), "Fedora: papirus-icon-theme");
+    hint = hde_icon_theme_install_cmd("adwaita-icon-theme");
+    CHECK(hint && !strcmp(hint, "dnf install -y adwaita-icon-theme"), "Fedora: icon theme install cmd '%s'", hint ? hint : "(null)");
+    free(hint);
+
+    write_os_release("Arch", ARCH);
+    CHECK(!strcmp(hde_distro_pkg("breeze-icon-theme"), "breeze-icons"), "Arch: breeze-icon-theme is breeze-icons");
+    hint = hde_icon_theme_install_cmd("breeze-icon-theme");
+    CHECK(hint && !strcmp(hint, "pacman -S --noconfirm --needed breeze-icons"), "Arch: icon theme install cmd '%s'", hint ? hint : "(null)");
+    free(hint);
+
+    write_os_release("Debian", DEBIAN);
+    hint = hde_icon_theme_install_cmd("papirus-icon-theme");
+    CHECK(hint && !strcmp(hint, "DEBIAN_FRONTEND=noninteractive apt-get install -y papirus-icon-theme"),
+          "Debian: icon theme install cmd '%s'", hint ? hint : "(null)");
+    free(hint);
+
     unsetenv("HDE_OS_RELEASE");
     (void)buf;
     printf("\ndistro-test: %d passed, %d failed\n", passes, fails);

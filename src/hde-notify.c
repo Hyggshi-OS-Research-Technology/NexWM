@@ -292,6 +292,25 @@ static void on_close_clicked(GtkButton *b, gpointer d)
     notif_close(d, CLOSE_DISMISSED);
 }
 
+static void on_unresponsive_dialog_clicked(GtkButton *b, gpointer d)
+{
+    (void)b;
+    Notif *n = d;
+    if (!n) return;
+    char *title = g_strdup(n->body ? n->body : "Application");
+    char *suf = strstr(title, " is not responding");
+    if (suf) *suf = '\0';
+    char *argv[] = {
+        (char *)"hde-settings",
+        (char *)"--unresponsive-dialog",
+        (char *)"--title", title,
+        NULL
+    };
+    g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL);
+    g_free(title);
+    notif_close(n, CLOSE_DISMISSED);
+}
+
 static gboolean on_body_release(GtkWidget *w, GdkEventButton *e, gpointer d)
 {
     (void)w;
@@ -404,6 +423,17 @@ static void build_popup(Notif *n)
         g_object_set_data_full(G_OBJECT(b), "hde-action", g_strdup(n->actions[i]), g_free);
         g_signal_connect(b, "clicked", G_CALLBACK(on_action_clicked), n);
         gtk_box_pack_start(GTK_BOX(acts), b, TRUE, TRUE, 0);
+    }
+    if (!acts && n->summary && strstr(n->summary, "not responding")) {
+        acts = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_box_set_homogeneous(GTK_BOX(acts), TRUE);
+        GtkWidget *w_btn = gtk_button_new_with_label("Wait");
+        GtkWidget *fq_btn = gtk_button_new_with_label("Force Quit…");
+        g_signal_connect(w_btn, "clicked", G_CALLBACK(on_close_clicked), n);
+        g_signal_connect(fq_btn, "clicked", G_CALLBACK(on_unresponsive_dialog_clicked), n);
+        gtk_box_pack_start(GTK_BOX(acts), w_btn, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(acts), fq_btn, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(outer), acts, FALSE, FALSE, 0);
     }
     gtk_widget_show_all(outer);
 }

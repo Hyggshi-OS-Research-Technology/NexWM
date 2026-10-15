@@ -13,11 +13,14 @@
 #include "hde-wl.h"
 #include <gdk/gdkx.h>
 #include <X11/Xatom.h>
+#include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #define PROJECT_URL "https://github.com/Hyggshi-OS-Research-Technology/NexWM"
+#define SUPPORT_ISSUES_URL "https://github.com/Hyggshi-OS-Research-Technology/NexWM/issues"
 
 static GtkWidget *mem_card, *mem_title, *mem_desc, *mem_bar;
 static guint mem_timer;
@@ -653,6 +656,460 @@ int about_window_main(void)
     gtk_widget_grab_focus(close);
     if (g_getenv("HDE_DEBUG")) fprintf(stderr, "hde-settings: about window shown (%s)\n", facts);
     g_free(facts);
+    gtk_main();
+    return 0;
+}
+
+/* ---------------------------------------------------------------- Support & Help Center (Settings > Support & --support-window) */
+static void on_support_restart_ui(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    const char *pid_s = g_getenv("HDE_SESSION_PID");
+    pid_t pid = pid_s ? (pid_t)atoi(pid_s) : 0;
+    if (pid > 1 && kill(pid, 0) == 0 && kill(pid, SIGUSR1) == 0) {
+        settings_status("Restarting HDE panel and desktop…");
+        return;
+    }
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    char *dir = n > 0 ? g_path_get_dirname((self[n] = '\0', self)) : NULL;
+    char *sib = dir ? g_build_filename(dir, "hde-session", NULL) : NULL;
+    char *prog = sib && g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE) ? g_strdup(sib) : g_find_program_in_path("hde-session");
+    if (prog) {
+        const char *argv[] = { prog, "restart", NULL };
+        run_argv_async(argv, NULL, 10, NULL, NULL);
+        settings_status("Requested HDE panel and desktop restart");
+    } else {
+        settings_status("Not running inside an HDE session");
+    }
+    g_free(prog); g_free(sib); g_free(dir);
+}
+
+static void on_support_reapply(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    apply_keyboard_settings();
+    apply_input_settings();
+    apply_power_settings();
+    settings_status("Display, input, keyboard and power settings re-applied");
+}
+
+static void on_support_reload_wm(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    const char *pid_s = g_getenv("HDE_SESSION_PID");
+    pid_t pid = pid_s ? (pid_t)atoi(pid_s) : 0;
+    if (pid > 1 && kill(pid, 0) == 0 && kill(pid, SIGUSR2) == 0) {
+        settings_status("Reloading window manager…");
+        return;
+    }
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    char *dir = n > 0 ? g_path_get_dirname((self[n] = '\0', self)) : NULL;
+    char *sib = dir ? g_build_filename(dir, "hde-session", NULL) : NULL;
+    char *prog = sib && g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE) ? g_strdup(sib) : g_find_program_in_path("hde-session");
+    if (prog) {
+        const char *argv[] = { prog, "wm", NULL };
+        run_argv_async(argv, NULL, 10, NULL, NULL);
+        settings_status("Requested window manager reload");
+    } else {
+        settings_status("Not running inside an HDE session");
+    }
+    g_free(prog); g_free(sib); g_free(dir);
+}
+
+static void on_support_reset_icons(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    char *cf = g_build_filename(g_get_user_config_dir(), "hde", "config.ini", NULL);
+    GKeyFile *kf = g_key_file_new();
+    g_key_file_load_from_file(kf, cf, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_remove_group(kf, "icon-positions", NULL);
+    g_key_file_set_boolean(kf, "desktop", "show_home", TRUE);
+    g_key_file_set_boolean(kf, "desktop", "show_support", TRUE);
+    char *dir = g_path_get_dirname(cf);
+    g_mkdir_with_parents(dir, 0755);
+    g_key_file_save_to_file(kf, cf, NULL);
+    g_key_file_free(kf);
+    g_free(dir);
+    g_free(cf);
+    settings_status("Desktop icons arranged and restored to defaults");
+}
+
+static void on_support_ensure_icons(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    char *base = g_build_filename(g_get_user_data_dir(), "icons", HDE_BUILTIN_ICON_THEME, NULL);
+    char *stamp = g_build_filename(base, ".hde-icons-v1", NULL);
+    unlink(stamp);
+    g_free(stamp);
+    g_free(base);
+    hde_theme_ensure_icon_theme();
+    if (!hde_theme_has_system_icon_theme()) {
+        cfg_set_string("icon_theme_name", HDE_BUILTIN_ICON_THEME);
+        HdeThemeInfo ti;
+        hde_theme_info_load(&ti);
+        hde_theme_write_system(&ti);
+        hde_theme_info_clear(&ti);
+        char *status = NULL;
+        hde_theme_auto_install_icon_theme("adwaita-icon-theme", TRUE, &status);
+        if (status) {
+            settings_status("%s", status);
+            g_free(status);
+        }
+    } else {
+        char *best = hde_theme_best_icon_theme();
+        cfg_set_string("icon_theme_name", best);
+        HdeThemeInfo ti;
+        hde_theme_info_load(&ti);
+        hde_theme_write_system(&ti);
+        hde_theme_info_clear(&ti);
+        settings_status("Icon theme verified and set to %s (built-in %s repaired)", best, HDE_BUILTIN_ICON_THEME);
+        g_free(best);
+    }
+    hde_theme_apply_process();
+}
+
+static void on_support_issues(GtkButton *b, gpointer d)
+{
+    (void)b; (void)d;
+    HdeOsInfo os;
+    hde_os_info_load(&os);
+    const char *url = os.bug_url && *os.bug_url ? os.bug_url
+                    : os.support_url && *os.support_url ? os.support_url : SUPPORT_ISSUES_URL;
+    open_uri(url);
+    hde_os_info_clear(&os);
+}
+
+static GtkWidget *support_shortcut_row(const char *keys, const char *action)
+{
+    GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_widget_set_margin_top(h, 5);
+    gtk_widget_set_margin_bottom(h, 5);
+    gtk_widget_set_margin_start(h, 6);
+    gtk_widget_set_margin_end(h, 6);
+    GtkWidget *a = gtk_label_new(action);
+    gtk_label_set_xalign(GTK_LABEL(a), 0);
+    gtk_widget_set_hexpand(a, TRUE);
+    GtkWidget *k = gtk_label_new(keys);
+    gtk_style_context_add_class(gtk_widget_get_style_context(k), "badge");
+    gtk_box_pack_start(GTK_BOX(h), a, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(h), k, FALSE, FALSE, 0);
+    return h;
+}
+
+GtkWidget *page_support_new(void)
+{
+    GtkWidget *box = page_base();
+    Display *dpy = xdisplay();
+
+    gtk_box_pack_start(GTK_BOX(box), os_hero(FALSE), FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Help & Support Resources"), FALSE, FALSE, 0);
+    GtkWidget *rcard = card_new();
+    GtkWidget *b_web = gtk_button_new_with_label("Open Website");
+    g_signal_connect(b_web, "clicked", G_CALLBACK(on_project), NULL);
+    gtk_container_add(GTK_CONTAINER(rcard), row_box("Project & Documentation",
+        "Official Hyggshi Desktop Environment & NexWM repository, documentation and guides.", b_web));
+
+    GtkWidget *b_bug = gtk_button_new_with_label("Report an Issue…");
+    gtk_style_context_add_class(gtk_widget_get_style_context(b_bug), "suggested-action");
+    g_signal_connect(b_bug, "clicked", G_CALLBACK(on_support_issues), NULL);
+    gtk_container_add(GTK_CONTAINER(rcard), row_box("Issue Tracker & Community Support",
+        "Report a bug, request a feature or ask for help from the Hyggshi OS team.", b_bug));
+    gtk_box_pack_start(GTK_BOX(box), rcard, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("System Health & Diagnostics"), FALSE, FALSE, 0);
+    GtkWidget *dcard = card_new();
+    char *wm = dpy ? wm_name(dpy) : hde_is_wayland() && g_getenv("LABWC_PID") ? g_strdup("labwc (Wayland)") : NULL;
+    char *xs = dpy ? xserver(dpy) : hde_is_wayland() ? wayland_server() : g_strdup("Unknown");
+    const char *sess = g_getenv("HDE_SESSION_PID") ? "Active HDE session" : "Standalone application mode";
+    char *sess_desc = g_strdup_printf("%s · Window manager: %s · Display: %s", sess, wm ? wm : "None", xs);
+    gtk_container_add(GTK_CONTAINER(dcard), row_box("Desktop session", sess_desc, NULL));
+    g_free(sess_desc); g_free(wm); g_free(xs);
+
+    const char *audio = have_program("pactl") ? "PipeWire / PulseAudio (pactl available)"
+                      : have_program("wpctl") ? "PipeWire (wpctl available)"
+                      : have_program("amixer") ? "ALSA (amixer available)"
+                      : "No audio control utility detected";
+    gtk_container_add(GTK_CONTAINER(dcard), row_box("Audio subsystem", audio, NULL));
+
+    const char *net = have_program("nmcli") ? "NetworkManager (nmcli available)"
+                    : "NetworkManager not installed (optional for Wi-Fi management)";
+    gtk_container_add(GTK_CONTAINER(dcard), row_box("Network management", net, NULL));
+
+    char *best_ic = hde_theme_best_icon_theme();
+    char *ic_desc = hde_theme_has_system_icon_theme()
+        ? g_strdup_printf("System icon theme available (%s) + %s fallback ready", best_ic, HDE_BUILTIN_ICON_THEME)
+        : g_strdup_printf("No OS icon theme package installed — using auto-installed %s theme", HDE_BUILTIN_ICON_THEME);
+    gtk_container_add(GTK_CONTAINER(dcard), row_box("Icon theme subsystem", ic_desc, NULL));
+    g_free(ic_desc);
+    g_free(best_ic);
+
+    GtkWidget *dbtn_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *b_copy = gtk_button_new_with_mnemonic("_Copy diagnostic report");
+    GtkWidget *b_log = gtk_button_new_with_mnemonic("View session _log");
+    g_signal_connect(b_copy, "clicked", G_CALLBACK(on_copy), NULL);
+    g_signal_connect(b_log, "clicked", G_CALLBACK(on_log), NULL);
+    gtk_box_pack_start(GTK_BOX(dbtn_box), b_copy, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(dbtn_box), b_log, FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(dcard), row_box("Diagnostic report",
+        "Copy full hardware, software and memory details to the clipboard for support tickets.", dbtn_box));
+    gtk_box_pack_start(GTK_BOX(box), dcard, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Quick Repair & Troubleshooting"), FALSE, FALSE, 0);
+    GtkWidget *tcard = card_new();
+    GtkWidget *b_rest = gtk_button_new_with_label("Restart Panel & Desktop");
+    g_signal_connect(b_rest, "clicked", G_CALLBACK(on_support_restart_ui), NULL);
+    gtk_container_add(GTK_CONTAINER(tcard), row_box("Restart desktop shell",
+        "Reloads hde-panel and hde-desktop in place without closing your open applications.", b_rest));
+
+    GtkWidget *b_reapp = gtk_button_new_with_label("Re-apply Settings");
+    g_signal_connect(b_reapp, "clicked", G_CALLBACK(on_support_reapply), NULL);
+    gtk_container_add(GTK_CONTAINER(tcard), row_box("Re-apply input, keyboard & power",
+        "Re-applies touchpad natural scrolling, tap-to-click, keyboard layout and power profile.", b_reapp));
+
+    GtkWidget *b_wm = gtk_button_new_with_label("Reload Window Manager");
+    g_signal_connect(b_wm, "clicked", G_CALLBACK(on_support_reload_wm), NULL);
+    gtk_container_add(GTK_CONTAINER(tcard), row_box("Reload window manager",
+        "Restarts the active window manager while keeping all application windows open.", b_wm));
+
+    GtkWidget *b_ic = gtk_button_new_with_label("Reset Desktop Icons");
+    g_signal_connect(b_ic, "clicked", G_CALLBACK(on_support_reset_icons), NULL);
+    gtk_container_add(GTK_CONTAINER(tcard), row_box("Arrange & restore desktop icons",
+        "Restores the Home and Support icons on the desktop and arranges all icons into a clean grid.", b_ic));
+
+    GtkWidget *b_ith = gtk_button_new_with_label("Install / Repair Icons");
+    g_signal_connect(b_ith, "clicked", G_CALLBACK(on_support_ensure_icons), NULL);
+    gtk_container_add(GTK_CONTAINER(tcard), row_box("Ensure & install icon theme",
+        "Repairs the built-in Hyggshi-Icons fallback theme and installs the OS icon theme package if missing.", b_ith));
+    gtk_box_pack_start(GTK_BOX(box), tcard, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), section("Essential Keyboard Shortcuts"), FALSE, FALSE, 0);
+    GtkWidget *scard = card_new();
+    static const char *const ksc[][2] = {
+        { "Super", "Open Start Menu & search applications" },
+        { "Alt + Tab", "Switch between open windows with live previews" },
+        { "Super + E", "Open Hyggshi Files (File Explorer)" },
+        { "Ctrl + Alt + T", "Open HDE Cmd (Terminal Emulator)" },
+        { "Super + R  ·  Alt + F2", "Run a command" },
+        { "Super + L", "Lock the screen" },
+        { "F1 · F2 · F3 · F4", "Mute · Volume down · Volume up · Play/Pause" },
+        { "F6 · F7 · F8", "Brightness down · Brightness up · Project / Multi-monitor" },
+        { "Print · Shift+Print · Alt+Print", "Screenshot: Full screen · Area · Active window" },
+        { "Super + Left / Right / Up / Down", "Snap window left / right · Maximize · Restore" },
+    };
+    for (guint i = 0; i < G_N_ELEMENTS(ksc); i++)
+        gtk_container_add(GTK_CONTAINER(scard), support_shortcut_row(ksc[i][0], ksc[i][1]));
+    gtk_box_pack_start(GTK_BOX(box), scard, FALSE, FALSE, 0);
+
+    return box;
+}
+
+static void on_open_settings_from_support(GtkButton *b, gpointer w)
+{
+    (void)b;
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    if (n > 0) self[n] = '\0';
+    char *argv[] = { n > 0 ? self : (char *)"hde-settings", NULL };
+    GError *e = NULL;
+    if (!g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &e)) {
+        g_printerr("hde-settings: %s\n", e->message);
+        g_clear_error(&e);
+    }
+    gtk_widget_destroy(GTK_WIDGET(w));
+}
+
+int support_window_main(void)
+{
+    GtkWidget *w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(w), "HDE Support & Help Center");
+    gtk_window_set_icon_name(GTK_WINDOW(w), "help-browser");
+    gtk_window_set_position(GTK_WINDOW(w), GTK_WIN_POS_CENTER);
+    gtk_window_set_default_size(GTK_WINDOW(w), 680, 580);
+    g_signal_connect(w, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(w, "key-press-event", G_CALLBACK(on_about_key), NULL);
+
+    GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(w), outer);
+
+    GtkWidget *sc = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sc), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    GtkWidget *content = page_support_new();
+    gtk_container_set_border_width(GTK_CONTAINER(content), 20);
+    gtk_container_add(GTK_CONTAINER(sc), content);
+    gtk_box_pack_start(GTK_BOX(outer), sc, TRUE, TRUE, 0);
+
+    gtk_box_pack_start(GTK_BOX(outer), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 0);
+
+    GtkWidget *btns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(btns), 12);
+    GtkWidget *open_set = gtk_button_new_with_mnemonic("Open _Settings…");
+    g_signal_connect(open_set, "clicked", G_CALLBACK(on_open_settings_from_support), w);
+    GtkWidget *det = gtk_button_new_with_mnemonic("System _details…");
+    g_signal_connect(det, "clicked", G_CALLBACK(on_details), w);
+    GtkWidget *close = gtk_button_new_with_mnemonic("_Close");
+    g_signal_connect_swapped(close, "clicked", G_CALLBACK(gtk_widget_destroy), w);
+    gtk_box_pack_start(GTK_BOX(btns), open_set, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(btns), det, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(btns), close, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(outer), btns, FALSE, FALSE, 0);
+
+    gtk_widget_show_all(w);
+    gtk_widget_grab_focus(close);
+    if (g_getenv("HDE_DEBUG")) fprintf(stderr, "hde-settings: support window shown\n");
+    gtk_main();
+    return 0;
+}
+
+/* ---------------------------------------------------------------- Application Is Not Responding dialog (--unresponsive-dialog) */
+typedef struct {
+    GtkWidget *win;
+    unsigned long xid;
+    int pid;
+    guint timer_id;
+} UnrespCtx;
+
+static int x11_ignore_err(Display *d, XErrorEvent *e) { (void)d; (void)e; return 0; }
+
+static gboolean check_unresp_alive(gpointer d)
+{
+    UnrespCtx *ctx = d;
+    if (!ctx || !ctx->win) return G_SOURCE_REMOVE;
+    if (ctx->pid > 1 && kill((pid_t)ctx->pid, 0) != 0) {
+        ctx->timer_id = 0;
+        gtk_widget_destroy(ctx->win);
+        return G_SOURCE_REMOVE;
+    }
+    Display *dpy = xdisplay();
+    if (ctx->xid > 0 && dpy) {
+        XWindowAttributes attr;
+        int (*old)(Display *, XErrorEvent *) = XSetErrorHandler(x11_ignore_err);
+        Status ok = XGetWindowAttributes(dpy, (Window)ctx->xid, &attr);
+        XSync(dpy, False);
+        XSetErrorHandler(old);
+        if (!ok) {
+            ctx->timer_id = 0;
+            gtk_widget_destroy(ctx->win);
+            return G_SOURCE_REMOVE;
+        }
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static void on_unresp_force_quit(GtkButton *b, gpointer d)
+{
+    (void)b;
+    UnrespCtx *ctx = d;
+    if (!ctx) return;
+    if (ctx->pid > 1) {
+        kill((pid_t)ctx->pid, SIGTERM);
+        usleep(120 * 1000);
+        kill((pid_t)ctx->pid, SIGKILL);
+    }
+    Display *dpy = xdisplay();
+    if (ctx->xid > 0 && dpy) {
+        int (*old)(Display *, XErrorEvent *) = XSetErrorHandler(x11_ignore_err);
+        XKillClient(dpy, (Window)ctx->xid);
+        XSync(dpy, False);
+        XSetErrorHandler(old);
+    }
+    if (ctx->win) gtk_widget_destroy(ctx->win);
+}
+
+static void on_unresp_destroy(GtkWidget *w, gpointer d)
+{
+    (void)w;
+    UnrespCtx *ctx = d;
+    if (ctx && ctx->timer_id) {
+        g_source_remove(ctx->timer_id);
+        ctx->timer_id = 0;
+    }
+    gtk_main_quit();
+}
+
+int unresponsive_dialog_main(const char *title, unsigned long xid, int pid)
+{
+    const char *app_name = (title && *title) ? title : "An application";
+    UnrespCtx ctx = { NULL, xid, pid, 0 };
+
+    GtkWidget *w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    ctx.win = w;
+    gtk_window_set_title(GTK_WINDOW(w), "Application Is Not Responding");
+    gtk_window_set_icon_name(GTK_WINDOW(w), "dialog-warning");
+    gtk_window_set_position(GTK_WINDOW(w), GTK_WIN_POS_CENTER);
+    gtk_window_set_resizable(GTK_WINDOW(w), FALSE);
+    gtk_window_set_keep_above(GTK_WINDOW(w), TRUE);
+    gtk_window_set_type_hint(GTK_WINDOW(w), GDK_WINDOW_TYPE_HINT_DIALOG);
+    gtk_window_set_default_size(GTK_WINDOW(w), 460, -1);
+    g_signal_connect(w, "destroy", G_CALLBACK(on_unresp_destroy), &ctx);
+    g_signal_connect(w, "key-press-event", G_CALLBACK(on_about_key), NULL);
+
+    GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_container_set_border_width(GTK_CONTAINER(outer), 22);
+    gtk_container_add(GTK_CONTAINER(w), outer);
+
+    GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
+    GtkWidget *icon = gtk_image_new_from_icon_name("dialog-warning", GTK_ICON_SIZE_DIALOG);
+    gtk_image_set_pixel_size(GTK_IMAGE(icon), 48);
+    gtk_widget_set_valign(icon, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(top), icon, FALSE, FALSE, 0);
+
+    GtkWidget *tbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    char *esc = g_markup_escape_text(app_name, -1);
+    char *head_mk = g_strdup_printf("<span size=\"large\" weight=\"bold\">“%s” is not responding</span>", esc);
+    g_free(esc);
+    GtkWidget *hl = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(hl), head_mk);
+    g_free(head_mk);
+    gtk_label_set_xalign(GTK_LABEL(hl), 0);
+    gtk_label_set_line_wrap(GTK_LABEL(hl), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(hl), 44);
+    gtk_box_pack_start(GTK_BOX(tbox), hl, FALSE, FALSE, 0);
+
+    GtkWidget *dl = gtk_label_new(
+        "This application has stopped responding. You may choose to wait a short while for it to continue, "
+        "or force the application to quit immediately (any unsaved changes may be lost).");
+    gtk_label_set_xalign(GTK_LABEL(dl), 0);
+    gtk_label_set_line_wrap(GTK_LABEL(dl), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(dl), 48);
+    gtk_style_context_add_class(gtk_widget_get_style_context(dl), "row-desc");
+    gtk_box_pack_start(GTK_BOX(tbox), dl, FALSE, FALSE, 0);
+
+    if (pid > 1 || xid > 0) {
+        char *meta = (pid > 1 && xid > 0) ? g_strdup_printf("Process ID: %d  ·  Window ID: 0x%lx", pid, xid)
+                   : (pid > 1)            ? g_strdup_printf("Process ID: %d", pid)
+                                          : g_strdup_printf("Window ID: 0x%lx", xid);
+        GtkWidget *ml = gtk_label_new(meta);
+        g_free(meta);
+        gtk_label_set_xalign(GTK_LABEL(ml), 0);
+        gtk_style_context_add_class(gtk_widget_get_style_context(ml), "badge");
+        gtk_box_pack_start(GTK_BOX(tbox), ml, FALSE, FALSE, 2);
+    }
+
+    gtk_box_pack_start(GTK_BOX(top), tbox, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(outer), top, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(outer), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 0);
+
+    GtkWidget *btns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget *wait_btn = gtk_button_new_with_mnemonic("_Wait");
+    GtkWidget *fq_btn = gtk_button_new_with_mnemonic("_Force Quit");
+    gtk_style_context_add_class(gtk_widget_get_style_context(fq_btn), "destructive-action");
+    g_signal_connect_swapped(wait_btn, "clicked", G_CALLBACK(gtk_widget_destroy), w);
+    g_signal_connect(fq_btn, "clicked", G_CALLBACK(on_unresp_force_quit), &ctx);
+    gtk_box_pack_end(GTK_BOX(btns), fq_btn, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(btns), wait_btn, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(outer), btns, FALSE, FALSE, 0);
+
+    if (pid > 1 || xid > 0)
+        ctx.timer_id = g_timeout_add(500, check_unresp_alive, &ctx);
+
+    gtk_widget_show_all(w);
+    gtk_widget_grab_focus(wait_btn);
+    if (g_getenv("HDE_DEBUG"))
+        fprintf(stderr, "hde-settings: unresponsive dialog shown for '%s' (pid=%d, xid=0x%lx)\n", app_name, pid, xid);
     gtk_main();
     return 0;
 }

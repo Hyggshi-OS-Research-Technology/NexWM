@@ -347,7 +347,7 @@ void nexwm_config_defaults(HdeNexwmConfig *cfg)
     cfg->title_align    = 0;    /* centre */
     cfg->resize_grip    = 6;
     cfg->snap_distance  = 32;
-    cfg->animation_ms   = 0;    /* animations off */
+    cfg->animation_ms   = 140;  /* smooth window transitions by default (0 = animations off) */
 
     /* the keys the README promises; the same table on Wayland */
     binding_add(cfg, "Super+Return", NEXWM_ACTION_SPAWN, 0, "hde-choose terminal");

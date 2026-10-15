@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Camera
+GenericName=Camera & Webcam
+Comment=Take photos and record videos from your webcam on HDE
+Exec=@PREFIX@/bin/hde-camera
+Icon=camera-web
+Terminal=false
+Categories=GTK;AudioVideo;Video;Photography;Recorder;
+Keywords=camera;webcam;photo;video;selfie;capture;v4l2;
+StartupNotify=true
+StartupWMClass=hde-camera

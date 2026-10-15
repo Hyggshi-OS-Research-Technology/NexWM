@@ -1,11 +1,13 @@
 /* Hyggshi Settings — Window Management page: choose the WM (GTK WMs preferred) and switch instantly without logging out. */
 #include "hde-distro.h"
 #include "hde-settings.h"
+#include "hde-theme.h"
 #include "hde-wm.h"
 #include <gdk/gdkx.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static GtkWidget *running_row, *apply_btn;
 static guint running_timer;
@@ -70,6 +72,29 @@ static void nexwm_ini_set_string(const char *key, const char *val)
     g_free(p);
 }
 
+static void on_nexwm_anim_switch(GObject *sw, GParamSpec *ps, gpointer user_data)
+{
+    (void)ps;
+    gboolean on = gtk_switch_get_active(GTK_SWITCH(sw));
+    GtkWidget *spin = user_data;
+    cfg_set_bool("enable_animations", on);
+    int ms = on ? 140 : 0;
+    if (spin) {
+        if (on && gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(spin)) > 0)
+            ms = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(spin));
+        else
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(spin), ms);
+        gtk_widget_set_sensitive(spin, on);
+    }
+    nexwm_ini_set_int("animation_ms", ms);
+    HdeThemeInfo info;
+    hde_theme_info_load(&info);
+    hde_theme_write_system(&info);
+    hde_theme_info_clear(&info);
+    hde_theme_apply_process();
+    settings_status(on ? "Window and desktop animations enabled (%d ms)" : "Window and desktop animations disabled", ms);
+}
+
 static void on_nexwm_spin_changed(GtkSpinButton *sb, gpointer user_data)
 {
     const char *key = (const char *)user_data;
@@ -109,12 +134,92 @@ static void on_nexwm_align_combo(GtkComboBox *combo, gpointer user_data)
     }
 }
 
+static void on_nexwm_focus_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    static const char *const focus_values[] = {
+        "click",
+        "mouse"
+    };
+    int idx = gtk_combo_box_get_active(combo);
+    if (idx >= 0 && idx < (int)G_N_ELEMENTS(focus_values)) {
+        nexwm_ini_set_string("focus", focus_values[idx]);
+        settings_status("NexWM focus mode updated: %s", focus_values[idx]);
+    }
+}
+
 static char *running_wm(void)
 {
+    if (g_getenv("WAYLAND_DISPLAY") && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland")) {
+        char *wc = cfg_get_string("wayland_compositor", "labwc");
+        char *res = g_strdup_printf("%s (Wayland compositor)", (wc && !g_strcmp0(wc, "nexwm")) ? "NexWM" : "labwc");
+        g_free(wc);
+        return res;
+    }
     GdkScreen *s = gdk_screen_get_default();
     if (!GDK_IS_X11_SCREEN(s)) return NULL;
     const char *n = gdk_x11_screen_get_window_manager_name(s);
     return n && g_ascii_strcasecmp(n, "unknown") ? g_strdup(n) : NULL;
+}
+
+static void on_default_session_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    static const char *const session_files[] = {
+        "hde.desktop",
+        "hde-wayland.desktop"
+    };
+    static const char *const dmrc_names[] = {
+        "hde",
+        "hde-wayland"
+    };
+    int idx = gtk_combo_box_get_active(combo);
+    if (idx < 0 || idx >= (int)G_N_ELEMENTS(session_files)) return;
+
+    cfg_set_string("default_session", session_files[idx]);
+    cfg_set_string("session_type", (idx == 1) ? "wayland" : "x11");
+
+    /* Also write ~/.dmrc so display managers remember the user's preferred session */
+    char *dmrc = g_build_filename(g_get_home_dir(), ".dmrc", NULL);
+    char *dmrc_body = g_strdup_printf("[Desktop]\nSession=%s\n", dmrc_names[idx]);
+    g_file_set_contents(dmrc, dmrc_body, -1, NULL);
+    g_free(dmrc_body);
+    g_free(dmrc);
+
+    settings_status("Default login session set to %s (%s). Select it on SDDM or click 'Set as SDDM Default'.",
+                    (idx == 1) ? "HDE (Wayland)" : "HDE (X11)",
+                    (idx == 1) ? "Wayland" : "X11");
+}
+
+static void on_wayland_compositor_combo(GtkComboBox *combo, gpointer user_data)
+{
+    (void)user_data;
+    int idx = gtk_combo_box_get_active(combo);
+    const char *comp = (idx == 1) ? "nexwm" : "labwc";
+    cfg_set_string("wayland_compositor", comp);
+    settings_status("Preferred Wayland compositor set to '%s'. Takes effect on next Wayland login.", comp);
+}
+
+static void on_apply_sddm_session(GtkButton *btn, gpointer user_data)
+{
+    (void)btn; (void)user_data;
+    char *sess = cfg_get_string("default_session", "hde.desktop");
+    char *login_bin = g_find_program_in_path("hde-login");
+    const char *script = login_bin ? login_bin : "login/sddm/install.sh";
+    if (geteuid() == 0) {
+        const char *argv[] = { "sh", script, "--session", sess, NULL };
+        run_argv_async(argv, NULL, 15, NULL, NULL);
+        settings_status("Updated SDDM default session to %s.", sess);
+    } else if (have_program("pkexec")) {
+        const char *argv[] = { "pkexec", "sh", script, "--session", sess, NULL };
+        run_argv_async(argv, NULL, 30, NULL, NULL);
+        settings_status("Updating SDDM default session to %s…", sess);
+    } else {
+        settings_status("Saved %s to ~/.dmrc and settings.ini (run 'sudo hde-login --session %s' to set system-wide).",
+                        sess, sess);
+    }
+    g_free(login_bin);
+    g_free(sess);
 }
 
 static gboolean update_running(gpointer d)
@@ -252,15 +357,59 @@ static GtkWidget *wm_row(GtkWidget **group, const char *id, const char *title, c
 GtkWidget *page_windows_new(void)
 {
     GtkWidget *box = page_base();
-    if (g_getenv("WAYLAND_DISPLAY") && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland")) {
-        gtk_box_pack_start(GTK_BOX(box), section("Wayland session"), FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(box), info_label(
-            "In the HDE (Wayland) session the labwc compositor manages the windows (title bars in HDE's colours, "
-            "Alt+Tab, snapping with Super+Left / Super+Right, Super+Up to maximize). The window manager chosen below "
-            "is used in the HDE session on X11."), FALSE, FALSE, 0);
-    }
+    gboolean is_wayland = (g_getenv("WAYLAND_DISPLAY") && !g_strcmp0(g_getenv("XDG_SESSION_TYPE"), "wayland"));
+
+    /* ---- Display Server & Session Switcher (X11 / Wayland) ---- */
+    gtk_box_pack_start(GTK_BOX(box), section("Display Server & Session (X11 / Wayland)"), FALSE, FALSE, 0);
+    GtkWidget *sess_card = card_new();
+
+    GtkWidget *proto_badge = badge(is_wayland ? "Wayland Active" : "X11 Active", TRUE);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("Current display server",
+                              is_wayland
+                                  ? "Running on Wayland (layer-shell desktop & panel, native Wayland + Xwayland support)"
+                                  : "Running on X11 (Xorg display server with instant live window manager switching)",
+                              proto_badge));
+
+    char *cur_sess = cfg_get_string("default_session", is_wayland ? "hde-wayland.desktop" : "hde.desktop");
+    GtkWidget *sess_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sess_combo), "HDE (X11)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(sess_combo), "HDE (Wayland)");
+    if (!g_strcmp0(cur_sess, "hde-wayland.desktop")) gtk_combo_box_set_active(GTK_COMBO_BOX(sess_combo), 1);
+    else gtk_combo_box_set_active(GTK_COMBO_BOX(sess_combo), 0);
+    g_free(cur_sess);
+    gtk_widget_set_valign(sess_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(sess_combo, "changed", G_CALLBACK(on_default_session_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("Default login session",
+                              "Choose between HDE (X11) and HDE (Wayland) for SDDM and display managers",
+                              sess_combo));
+
+    char *cur_wc = cfg_get_string("wayland_compositor", "labwc");
+    GtkWidget *wc_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wc_combo), "labwc (Recommended Wayland Compositor)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(wc_combo), "NexWM (Built-in HDE Wayland Compositor)");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(wc_combo), !g_strcmp0(cur_wc, "nexwm") ? 1 : 0);
+    g_free(cur_wc);
+    gtk_widget_set_valign(wc_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(wc_combo, "changed", G_CALLBACK(on_wayland_compositor_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("Wayland compositor",
+                              "Compositor used when starting an HDE Wayland session (falls back to labwc automatically)",
+                              wc_combo));
+
+    GtkWidget *sddm_btn = gtk_button_new_with_label("Set as SDDM Default");
+    gtk_widget_set_valign(sddm_btn, GTK_ALIGN_CENTER);
+    g_signal_connect(sddm_btn, "clicked", G_CALLBACK(on_apply_sddm_session), NULL);
+    gtk_container_add(GTK_CONTAINER(sess_card),
+                      row_box("SDDM login screen preselection",
+                              "Preselect the chosen X11 or Wayland session on the SDDM login screen (or use the X11 | Wayland switcher on SDDM)",
+                              sddm_btn));
+
+    gtk_box_pack_start(GTK_BOX(box), sess_card, FALSE, FALSE, 0);
+
     gtk_box_pack_start(GTK_BOX(box), section("Current"), FALSE, FALSE, 0);
-    running_row = row_box("Running window manager", "Checking…", NULL);
+    running_row = row_box("Running window manager / compositor", "Checking…", NULL);
     gtk_box_pack_start(GTK_BOX(box), running_row, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), section("Window manager"), FALSE, FALSE, 0);
@@ -373,6 +522,49 @@ GtkWidget *page_windows_new(void)
     g_signal_connect(rg_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"resize_grip");
     gtk_container_add(GTK_CONTAINER(nexcard),
                       row_box("Corner resize grab", "Size of window corner resize zone in pixels (default 6)", rg_spin));
+
+    int cur_ws = nexwm_ini_get_int("desktops", 4);
+    GtkWidget *ws_spin = gtk_spin_button_new_with_range(1, 16, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ws_spin), cur_ws);
+    gtk_widget_set_valign(ws_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(ws_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"desktops");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Workspaces", "Number of virtual desktops managed by NexWM (1–16, default 4)", ws_spin));
+
+    char *cur_focus = nexwm_ini_get_string("focus", "click");
+    GtkWidget *focus_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(focus_combo), "Click to focus (Default)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(focus_combo), "Focus follows mouse");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(focus_combo), !g_strcmp0(cur_focus, "mouse") ? 1 : 0);
+    g_free(cur_focus);
+    gtk_widget_set_valign(focus_combo, GTK_ALIGN_CENTER);
+    g_signal_connect(focus_combo, "changed", G_CALLBACK(on_nexwm_focus_combo), NULL);
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Window focus mode", "How windows receive keyboard focus", focus_combo));
+
+    int cur_snap = nexwm_ini_get_int("snap_distance", 32);
+    GtkWidget *snap_spin = gtk_spin_button_new_with_range(0, 256, 4);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(snap_spin), cur_snap);
+    gtk_widget_set_valign(snap_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(snap_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"snap_distance");
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Edge snap distance", "Distance in pixels from screen edges to trigger window snapping (0 = disabled, default 32)", snap_spin));
+
+    int cur_anim = nexwm_ini_get_int("animation_ms", cfg_get_bool("enable_animations", TRUE) ? 140 : 0);
+    GtkWidget *anim_spin = gtk_spin_button_new_with_range(0, 2000, 20);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(anim_spin), cur_anim);
+    gtk_widget_set_valign(anim_spin, GTK_ALIGN_CENTER);
+    g_signal_connect(anim_spin, "value-changed", G_CALLBACK(on_nexwm_spin_changed), (gpointer)"animation_ms");
+
+    GtkWidget *win_anim_sw = gtk_switch_new();
+    gtk_widget_set_valign(win_anim_sw, GTK_ALIGN_CENTER);
+    gtk_switch_set_active(GTK_SWITCH(win_anim_sw), cfg_get_bool("enable_animations", TRUE) && cur_anim > 0);
+    g_signal_connect(win_anim_sw, "notify::active", G_CALLBACK(on_nexwm_anim_switch), anim_spin);
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Enable window & desktop animations",
+                              "Smooth animations when opening, maximizing, snapping, and restoring windows", win_anim_sw));
+    gtk_container_add(GTK_CONTAINER(nexcard),
+                      row_box("Window animation duration", "Transition time in milliseconds for window actions (0 = instant)", anim_spin));
 
     gtk_box_pack_start(GTK_BOX(box), nexcard, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), info_label("NexWM customizations are stored in ~/.config/hde/nexwm.ini and take effect immediately or on the next window manager reload."), FALSE, FALSE, 4);

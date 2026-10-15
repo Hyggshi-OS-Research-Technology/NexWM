@@ -374,6 +374,8 @@ static void viewer_on_open_clicked(GtkWidget *button, gpointer data)
     gtk_widget_destroy(dlg);
 }
 
+static void viewer_on_about(GtkWidget *b, gpointer d);
+
 static gboolean viewer_on_key(GtkWidget *widget, GdkEventKey *ev, gpointer data)
 {
     HdeMediaViewer *w = data;
@@ -417,6 +419,7 @@ static gboolean viewer_on_key(GtkWidget *widget, GdkEventKey *ev, gpointer data)
         if (w->fullscreen) { w->fullscreen = 0; viewer_apply_fullscreen(w); }
         else gtk_widget_destroy(w->window);
         return TRUE;
+    case GDK_KEY_F1: viewer_on_about(NULL, w); return TRUE;
     case GDK_KEY_q: case GDK_KEY_Q: gtk_widget_destroy(w->window); return TRUE;
     default:
         return FALSE;
@@ -540,6 +543,28 @@ static void viewer_on_rot_left(GtkWidget *b, gpointer d) { (void)b; viewer_rotat
 static void viewer_on_slideshow(GtkWidget *b, gpointer d) { (void)b; viewer_toggle_slideshow(d); }
 static void viewer_on_fullscreen(GtkWidget *b, gpointer d) { (void)b; viewer_toggle_fullscreen(d); }
 static void viewer_on_info(GtkWidget *b, gpointer d) { (void)b; viewer_toggle_info(d); }
+#ifndef HDE_VERSION
+#define HDE_VERSION "1.0.0"
+#endif
+
+static void viewer_on_about(GtkWidget *b, gpointer d)
+{
+    (void)b;
+    HdeMediaViewer *w = d;
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(w && w->window ? GTK_WINDOW(w->window) : NULL,
+        "program-name", "Hyggshi Media",
+        "version", HDE_VERSION,
+        "comments", "Image viewer, slideshow presenter, and media player for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "image-x-generic",
+        NULL);
+}
+
 static void viewer_on_close(GtkWidget *b, gpointer d) { (void)b; gtk_widget_destroy(((HdeMediaViewer *)d)->window); }
 
 static void viewer_build_window(HdeMediaViewer *w)
@@ -571,6 +596,7 @@ static void viewer_build_window(HdeMediaViewer *w)
     w->slideshow_button = viewer_tool_button("Slideshow", "Start / stop the slideshow (s)", G_CALLBACK(viewer_on_slideshow), w);
     viewer_tool_button("Full screen", "Full screen (f / F11)", G_CALLBACK(viewer_on_fullscreen), w);
     viewer_tool_button("i", "More about the picture (i)", G_CALLBACK(viewer_on_info), w);
+    viewer_tool_button("About", "About Hyggshi Media (F1)", G_CALLBACK(viewer_on_about), w);
     viewer_tool_button("Close", "Close the window (q)", G_CALLBACK(viewer_on_close), w);
     gtk_box_pack_start(GTK_BOX(box), w->toolbar, FALSE, FALSE, 0);
 

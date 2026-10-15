@@ -32,8 +32,10 @@ static int put_double(GSettings *gs, GSettingsSchema *sc, const char *id, const 
 {
     if (!g_settings_schema_has_key(sc, key)) return 0;
     GSettingsSchemaKey *k = g_settings_schema_get_key(sc, key);
+    GVariant *val = g_variant_ref_sink(g_variant_new_double(v));
     gboolean ok = g_variant_type_equal(g_settings_schema_key_get_value_type(k), G_VARIANT_TYPE_DOUBLE) &&
-                  g_settings_schema_key_range_check(k, g_variant_new_double(v));
+                  g_settings_schema_key_range_check(k, val);
+    g_variant_unref(val);
     g_settings_schema_key_unref(k);
     if (!ok || fabs(g_settings_get_double(gs, key) - v) < 0.005) return 0;
     g_settings_set_double(gs, key, v);

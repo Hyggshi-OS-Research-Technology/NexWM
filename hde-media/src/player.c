@@ -58,6 +58,9 @@ struct _HdeMediaPlayer {
     /* what is shown */
     GtkWidget *heading, *heading_sub, *hint, *video, *elapsed, *total, *seek;
     GtkWidget *prev, *play, *stop, *next, *shuffle, *repeat, *subs, *volume, *mute_button, *list, *status;
+    GtkWidget *open_button, *speed_button, *fullscreen_button, *scrolled, *head;
+    double speed;
+    int is_fullscreen;
     /* what plays */
     HdePlayer player;             /* the list lives in here too (player.list): one state, not two */
     HdeMediaEngineKind engine;
@@ -194,6 +197,7 @@ static void player_buttons_update(HdeMediaPlayer *p)
     const HdeTrack *now = player_now(p);
     int subbable = has && p->can_seek && now && now->kind == HDE_MEDIA_KIND_VIDEO;
     gtk_widget_set_sensitive(p->subs, subbable);
+    if (p->speed_button) gtk_widget_set_sensitive(p->speed_button, has && p->can_seek);
     gtk_widget_set_tooltip_text(p->subs, subbable ? "Show or hide the subtitles (v)"
                                                   : "mpv shows the subtitles of a video: the ones next to it, and the "
                                                     "ones inside it (v)");
@@ -768,6 +772,146 @@ static void player_repeat_next(HdeMediaPlayer *p)
 
 static void player_on_repeat(GtkWidget *b, gpointer d) { (void)b; player_repeat_next(d); }
 
+static void player_set_speed(HdeMediaPlayer *p, double speed)
+{
+    if (!p) return;
+    if (speed < 0.25) speed = 0.25;
+    if (speed > 4.0) speed = 4.0;
+    p->speed = speed;
+    if (p->speed_button) {
+        char lbl[32];
+        if (fabs(speed - (int)speed) < 0.01) g_snprintf(lbl, sizeof lbl, "%.1fx", speed);
+        else g_snprintf(lbl, sizeof lbl, "%.2gx", speed);
+        gtk_button_set_label(GTK_BUTTON(p->speed_button), lbl);
+    }
+    if (p->can_seek) {
+        char *cmd = g_strdup_printf("{\"command\":[\"set_property\",\"speed\",%.2f]}", speed);
+        mpv_send(p, cmd);
+        g_free(cmd);
+    }
+    player_log("speed %.2fx", speed);
+}
+
+static void player_on_speed(GtkWidget *b, gpointer d)
+{
+    (void)b;
+    HdeMediaPlayer *p = d;
+    static const double steps[] = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 };
+    double cur = p->speed > 0 ? p->speed : 1.0;
+    size_t idx = 2;
+    for (size_t i = 0; i < G_N_ELEMENTS(steps); i++) {
+        if (fabs(cur - steps[i]) < 0.05) { idx = (i + 1) % G_N_ELEMENTS(steps); break; }
+    }
+    player_set_speed(p, steps[idx]);
+}
+
+static void player_toggle_fullscreen(HdeMediaPlayer *p)
+{
+    if (!p || !p->window) return;
+    p->is_fullscreen = !p->is_fullscreen;
+    if (p->is_fullscreen) {
+        gtk_window_fullscreen(GTK_WINDOW(p->window));
+        const HdeTrack *t = player_now(p);
+        if (t && t->kind == HDE_MEDIA_KIND_VIDEO) {
+            if (p->head) gtk_widget_set_visible(p->head, FALSE);
+            if (p->scrolled) gtk_widget_set_visible(p->scrolled, FALSE);
+        }
+    } else {
+        gtk_window_unfullscreen(GTK_WINDOW(p->window));
+        if (p->head) gtk_widget_set_visible(p->head, TRUE);
+        if (p->scrolled) gtk_widget_set_visible(p->scrolled, TRUE);
+    }
+    player_log(p->is_fullscreen ? "fullscreen on" : "fullscreen off");
+}
+
+static void player_on_fullscreen(GtkWidget *b, gpointer d) { (void)b; player_toggle_fullscreen(d); }
+
+static void player_on_open_files(GtkWidget *b, gpointer d)
+{
+    (void)b;
+    HdeMediaPlayer *p = d;
+    if (!p || !p->window) return;
+    GtkWidget *dlg = gtk_file_chooser_dialog_new(
+        "Open Video or Music", GTK_WINDOW(p->window), GTK_FILE_CHOOSER_ACTION_OPEN,
+        "_Cancel", GTK_RESPONSE_CANCEL, "_Open", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dlg), TRUE);
+
+    GtkFileFilter *fv = gtk_file_filter_new();
+    gtk_file_filter_set_name(fv, "Video & Audio Files");
+    gtk_file_filter_add_mime_type(fv, "video/*");
+    gtk_file_filter_add_mime_type(fv, "audio/*");
+    gtk_file_filter_add_pattern(fv, "*.mp4");
+    gtk_file_filter_add_pattern(fv, "*.mkv");
+    gtk_file_filter_add_pattern(fv, "*.webm");
+    gtk_file_filter_add_pattern(fv, "*.avi");
+    gtk_file_filter_add_pattern(fv, "*.mov");
+    gtk_file_filter_add_pattern(fv, "*.mp3");
+    gtk_file_filter_add_pattern(fv, "*.flac");
+    gtk_file_filter_add_pattern(fv, "*.ogg");
+    gtk_file_filter_add_pattern(fv, "*.wav");
+    gtk_file_filter_add_pattern(fv, "*.m3u");
+    gtk_file_filter_add_pattern(fv, "*.m3u8");
+    gtk_file_filter_add_pattern(fv, "*.pls");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), fv);
+
+    GtkFileFilter *fa = gtk_file_filter_new();
+    gtk_file_filter_set_name(fa, "All Files");
+    gtk_file_filter_add_pattern(fa, "*");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), fa);
+
+    const char *vdir = g_get_user_special_dir(G_USER_DIRECTORY_VIDEOS);
+    if (vdir && *vdir) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), vdir);
+
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
+        GSList *files = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dlg));
+        GPtrArray *arr = g_ptr_array_new_with_free_func(g_free);
+        for (GSList *l = files; l; l = l->next)
+            g_ptr_array_add(arr, (char *)l->data);
+        g_slist_free(files);
+        if (arr->len > 0)
+            hde_media_player_open(p, (char *const *)arr->pdata, (int)arr->len, 1);
+        g_ptr_array_free(arr, TRUE);
+    }
+    gtk_widget_destroy(dlg);
+}
+
+static void player_on_drag_data(GtkWidget *w, GdkDragContext *ctx, gint x, gint y,
+                                GtkSelectionData *sel, guint info, guint time, gpointer d)
+{
+    (void)w; (void)x; (void)y; (void)info;
+    HdeMediaPlayer *p = d;
+    char **uris = gtk_selection_data_get_uris(sel);
+    if (!uris) {
+        gtk_drag_finish(ctx, FALSE, FALSE, time);
+        return;
+    }
+    GPtrArray *arr = g_ptr_array_new_with_free_func(g_free);
+    for (int i = 0; uris[i]; i++) {
+        char *fn = g_filename_from_uri(uris[i], NULL, NULL);
+        if (fn) g_ptr_array_add(arr, fn);
+    }
+    g_strfreev(uris);
+    if (arr->len > 0)
+        hde_media_player_open(p, (char *const *)arr->pdata, (int)arr->len, 1);
+    g_ptr_array_free(arr, TRUE);
+    gtk_drag_finish(ctx, TRUE, FALSE, time);
+}
+
+static gboolean player_on_video_click(GtkWidget *w, GdkEventButton *e, gpointer d)
+{
+    (void)w;
+    HdeMediaPlayer *p = d;
+    if (e->button == 1 && e->type == GDK_2BUTTON_PRESS) {
+        player_toggle_fullscreen(p);
+        return TRUE;
+    }
+    if (e->button == 1 && e->type == GDK_BUTTON_PRESS) {
+        player_on_play(NULL, p);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 /* ---------------------------------------------------------------- MPRIS 2 (the session-bus interface used by playerctl) */
 
 #define HDE_MPRIS_ROOT_IFACE "org.mpris.MediaPlayer2"
@@ -1098,10 +1242,16 @@ static void player_on_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointe
     if (i >= 0) player_play_index(p, i);
 }
 
+static void player_on_about(GtkWidget *b, gpointer d);
+
 static gboolean player_on_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
 {
     (void)w;
     HdeMediaPlayer *p = d;
+    if ((ev->state & GDK_CONTROL_MASK) && (ev->keyval == GDK_KEY_o || ev->keyval == GDK_KEY_O)) {
+        player_on_open_files(NULL, p);
+        return TRUE;
+    }
     switch (ev->keyval) {
     case GDK_KEY_space:
     case GDK_KEY_p:          player_on_play(NULL, p); return TRUE;
@@ -1125,8 +1275,18 @@ static gboolean player_on_key(GtkWidget *w, GdkEventKey *ev, gpointer d)
     case GDK_KEY_v:          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->subs), !p->subs_on); return TRUE;
     case GDK_KEY_z:          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->shuffle), !p->player.shuffle); return TRUE;
     case GDK_KEY_r:          player_repeat_next(p); return TRUE;
-    case GDK_KEY_q:
-    case GDK_KEY_Escape:     gtk_widget_destroy(p->window); return TRUE;
+    case GDK_KEY_f:
+    case GDK_KEY_F:
+    case GDK_KEY_F11:        player_toggle_fullscreen(p); return TRUE;
+    case GDK_KEY_bracketleft: player_set_speed(p, (p->speed > 0 ? p->speed : 1.0) - 0.25); return TRUE;
+    case GDK_KEY_bracketright: player_set_speed(p, (p->speed > 0 ? p->speed : 1.0) + 0.25); return TRUE;
+    case GDK_KEY_BackSpace:  player_set_speed(p, 1.0); return TRUE;
+    case GDK_KEY_Escape:
+        if (p->is_fullscreen) { player_toggle_fullscreen(p); return TRUE; }
+        gtk_widget_destroy(p->window);
+        return TRUE;
+    case GDK_KEY_F1:         player_on_about(NULL, p); return TRUE;
+    case GDK_KEY_q:          gtk_widget_destroy(p->window); return TRUE;
     default:                 return FALSE;
     }
 }
@@ -1166,13 +1326,36 @@ static GtkWidget *player_button(const char *label, const char *tip, GCallback cb
     return b;
 }
 
+#ifndef HDE_VERSION
+#define HDE_VERSION "1.0.0"
+#endif
+
+static void player_on_about(GtkWidget *b, gpointer d)
+{
+    (void)b;
+    HdeMediaPlayer *p = d;
+    const char *authors[] = { "Hyggshi OS Research Technology", NULL };
+    gtk_show_about_dialog(p && p->window ? GTK_WINDOW(p->window) : NULL,
+        "program-name", "Hyggshi Video & Media Player",
+        "version", HDE_VERSION,
+        "comments", "Audio and video player with playlist management, MPRIS2 integration, and hardware-accelerated playback for Hyggshi Desktop Environment.",
+        "website", "https://github.com/Hyggshi-OS-Research-Technology/NexWM",
+        "website-label", "NexWM / HDE Repository",
+        "copyright", "Copyright (c) 2024-2026 Hyggshi OS Research Technology",
+        "license-type", GTK_LICENSE_MIT_X11,
+        "authors", authors,
+        "logo-icon-name", "video-x-generic",
+        NULL);
+}
+
 static void player_build_window(HdeMediaPlayer *p)
 {
     p->alive = 1;
+    p->speed = 1.0;
     p->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_default_size(GTK_WINDOW(p->window), 860, 560);
     gtk_window_set_title(GTK_WINDOW(p->window), MEDIA_TITLE);
-    gtk_window_set_icon_name(GTK_WINDOW(p->window), "audio-x-generic");
+    gtk_window_set_icon_name(GTK_WINDOW(p->window), "video-x-generic");
     gtk_application_add_window(p->app, GTK_WINDOW(p->window));
 
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -1180,6 +1363,7 @@ static void player_build_window(HdeMediaPlayer *p)
 
     /* what plays now */
     GtkWidget *head = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    p->head = head;
     gtk_style_context_add_class(gtk_widget_get_style_context(head), "hde-media-player-head");
     p->heading = gtk_label_new("Nothing playing");
     gtk_style_context_add_class(gtk_widget_get_style_context(p->heading), "hde-media-heading");
@@ -1213,7 +1397,9 @@ static void player_build_window(HdeMediaPlayer *p)
     /* the video, when mpv draws it here (hidden for a sound, and everywhere else) */
     p->video = gtk_drawing_area_new();
     gtk_style_context_add_class(gtk_widget_get_style_context(p->video), "hde-media-video");
-    gtk_widget_set_size_request(p->video, -1, 240);
+    gtk_widget_set_size_request(p->video, -1, 260);
+    gtk_widget_add_events(p->video, GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(p->video, "button-press-event", G_CALLBACK(player_on_video_click), p);
     gtk_box_pack_start(GTK_BOX(box), p->video, TRUE, TRUE, 0);
     gtk_widget_set_visible(p->video, FALSE);
 
@@ -1238,6 +1424,7 @@ static void player_build_window(HdeMediaPlayer *p)
     GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
     gtk_style_context_add_class(gtk_widget_get_style_context(bar), GTK_STYLE_CLASS_TOOLBAR);
     gtk_style_context_add_class(gtk_widget_get_style_context(bar), "hde-media-toolbar");
+    p->open_button = player_button("Open…", "Open video or audio files (Ctrl+O)", G_CALLBACK(player_on_open_files), p, bar);
     p->prev = player_button("Previous", "Previous track (Left)", G_CALLBACK(player_on_prev), p, bar);
     p->play = player_button("Play", "Play / pause (Space)", G_CALLBACK(player_on_play), p, bar);
     p->stop = player_button("Stop", "Stop (s)", G_CALLBACK(player_on_stop), p, bar);
@@ -1258,6 +1445,11 @@ static void player_build_window(HdeMediaPlayer *p)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(p->subs), p->subs_on);
     g_signal_connect(p->subs, "toggled", G_CALLBACK(player_on_subs), p);
     gtk_box_pack_start(GTK_BOX(bar), p->subs, FALSE, FALSE, 0);
+
+    p->speed_button = player_button("1.0x", "Playback speed ([ / ] or click)", G_CALLBACK(player_on_speed), p, bar);
+    p->fullscreen_button = player_button("Fullscreen", "Toggle full screen (f / F11 / double-click video)",
+                                         G_CALLBACK(player_on_fullscreen), p, bar);
+    player_button("About", "About Hyggshi Video & Media Player (F1)", G_CALLBACK(player_on_about), p, bar);
 
     /* the volume, to the right */
     GtkWidget *space = gtk_label_new("");
@@ -1281,6 +1473,7 @@ static void player_build_window(HdeMediaPlayer *p)
     gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(p->list), TRUE);   /* one click plays */
     g_signal_connect(p->list, "row-activated", G_CALLBACK(player_on_row_activated), p);
     GtkWidget *scrolled = gtk_scrolled_window_new(NULL, NULL);
+    p->scrolled = scrolled;
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_hexpand(scrolled, TRUE);
     gtk_widget_set_vexpand(scrolled, TRUE);
@@ -1300,6 +1493,11 @@ static void player_build_window(HdeMediaPlayer *p)
     gtk_style_context_add_class(gtk_widget_get_style_context(statusbar), "hde-media-statusbar");
     gtk_box_pack_start(GTK_BOX(statusbar), p->status, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(box), statusbar, FALSE, FALSE, 0);
+
+    /* drag-and-drop video/audio files onto the player window */
+    gtk_drag_dest_set(p->window, GTK_DEST_DEFAULT_ALL, NULL, 0, GDK_ACTION_COPY);
+    gtk_drag_dest_add_uri_targets(p->window);
+    g_signal_connect(p->window, "drag-data-received", G_CALLBACK(player_on_drag_data), p);
 
     g_signal_connect(p->window, "destroy", G_CALLBACK(player_on_destroy), p);
     g_signal_connect(p->window, "delete-event", G_CALLBACK(player_on_delete), p);
@@ -1376,6 +1574,7 @@ HdeMediaPlayer *hde_media_player_new(GtkApplication *app, char *const *paths, in
     p->mpris = hde_mpris_new(&player_mpris_handlers, p);
     gtk_widget_show_all(p->window);
     gtk_widget_set_visible(p->hint, p->engine == HDE_MEDIA_ENGINE_NONE);
+    player_video_update(p);
     if (p->player.list.n > 0 && p->engine != HDE_MEDIA_ENGINE_NONE) player_play_index(p, 0);
     return p;
 }

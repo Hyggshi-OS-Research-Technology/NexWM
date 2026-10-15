@@ -46,27 +46,64 @@ if [ "${1:-}" = "--wayland" ]; then
     if [ -x "$HERE/hde-session" ]; then SESSION="$HERE/hde-session"
     else SESSION="$(command -v hde-session)"; fi
     if [ -z "$SESSION" ]; then echo "hde-start: hde-session not found (HERE=$HERE PATH=$PATH)"; exit 1; fi
-    if [ "${WM_ARG:-}" = "nexwm" ]; then
-        if ! command -v nexwm >/dev/null 2>&1 && [ ! -x "$HERE/nexwm" ]; then
-            echo "hde-start: the NexWM (Wayland) session needs NexWM: $(install_hint nexwm)"
-            exit 1
-        fi
-        set -- --wayland --wm nexwm
-        echo "hde-start: running $SESSION --wayland --wm nexwm (NexWM, HDE's own compositor)"
+    if [ -n "${DISPLAY:-}" ] && [ -z "${HDE_TEST_OUT:-}" ] && [ -z "${WLR_BACKENDS:-}" ]; then
+        # When SDDM started an Xorg server for this session (e.g. xsessions/hde-wayland.desktop on machines without
+        # labwc), Xorg already holds DRM master on this VT; run the HDE session directly on DISPLAY.
+        echo "hde-start: DISPLAY=$DISPLAY is already active; starting HDE session on DISPLAY"
+        shift
     else
-        if ! command -v labwc >/dev/null 2>&1; then
-            echo "hde-start: the HDE (Wayland) session needs the labwc compositor: $(install_hint labwc)"
-            exit 1
+        if [ "${WM_ARG:-}" = "nexwm" ]; then
+            if ! command -v nexwm >/dev/null 2>&1 && [ ! -x "$HERE/nexwm" ]; then
+                echo "hde-start: the NexWM (Wayland) session needs NexWM: $(install_hint nexwm)"
+                exit 1
+            fi
+            set -- --wayland --wm nexwm
+            echo "hde-start: running $SESSION --wayland --wm nexwm (NexWM, HDE's own compositor)"
+        else
+            if ! command -v labwc >/dev/null 2>&1 && ! command -v nexwm >/dev/null 2>&1 && [ ! -x "$HERE/nexwm" ]; then
+                echo "hde-start: the HDE (Wayland) session needs labwc or nexwm: $(install_hint labwc)"
+                exit 1
+            fi
+            set -- --wayland
+            echo "hde-start: running $SESSION --wayland"
         fi
-        set -- --wayland
-        echo "hde-start: running $SESSION --wayland (labwc $(labwc --version 2>/dev/null | head -n1))"
+        if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ]; then
+            XDG_RUNTIME_DIR="/run/user/$(id -u)"
+            if [ ! -d "$XDG_RUNTIME_DIR" ] || [ ! -w "$XDG_RUNTIME_DIR" ]; then
+                XDG_RUNTIME_DIR="/tmp/hde-runtime-$(id -u)"
+                mkdir -p -m 700 "$XDG_RUNTIME_DIR" 2>/dev/null
+                chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null
+            fi
+            export XDG_RUNTIME_DIR
+        fi
+        export WLR_NO_HARDWARE_CURSORS="${WLR_NO_HARDWARE_CURSORS:-1}"
+        export WLR_RENDERER_ALLOW_SOFTWARE="${WLR_RENDERER_ALLOW_SOFTWARE:-1}"
+        export XDG_CURRENT_DESKTOP=HDE XDG_SESSION_DESKTOP=HDE DESKTOP_SESSION=hde-wayland XDG_SESSION_TYPE=wayland
+        unset DISPLAY WAYLAND_DISPLAY GDK_BACKEND GDK_CORE_DEVICE_EVENTS
+        if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+        fi
+        if [ -n "${HDE_TEST_OUT:-}" ] || [ -n "${WLR_BACKENDS:-}" ] || command -v labwc >/dev/null 2>&1; then
+            if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+                exec dbus-run-session -- "$SESSION" "$@"
+            fi
+            exec "$SESSION" "$@"
+        fi
+        if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+            dbus-run-session -- "$SESSION" "$@"
+        else
+            "$SESSION" "$@"
+        fi
+        rc=$?
+        [ "$rc" -eq 0 ] && exit 0
+        echo "hde-start: Wayland compositor exited with status $rc; attempting X11 session fallback"
+        if command -v xinit >/dev/null 2>&1; then
+            VT_ARG=""
+            [ -n "${XDG_VTNR:-}" ] && VT_ARG="vt${XDG_VTNR}"
+            exec xinit "$SESSION" -- :1 $VT_ARG -keeptty -noreset
+        fi
+        exit "$rc"
     fi
-    export XDG_CURRENT_DESKTOP=HDE XDG_SESSION_DESKTOP=HDE DESKTOP_SESSION=hde-wayland XDG_SESSION_TYPE=wayland
-    unset DISPLAY GDK_BACKEND GDK_CORE_DEVICE_EVENTS
-    if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
-        exec dbus-run-session -- "$SESSION" "$@"
-    fi
-    exec "$SESSION" "$@"
 fi
 
 export XDG_CURRENT_DESKTOP=HDE

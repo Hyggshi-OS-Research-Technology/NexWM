@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Weather
+GenericName=Weather Forecast
+Comment=Desktop Weather Forecast, Hourly & 7-Day Outlook, and Atmospheric Conditions for HDE
+Exec=@PREFIX@/bin/hde-weather
+Icon=weather-clear
+Terminal=false
+Categories=GTK;Utility;Geography;Science;
+Keywords=weather;forecast;temperature;rain;wind;humidity;uv;storm;
+StartupNotify=true
+StartupWMClass=hde-weather

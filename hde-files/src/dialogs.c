@@ -1,6 +1,7 @@
 /* dialogs.c — Hyggshi Files: rename, new folder / document, properties, open with, run or display, conflicts,
  * opening files with their application, About, keyboard shortcuts. */
 #include "files.h"
+#include <fnmatch.h>
 #include <gio/gdesktopappinfo.h>
 #include <grp.h>
 #include <pwd.h>
@@ -487,6 +488,77 @@ static GtkWidget *permissions_page(Props *p, GFileInfo *info)
     return grid;
 }
 
+typedef struct {
+    char *path;
+    GtkWidget *md5_lbl;
+    GtkWidget *sha1_lbl;
+    GtkWidget *sha256_lbl;
+    GtkWidget *btn;
+} HashCtx;
+
+static void hash_ctx_free(gpointer d)
+{
+    HashCtx *h = d;
+    if (!h) return;
+    g_free(h->path);
+    g_free(h);
+}
+
+static void on_compute_hashes(GtkButton *b, gpointer d)
+{
+    (void)b;
+    HashCtx *h = d;
+    if (!h || !h->path) return;
+    FILE *fp = fopen(h->path, "rb");
+    if (!fp) {
+        gtk_label_set_text(GTK_LABEL(h->md5_lbl), "Cannot read file");
+        return;
+    }
+    GChecksum *c_md5 = g_checksum_new(G_CHECKSUM_MD5);
+    GChecksum *c_sha1 = g_checksum_new(G_CHECKSUM_SHA1);
+    GChecksum *c_sha256 = g_checksum_new(G_CHECKSUM_SHA256);
+    unsigned char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, fp)) > 0) {
+        g_checksum_update(c_md5, buf, (gssize)n);
+        g_checksum_update(c_sha1, buf, (gssize)n);
+        g_checksum_update(c_sha256, buf, (gssize)n);
+    }
+    fclose(fp);
+    gtk_label_set_text(GTK_LABEL(h->md5_lbl), g_checksum_get_string(c_md5));
+    gtk_label_set_text(GTK_LABEL(h->sha1_lbl), g_checksum_get_string(c_sha1));
+    gtk_label_set_text(GTK_LABEL(h->sha256_lbl), g_checksum_get_string(c_sha256));
+    g_checksum_free(c_md5);
+    g_checksum_free(c_sha1);
+    g_checksum_free(c_sha256);
+    if (h->btn) gtk_button_set_label(GTK_BUTTON(h->btn), "Recompute Checksums");
+}
+
+static GtkWidget *checksums_page(GFile *file)
+{
+    char *path = g_file_get_path(file);
+    if (!path) return NULL;
+    HashCtx *h = g_new0(HashCtx, 1);
+    h->path = path;
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 10);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
+    gtk_container_set_border_width(GTK_CONTAINER(grid), 16);
+    g_object_set_data_full(G_OBJECT(grid), "hash-ctx", h, hash_ctx_free);
+
+    int row = 0;
+    h->md5_lbl = grid_row(grid, &row, "MD5", "Click Compute Checksums below");
+    h->sha1_lbl = grid_row(grid, &row, "SHA-1", "—");
+    h->sha256_lbl = grid_row(grid, &row, "SHA-256", "—");
+
+    h->btn = gtk_button_new_with_label("Compute Checksums");
+    gtk_widget_set_halign(h->btn, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(h->btn, 8);
+    g_signal_connect(h->btn, "clicked", G_CALLBACK(on_compute_hashes), h);
+    gtk_grid_attach(GTK_GRID(grid), h->btn, 1, row++, 1, 1);
+    return grid;
+}
+
 static void on_props_response(GtkDialog *d, int r, gpointer u)
 {
     (void)r; (void)u;
@@ -507,6 +579,7 @@ void files_properties_dialog(FilesWindow *w, GList *files)
     int row = 0;
     char *title;
     GtkWidget *perm_page = NULL;
+    GtkWidget *hash_page = NULL;
     const char *attrs = "standard::*,time::*,unix::*,access::*,owner::*";
     GtkWidget *icon;
     if (n == 1) {
@@ -612,6 +685,8 @@ void files_properties_dialog(FilesWindow *w, GList *files)
             p->can_change = p->uid == getuid() || getuid() == 0;
             perm_page = permissions_page(p, info);
         }
+        if (g_file_is_native(p->file) && !p->is_dir && !g_file_info_get_is_symlink(info))
+            hash_page = checksums_page(p->file);
         char *sz = p->is_dir ? g_strdup("folder") : files_format_size(p->bytes, FALSE);
         files_log("properties: %s: %s, %s", name, type, sz);
         g_free(sz);
@@ -663,10 +738,11 @@ void files_properties_dialog(FilesWindow *w, GList *files)
     gtk_window_set_default_size(GTK_WINDOW(p->dialog), 460, -1);
     g_object_set_data_full(G_OBJECT(p->dialog), "props", p, props_free);
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(p->dialog));
-    if (perm_page) {
+    if (perm_page || hash_page) {
         GtkWidget *nb = gtk_notebook_new();
         gtk_notebook_append_page(GTK_NOTEBOOK(nb), grid, gtk_label_new("General"));
-        gtk_notebook_append_page(GTK_NOTEBOOK(nb), perm_page, gtk_label_new("Permissions"));
+        if (perm_page) gtk_notebook_append_page(GTK_NOTEBOOK(nb), perm_page, gtk_label_new("Permissions"));
+        if (hash_page) gtk_notebook_append_page(GTK_NOTEBOOK(nb), hash_page, gtk_label_new("Checksums"));
         gtk_container_set_border_width(GTK_CONTAINER(nb), 6);
         gtk_box_pack_start(GTK_BOX(content), nb, TRUE, TRUE, 0);
     } else gtk_box_pack_start(GTK_BOX(content), grid, TRUE, TRUE, 0);
@@ -748,20 +824,33 @@ void files_open_with_dialog(FilesWindow *w, GList *files)
     files_log("dialog: Open With");
 }
 
-static const char *find_terminal(const char **exec_flag)
+static char *find_terminal(const char **exec_flag)
 {
     static const struct { const char *prog, *flag; } terms[] = {
         { "hde-cmd", "-e" }, { "x-terminal-emulator", "-e" }, { "gnome-terminal", "--" }, { "xfce4-terminal", "-x" }, { "mate-terminal", "-x" },
         { "tilix", "-e" }, { "konsole", "-e" }, { "lxterminal", "-e" }, { "qterminal", "-e" }, { "terminator", "-x" },
         { "alacritty", "-e" }, { "kitty", NULL }, { "foot", NULL }, { "xterm", "-e" } };
+    char self[4096];
+    ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    char *dir = n > 0 ? g_path_get_dirname((self[n] = '\0', self)) : NULL;
     for (guint i = 0; i < G_N_ELEMENTS(terms); i++) {
+        if (dir) {
+            char *sib = g_build_filename(dir, terms[i].prog, NULL);
+            if (g_file_test(sib, G_FILE_TEST_IS_EXECUTABLE)) {
+                g_free(dir);
+                *exec_flag = terms[i].flag;
+                return sib;
+            }
+            g_free(sib);
+        }
         char *p = g_find_program_in_path(terms[i].prog);
         if (p) {
-            g_free(p);
+            g_free(dir);
             *exec_flag = terms[i].flag;
-            return terms[i].prog;
+            return p;
         }
     }
+    g_free(dir);
     return NULL;
 }
 
@@ -770,11 +859,12 @@ static void run_program(FilesWindow *w, GFile *file, gboolean terminal)
     char *path = g_file_get_path(file);
     GFile *parent = g_file_get_parent(file);
     char *cwd = parent ? g_file_get_path(parent) : NULL;
-    const char *flag = NULL, *term = terminal ? find_terminal(&flag) : NULL;
+    const char *flag = NULL;
+    char *term = terminal ? find_terminal(&flag) : NULL;
     const char *argv[5] = { NULL };
     int i = 0;
     if (terminal && !term) {
-        files_error(GTK_WINDOW(w->window), "No terminal found", "Install a terminal, for example xfce4-terminal.");
+        files_error(GTK_WINDOW(w->window), "No terminal found", "Install a terminal, for example hde-cmd or xfce4-terminal.");
         goto out;
     }
     if (term) {
@@ -790,6 +880,7 @@ static void run_program(FilesWindow *w, GFile *file, gboolean terminal)
         g_clear_error(&e);
     }
 out:
+    g_free(term);
     g_free(cwd);
     if (parent) g_object_unref(parent);
     g_free(path);
@@ -1106,4 +1197,181 @@ void files_shortcuts(GtkWindow *parent)
     g_signal_connect(d, "response", G_CALLBACK(gtk_widget_destroy), NULL);
     gtk_widget_show_all(d);
     files_log("dialog: Keyboard Shortcuts");
+}
+
+/* ------------------------------------------------------------------ Batch Rename & Select by Pattern */
+typedef struct {
+    FilesWindow *w;
+    GList *files;
+    GtkWidget *find_entry;
+    GtkWidget *replace_entry;
+    GtkWidget *prefix_entry;
+    GtkWidget *suffix_entry;
+    GtkWidget *num_check;
+    GtkWidget *preview_lbl;
+} BatchRename;
+
+static char *compute_batch_name(BatchRename *br, const char *orig, int idx)
+{
+    const char *find_s = gtk_entry_get_text(GTK_ENTRY(br->find_entry));
+    const char *rep_s = gtk_entry_get_text(GTK_ENTRY(br->replace_entry));
+    const char *pre_s = gtk_entry_get_text(GTK_ENTRY(br->prefix_entry));
+    const char *suf_s = gtk_entry_get_text(GTK_ENTRY(br->suffix_entry));
+    gboolean num = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(br->num_check));
+
+    const char *dot = strrchr(orig, '.');
+    if (dot == orig) dot = NULL;
+    char *stem = dot ? g_strndup(orig, (gsize)(dot - orig)) : g_strdup(orig);
+    const char *ext = dot ? dot : "";
+
+    if (find_s && *find_s) {
+        gchar **parts = g_strsplit(stem, find_s, -1);
+        g_free(stem);
+        stem = g_strjoinv(rep_s ? rep_s : "", parts);
+        g_strfreev(parts);
+    }
+
+    char *res = num
+        ? g_strdup_printf("%s%s%s_%02d%s", pre_s ? pre_s : "", stem, suf_s ? suf_s : "", idx + 1, ext)
+        : g_strdup_printf("%s%s%s%s", pre_s ? pre_s : "", stem, suf_s ? suf_s : "", ext);
+    g_free(stem);
+    return res;
+}
+
+static void update_batch_preview( GtkWidget *widget, gpointer d)
+{
+    (void)widget;
+    BatchRename *br = d;
+    if (!br || !br->files) return;
+    char *b0 = g_file_get_basename(br->files->data);
+    char *orig = g_filename_display_name(b0);
+    char *next = compute_batch_name(br, orig, 0);
+    char *msg = g_strdup_printf("Example: %s  →  %s", orig, next);
+    gtk_label_set_text(GTK_LABEL(br->preview_lbl), msg);
+    g_free(msg);
+    g_free(next);
+    g_free(orig);
+    g_free(b0);
+}
+
+void files_batch_rename_dialog(FilesWindow *w, GList *files)
+{
+    if (!files) return;
+    if (!files->next) {
+        files_rename_dialog(w, files->data);
+        return;
+    }
+    BatchRename br;
+    memset(&br, 0, sizeof br);
+    br.w = w;
+    br.files = files;
+
+    guint n = g_list_length(files);
+    char *title = g_strdup_printf("Batch Rename %u Items", n);
+    GtkWidget *d = gtk_dialog_new_with_buttons(title, GTK_WINDOW(w->window),
+                                               GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                               "_Cancel", GTK_RESPONSE_CANCEL,
+                                               "_Rename All", GTK_RESPONSE_OK, NULL);
+    g_free(title);
+    gtk_dialog_set_default_response(GTK_DIALOG(d), GTK_RESPONSE_OK);
+
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 8);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
+    gtk_container_set_border_width(GTK_CONTAINER(grid), 16);
+
+    br.find_entry = gtk_entry_new();
+    br.replace_entry = gtk_entry_new();
+    br.prefix_entry = gtk_entry_new();
+    br.suffix_entry = gtk_entry_new();
+    br.num_check = gtk_check_button_new_with_mnemonic("Append _numbered sequence (_01, _02, …)");
+    br.preview_lbl = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(br.preview_lbl), 0);
+    gtk_style_context_add_class(gtk_widget_get_style_context(br.preview_lbl), "dim-label");
+
+    const char *labels[] = { "Find text:", "Replace with:", "Add prefix:", "Add suffix:" };
+    GtkWidget *entries[] = { br.find_entry, br.replace_entry, br.prefix_entry, br.suffix_entry };
+    for (int i = 0; i < 4; i++) {
+        GtkWidget *l = gtk_label_new(labels[i]);
+        gtk_label_set_xalign(GTK_LABEL(l), 1);
+        gtk_widget_set_hexpand(entries[i], TRUE);
+        g_signal_connect(entries[i], "changed", G_CALLBACK(update_batch_preview), &br);
+        gtk_grid_attach(GTK_GRID(grid), l, 0, i, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), entries[i], 1, i, 1, 1);
+    }
+    g_signal_connect(br.num_check, "toggled", G_CALLBACK(update_batch_preview), &br);
+    gtk_grid_attach(GTK_GRID(grid), br.num_check, 0, 4, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), br.preview_lbl, 0, 5, 2, 1);
+
+    update_batch_preview(NULL, &br);
+    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(d))), grid, TRUE, TRUE, 0);
+    gtk_widget_show_all(d);
+
+    if (gtk_dialog_run(GTK_DIALOG(d)) == GTK_RESPONSE_OK) {
+        int idx = 0;
+        for (GList *l = files; l; l = l->next, idx++) {
+            GFile *f = l->data;
+            char *b = g_file_get_basename(f);
+            char *orig = g_filename_display_name(b);
+            char *next = compute_batch_name(&br, orig, idx);
+            if (*next && !strchr(next, '/') && strcmp(orig, next)) {
+                GError *e = NULL;
+                GFile *nf = g_file_set_display_name(f, next, NULL, &e);
+                if (nf) {
+                    files_undo_push_rename(f, nf);
+                    g_object_unref(nf);
+                } else {
+                    g_clear_error(&e);
+                }
+            }
+            g_free(next);
+            g_free(orig);
+            g_free(b);
+        }
+        if (w->pane) pane_reload(w->pane);
+    }
+    gtk_widget_destroy(d);
+}
+
+void files_select_pattern_dialog(FilesWindow *w)
+{
+    if (!w || !w->pane) return;
+    GtkWidget *d = gtk_dialog_new_with_buttons("Select Items Matching Pattern", GTK_WINDOW(w->window),
+                                               GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                               "_Cancel", GTK_RESPONSE_CANCEL,
+                                               "_Select", GTK_RESPONSE_OK, NULL);
+    gtk_dialog_set_default_response(GTK_DIALOG(d), GTK_RESPONSE_OK);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 16);
+    GtkWidget *lbl = gtk_label_new("Pattern (for example *.txt, *.png or report*):");
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0);
+    GtkWidget *entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(entry), "*");
+    gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+    gtk_box_pack_start(GTK_BOX(box), lbl, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), entry, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(d))), box, TRUE, TRUE, 0);
+    gtk_widget_show_all(d);
+
+    if (gtk_dialog_run(GTK_DIALOG(d)) == GTK_RESPONSE_OK) {
+        const char *pat = gtk_entry_get_text(GTK_ENTRY(entry));
+        if (pat && *pat && w->pane && w->pane->sort) {
+            GList *matches = NULL;
+            GtkTreeIter iter;
+            if (gtk_tree_model_get_iter_first(w->pane->sort, &iter)) {
+                do {
+                    GFile *f = NULL;
+                    char *name = NULL;
+                    gtk_tree_model_get(w->pane->sort, &iter, COL_FILE, &f, COL_NAME, &name, -1);
+                    if (f && name && fnmatch(pat, name, 0) == 0)
+                        matches = g_list_prepend(matches, g_object_ref(f));
+                    if (f) g_object_unref(f);
+                    g_free(name);
+                } while (gtk_tree_model_iter_next(w->pane->sort, &iter));
+            }
+            pane_select_files(w->pane, matches);
+            files_list_free(matches);
+        }
+    }
+    gtk_widget_destroy(d);
 }

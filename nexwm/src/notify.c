@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -53,7 +54,7 @@ static void append_gvariant_string(char *out, size_t capacity, const char *text)
     out[used] = '\0';
 }
 
-void nexwm_notify_app_unresponsive(const char *title)
+void nexwm_notify_app_unresponsive_ex(const char *title, unsigned long xid, int pid)
 {
     char escaped_title[384];
     char body[512];
@@ -64,29 +65,65 @@ void nexwm_notify_app_unresponsive(const char *title)
     append_gvariant_string(summary_argument, sizeof summary_argument, "Application not responding");
     append_gvariant_string(body_argument, sizeof body_argument, body);
 
-    pid_t pid = fork();
-    if (pid < 0) {
+    pid_t npid = fork();
+    if (npid < 0) {
         fprintf(stderr, "nexwm: warning: cannot start the unresponsive-application notification: %s\n",
                 strerror(errno));
-        return;
+    } else if (npid == 0) {
+        (void)setsid();
+        int null_fd = open("/dev/null", O_RDWR);
+        if (null_fd >= 0) {
+            (void)dup2(null_fd, STDIN_FILENO);
+            (void)dup2(null_fd, STDOUT_FILENO);
+            (void)dup2(null_fd, STDERR_FILENO);
+            if (null_fd > STDERR_FILENO) close(null_fd);
+        }
+        execlp("notify-send", "notify-send", "--app-name=NexWM", "--icon=dialog-warning",
+               "--urgency=critical", "--", "Application not responding", body, (char *)NULL);
+        if (errno == ENOENT) {
+            execlp("gdbus", "gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+                   "--object-path", "/org/freedesktop/Notifications", "--method",
+                   "org.freedesktop.Notifications.Notify", "NexWM", "0", "dialog-warning",
+                   summary_argument, body_argument, "[]", "{}", "-1", (char *)NULL);
+        }
+        _exit(127);
     }
-    if (pid != 0) return;
 
-    (void)setsid();
-    int null_fd = open("/dev/null", O_RDWR);
-    if (null_fd >= 0) {
-        (void)dup2(null_fd, STDIN_FILENO);
-        (void)dup2(null_fd, STDOUT_FILENO);
-        (void)dup2(null_fd, STDERR_FILENO);
-        if (null_fd > STDERR_FILENO) close(null_fd);
+    /* Also open the interactive "Application Is Not Responding" dialog (Wait / Force Quit) in real sessions */
+    if (!getenv("NEXWM_NOTIFY_LOG") && !getenv("HDE_TEST_OUT")) {
+        pid_t dpid = fork();
+        if (dpid == 0) {
+            (void)setsid();
+            int null_fd = open("/dev/null", O_RDWR);
+            if (null_fd >= 0) {
+                (void)dup2(null_fd, STDIN_FILENO);
+                (void)dup2(null_fd, STDOUT_FILENO);
+                (void)dup2(null_fd, STDERR_FILENO);
+                if (null_fd > STDERR_FILENO) close(null_fd);
+            }
+            char xid_buf[32], pid_buf[32];
+            snprintf(xid_buf, sizeof xid_buf, "0x%lx", xid);
+            snprintf(pid_buf, sizeof pid_buf, "%d", pid);
+            const char *app_title = (title && *title) ? title : "An application";
+            char self[4096];
+            ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+            if (n > 0) {
+                self[n] = '\0';
+                char *slash = strrchr(self, '/');
+                if (slash) {
+                    snprintf(slash + 1, sizeof self - (size_t)(slash + 1 - self), "hde-settings");
+                    execl(self, "hde-settings", "--unresponsive-dialog", "--title", app_title,
+                          "--xid", xid_buf, "--pid", pid_buf, (char *)NULL);
+                }
+            }
+            execlp("hde-settings", "hde-settings", "--unresponsive-dialog", "--title", app_title,
+                   "--xid", xid_buf, "--pid", pid_buf, (char *)NULL);
+            _exit(127);
+        }
     }
-    execlp("notify-send", "notify-send", "--app-name=NexWM", "--icon=dialog-warning",
-           "--urgency=critical", "--", "Application not responding", body, (char *)NULL);
-    if (errno == ENOENT) {
-        execlp("gdbus", "gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
-               "--object-path", "/org/freedesktop/Notifications", "--method",
-               "org.freedesktop.Notifications.Notify", "NexWM", "0", "dialog-warning",
-               summary_argument, body_argument, "[]", "{}", "-1", (char *)NULL);
-    }
-    _exit(127);
+}
+
+void nexwm_notify_app_unresponsive(const char *title)
+{
+    nexwm_notify_app_unresponsive_ex(title, 0, 0);
 }

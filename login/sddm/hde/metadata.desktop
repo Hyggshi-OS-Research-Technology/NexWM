@@ -4,7 +4,7 @@ Description=The login screen of the Hyggshi Desktop Environment (HDE): the HDE l
  session chooser (HDE, HDE (Wayland), NexWM, ...), the keyboard layout and the power buttons, on a dark background
  with HDE's accent colour. Written for the Qt 5 and the Qt 6 greeter.
 Author=Hyggshi OS Research Technology
-Copyright=(c) 2025 NexWM Contributors
+Copyright=(c) 2024-2026 Hyggshi OS Research Technology
 License=MIT
 Type=sddm-theme
 Version=1.0

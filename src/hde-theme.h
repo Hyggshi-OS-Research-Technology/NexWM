@@ -32,11 +32,15 @@ typedef struct {
     char *font;             /* NULL = unchanged */
     char *accent;           /* never NULL: #rrggbb */
     gboolean accent_auto;   /* accent = the colour of the GTK theme ("Automatic", the default) */
+    gboolean enable_animations; /* TRUE by default: desktop, window & GTK widget animations */
+    int animation_speed;    /* 0 = Off, 1 = Fast (100ms), 2 = Normal (160ms), 3 = Slow (260ms) */
 } HdeThemeInfo;
 
 char    *hde_settings_ini_path(void);
 void     hde_theme_info_load(HdeThemeInfo *info);
 void     hde_theme_info_clear(HdeThemeInfo *info);
+gboolean hde_theme_animations_enabled(void);
+int      hde_theme_animation_duration_ms(void);
 
 /* The selection colour of the GTK theme in use (theme_selected_bg_color) as #rrggbb, made dark enough for white text
  * on it; NULL when GTK has no display. hde_theme_info_load() uses it for the Automatic accent once the process has
@@ -69,5 +73,19 @@ gchar  **hde_theme_list_gtk_themes(void);
 gchar  **hde_theme_list_icon_themes(void);
 /* TRUE if the theme name looks like a dark variant (…-dark, …-Dark, …-darker). */
 gboolean hde_theme_name_is_dark(const char *name);
+
+#define HDE_BUILTIN_ICON_THEME "Hyggshi-Icons"
+
+/* TRUE if the OS has at least one system icon theme installed (e.g. Adwaita, Papirus, breeze, Yaru, Mint-Y). */
+gboolean    hde_theme_has_system_icon_theme(void);
+/* TRUE if a specific icon theme name is installed on the system or user icon directories. */
+gboolean    hde_theme_icon_theme_exists(const char *name);
+/* Best available icon theme on this OS (prefers Adwaita, Papirus, Yaru, breeze, or falls back to Hyggshi-Icons); free with g_free. */
+char       *hde_theme_best_icon_theme(void);
+/* Ensure the built-in Hyggshi-Icons SVG icon theme is installed in $XDG_DATA_HOME/icons/Hyggshi-Icons; returns its name. */
+const char *hde_theme_ensure_icon_theme(void);
+/* Automatically provision fallback icons and install an OS icon theme package (e.g. "adwaita-icon-theme",
+ * "papirus-icon-theme", "breeze-icon-theme") when the OS lacks an icon theme or when requested by the user. */
+gboolean    hde_theme_auto_install_icon_theme(const char *pkg, gboolean interactive, char **status_out);
 
 #endif

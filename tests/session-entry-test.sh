@@ -39,9 +39,15 @@ FAILS=0
 # ---- 1. the files the login screen reads -----------------------------------------------------------------------
 entry() { sed -n "s/^$2=//p" "$1" | head -n1; }               # one key of a desktop entry
 
-for f in data/nexwm.desktop data/nexwm-wayland.desktop data/hde-wayland.desktop; do
+for f in data/hde.desktop data/nexwm.desktop data/nexwm-wayland.desktop data/hde-wayland.desktop; do
     if [ ! -f "$CASE/$f" ]; then fail "$f is there"; continue; fi
     eq "$f: it is an application (the login screen shows it)" "Application" "$(entry "$CASE/$f" Type)"
+done
+for f in data/hde.desktop data/hde-wayland.desktop; do
+    hasnt "$f: visible in SDDM session chooser (not hidden by NoDisplay=true)" "NoDisplay=true" "$(cat "$CASE/$f")"
+done
+for f in data/nexwm.desktop data/nexwm-wayland.desktop; do
+    has "$f: hidden from SDDM login session chooser (NoDisplay=true)" "NoDisplay=true" "$(cat "$CASE/$f")"
 done
 
 x11=$(cat "$CASE/data/nexwm.desktop" 2>/dev/null)
@@ -57,9 +63,9 @@ has "and it is only offered when NexWM is installed" "nexwm" "$(entry "$CASE/dat
 has "it says what it is on the login screen" "NexWM (Wayland)" "$wl"
 
 labwc=$(entry "$CASE/data/hde-wayland.desktop" Exec)
-has "HDE (Wayland) is still the labwc session (labwc is not removed)" "--wayland" "$labwc"
+has "HDE (Wayland) is still the Wayland session (--wayland)" "--wayland" "$labwc"
 hasnt "and it does not ask for another compositor" "--wm" "$labwc"
-has "and the login screen only offers it with labwc installed" "labwc" "$(entry "$CASE/data/hde-wayland.desktop" TryExec)"
+has "and the login screen offers it whenever hde-session is installed" "hde-session" "$(entry "$CASE/data/hde-wayland.desktop" TryExec)"
 
 mk_install=$(sed -n '/^install:/,/^uninstall:/p' "$CASE/Makefile" 2>/dev/null)
 mk_uninstall=$(sed -n '/^uninstall:/,$p' "$CASE/Makefile" 2>/dev/null)

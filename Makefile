@@ -148,7 +148,7 @@ SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-blue
              src/hde-theme.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-sysinfo.c \
              src/hde-settings-panel.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c src/hde-wl.c \
              src/hde-settings-wayland.c src/hde-settings-power.c src/hde-power.c src/hde-profiles.c src/hde-run.c \
-             src/hde-settings-peripherals.c src/hde-measure.c src/hde-idle-core.c
+             src/hde-settings-peripherals.c src/hde-measure.c src/hde-idle-core.c src/hde-choose.c
 # Hyggshi Files, the file manager (its own folder: hde-files/, which also has a Makefile to build it alone).
 # src/hde-udisks.c + src/hde-disks.c are the "Drives" list in its sidebar: the USB sticks, the cards and the
 # discs, read from udisks2 instead of through a GVfs volume monitor.
@@ -169,14 +169,17 @@ NEXWM_SRC=$(wildcard nexwm/src/*.c)
 NEXWM_HEADERS=$(wildcard nexwm/src/*.h)
 
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media \
-         hde-choose hde-cmd nexwm hde-lock hde-idle hde-automount hde-keyring
+         hde-choose hde-cmd hde-clock hde-camera hde-calc hde-editor hde-resources hde-partition hde-weather \
+         hde-calendar hde-logs nexwm hde-lock hde-idle hde-automount hde-keyring
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
 
 # The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
 # (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
 components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd $(BUILD)/nexwm \
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd \
+            $(BUILD)/hde-clock $(BUILD)/hde-camera $(BUILD)/hde-calc $(BUILD)/hde-editor $(BUILD)/hde-resources \
+            $(BUILD)/hde-partition $(BUILD)/hde-weather $(BUILD)/hde-calendar $(BUILD)/hde-logs $(BUILD)/nexwm \
             $(HDE_LOCK_TARGET) $(IDLE_TARGET) $(AUTOMOUNT_TARGET) $(KEYRING_TARGET)
 
 # hde-idle: turns the screen off, locks the session and puts the computer to sleep when the user is away
@@ -256,6 +259,45 @@ $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD
 $(BUILD)/hde-media: $(MEDIA_SRC) hde-media/src/media.h hde-media/src/viewer.h hde-media/src/player.h hde-media/src/playlist.h \
                     hde-media/src/engine.h hde-media/src/mpris.h src/hde-theme.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-media/src -Isrc -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Clock (src/hde-clock.c): World Clock, Alarms, Stopwatch, and Timer
+$(BUILD)/hde-clock: src/hde-clock.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Camera (src/hde-camera.c): Webcam photo & video capture with live filters and timer
+$(BUILD)/hde-camera: src/hde-camera.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Calculator (src/hde-calc.c + src/hde-calc-core.c): Scientific, Standard, Programmer & Unit Converter
+$(BUILD)/hde-calc: src/hde-calc.c src/hde-calc-core.c src/hde-calc-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Text Editor (src/hde-editor.c): Simple, beginner-friendly text editor
+$(BUILD)/hde-editor: src/hde-editor.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Resources (src/hde-resources.c): System resource monitor & process/application controller
+$(BUILD)/hde-resources: src/hde-resources.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) $(GLIBX_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(X11_LIBS) -lm
+# Hyggshi Partition Manager (src/hde-partition.c): Disk & partition management utility
+$(BUILD)/hde-partition: src/hde-partition.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Weather (src/hde-weather.c + src/hde-weather-core.c): Weather forecast & atmospheric monitor
+$(BUILD)/hde-weather: src/hde-weather.c src/hde-weather-core.c src/hde-weather-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Calendar (src/hde-calendar.c + src/hde-calendar-core.c): Desktop calendar, holidays & event planner
+$(BUILD)/hde-calendar: src/hde-calendar.c src/hde-calendar-core.c src/hde-calendar-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Logs (src/hde-logs.c + src/hde-logs-core.c): System, kernel & session log viewer
+$(BUILD)/hde-logs: src/hde-logs.c src/hde-logs-core.c src/hde-logs-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Calculator engine unit tests (tests/calc-test.c)
+$(BUILD)/calc-test: tests/calc-test.c src/hde-calc-core.c src/hde-calc-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+# Weather engine unit tests (tests/weather-test.c)
+$(BUILD)/weather-test: tests/weather-test.c src/hde-weather-core.c src/hde-weather-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+# Calendar engine unit tests (tests/calendar-test.c)
+$(BUILD)/calendar-test: tests/calendar-test.c src/hde-calendar-core.c src/hde-calendar-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+# Logs engine unit tests (tests/logs-test.c)
+$(BUILD)/logs-test: tests/logs-test.c src/hde-logs-core.c src/hde-logs-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^)
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \
                         src/hde-randr.h src/hde-brightness.h src/hde-build.h $(VERSION_H) | $(BUILD)
@@ -383,7 +425,8 @@ backend/wayland/wayland_backend.o: src/hde-commands.h
 # (also inside a minimal Fedora, see tests/fedora-test.sh --base)
 UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(BUILD)/measure-test $(BUILD)/lock-core-test \
             $(BUILD)/idle-test $(BUILD)/disks-test $(BUILD)/keyring-test $(BUILD)/peek-test $(BUILD)/switch-test \
-            $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test $(BUILD)/cmd-vt-test \
+            $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test \
+            $(BUILD)/cmd-vt-test $(BUILD)/calc-test $(BUILD)/weather-test $(BUILD)/calendar-test $(BUILD)/logs-test \
             tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh tests/arch-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
@@ -453,10 +496,12 @@ APPS_DIR ?= /usr/share/applications
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(XSESSIONS) $(DESTDIR)$(APPS_DIR)
 	install -m755 $(BUILD)/hde-session $(DESTDIR)$(PREFIX)/bin/hde-session
-	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd; do \
+	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd \
+	         hde-clock hde-camera hde-calc hde-editor hde-resources hde-partition hde-weather hde-calendar hde-logs; do \
 	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
 	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
+	install -m755 data/hde-start-wayland $(DESTDIR)$(PREFIX)/bin/hde-start-wayland
 	@if [ -x $(BUILD)/hde-lock ]; then install -m755 $(BUILD)/hde-lock $(DESTDIR)$(PREFIX)/bin/hde-lock; \
 	 else echo "NOTE: hde-lock was not built (needs pkg-config cairo and libxcb1-dev, or wayland-client + xkbcommon, and libpam0g-dev for the password check)"; fi
 	@if [ -x $(BUILD)/hde-idle ]; then install -m755 $(BUILD)/hde-idle $(DESTDIR)$(PREFIX)/bin/hde-idle; \
@@ -476,20 +521,44 @@ install: all
 	# nexwm has no compositor yet, so the entry works everywhere (labwc stays the compositor of "HDE (Wayland)")
 	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
 	chmod 644 $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
+	rm -f $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true
 	install -m644 data/hde-portals.conf $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-	@command -v labwc >/dev/null 2>&1 || echo "NOTE: the HDE (Wayland) session appears on the login screen once labwc is installed (sudo apt install labwc)"
+	@if [ -z "$(DESTDIR)" ] && [ "$$(id -u)" = 0 ] && ! command -v labwc >/dev/null 2>&1; then \
+	  echo "Installing labwc Wayland compositor for HDE (Wayland)..."; \
+	  if command -v apt-get >/dev/null 2>&1; then \
+	    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland || \
+	    (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland) || true; \
+	  elif command -v dnf >/dev/null 2>&1; then dnf install -y labwc xorg-x11-server-Xwayland || true; \
+	  elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm --needed labwc xorg-xwayland || true; \
+	  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install labwc xwayland || true; \
+	  fi; \
+	fi
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde.desktop > $(DESTDIR)$(XSESSIONS)/hde.desktop
 	# "NexWM" on the login screen: the HDE session with NexWM as its window manager (hde-start --wm nexwm)
 	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm.desktop > $(DESTDIR)$(XSESSIONS)/nexwm.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hyggshi-settings.desktop > $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-support.desktop > $(DESTDIR)$(APPS_DIR)/hde-support.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-screenshot.desktop > $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-clock.desktop > $(DESTDIR)$(APPS_DIR)/hde-clock.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-camera.desktop > $(DESTDIR)$(APPS_DIR)/hde-camera.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-calc.desktop > $(DESTDIR)$(APPS_DIR)/hde-calc.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-editor.desktop > $(DESTDIR)$(APPS_DIR)/hde-editor.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-resources.desktop > $(DESTDIR)$(APPS_DIR)/hde-resources.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-partition.desktop > $(DESTDIR)$(APPS_DIR)/hde-partition.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-weather.desktop > $(DESTDIR)$(APPS_DIR)/hde-weather.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-calendar.desktop > $(DESTDIR)$(APPS_DIR)/hde-calendar.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-logs.desktop > $(DESTDIR)$(APPS_DIR)/hde-logs.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-files/hde-files.desktop > $(DESTDIR)$(APPS_DIR)/hde-files.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-media/hde-media.desktop > $(DESTDIR)$(APPS_DIR)/hde-media.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' hde-media/hde-video.desktop > $(DESTDIR)$(APPS_DIR)/hde-video.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-cmd/hde-cmd.desktop > $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop
 	install -m644 hde-files/hde-mimeapps.list $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	chmod 644 $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
-	    $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
-	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-support.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hde-clock.desktop $(DESTDIR)$(APPS_DIR)/hde-camera.desktop $(DESTDIR)$(APPS_DIR)/hde-calc.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hde-editor.desktop $(DESTDIR)$(APPS_DIR)/hde-resources.desktop $(DESTDIR)$(APPS_DIR)/hde-partition.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hde-weather.desktop $(DESTDIR)$(APPS_DIR)/hde-calendar.desktop $(DESTDIR)$(APPS_DIR)/hde-logs.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-video.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop
 	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
 	# the HDE login screen (SDDM theme, login/sddm/): the files, and hde-login to install/choose it on a running
@@ -500,6 +569,14 @@ install: all
 	cp -r login/sddm/$(SDDM_THEME)/assets $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)/assets
 	chmod -R a+rX $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
 	install -m755 login/sddm/install.sh $(DESTDIR)$(PREFIX)/bin/hde-login
+	@if [ -z "$(DESTDIR)" ] && [ "$$(id -u)" = 0 ]; then \
+	  if [ "$(PREFIX)" = "/usr/local" ] && { [ -x /usr/bin/hde-session ] || [ -x /usr/bin/hde-settings ]; }; then \
+	    for b in $(PROGRAMS) hde-start hde-start-wayland hde-login; do \
+	      if [ -x $(PREFIX)/bin/$$b ]; then install -m755 $(PREFIX)/bin/$$b /usr/bin/$$b; fi; \
+	    done; \
+	  fi; \
+	  sh login/sddm/install.sh || true; \
+	fi
 	@command -v sddm >/dev/null 2>&1 || echo "NOTE: the HDE login screen needs SDDM (sudo apt install sddm / sudo dnf install sddm), then: sudo hde-login"
 # To see a new build WITHOUT LOGGING OUT:
 #   make dev                     restart desktop+panel+hotkeys+xsettings from ./build (no install needed)
@@ -518,10 +595,13 @@ dev: all
 reload:
 	$(PREFIX)/bin/hde-session restart
 uninstall:
-	for b in $(PROGRAMS) hde-start; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
-	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
-	      $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop
-	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop \
+	for b in $(PROGRAMS) hde-start hde-start-wayland; do rm -f $(DESTDIR)$(PREFIX)/bin/$$b; done
+	rm -f $(DESTDIR)$(XSESSIONS)/hde.desktop $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop $(DESTDIR)$(XSESSIONS)/nexwm.desktop \
+	      $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-support.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
+	      $(DESTDIR)$(APPS_DIR)/hde-clock.desktop $(DESTDIR)$(APPS_DIR)/hde-camera.desktop $(DESTDIR)$(APPS_DIR)/hde-calc.desktop \
+	      $(DESTDIR)$(APPS_DIR)/hde-editor.desktop $(DESTDIR)$(APPS_DIR)/hde-resources.desktop $(DESTDIR)$(APPS_DIR)/hde-partition.desktop \
+	      $(DESTDIR)$(APPS_DIR)/hde-weather.desktop $(DESTDIR)$(APPS_DIR)/hde-calendar.desktop $(DESTDIR)$(APPS_DIR)/hde-logs.desktop
+	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-video.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -rf $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)

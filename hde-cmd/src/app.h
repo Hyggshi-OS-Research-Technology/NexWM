@@ -7,6 +7,8 @@ typedef struct {
     const char *title;
     char **command;        /* NULL means the user's interactive shell */
     int use_vte;           /* opt-in; the built-in VT engine is the normal backend */
+    int initial_columns;   /* 0 means default (92) */
+    int initial_rows;      /* 0 means default (26) */
 } HdeCmdOptions;
 
 int hde_cmd_ui_run(const HdeCmdOptions *options, const char *program_name);

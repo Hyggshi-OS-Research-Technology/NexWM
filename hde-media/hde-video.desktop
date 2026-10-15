@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Hyggshi Video
+GenericName=Video Player
+Comment=Watch videos, movies, and playlists on HDE
+Exec=@PREFIX@/bin/hde-media --video %U
+Icon=video-x-generic
+Terminal=false
+Categories=GTK;AudioVideo;Video;Player;
+Keywords=video;movie;film;mp4;mkv;webm;avi;mov;player;
+MimeType=video/mp4;video/x-matroska;video/webm;video/x-msvideo;video/quicktime;video/mpeg;video/ogg;audio/x-mpegurl;audio/x-scpls;
+StartupNotify=true
+StartupWMClass=hde-media

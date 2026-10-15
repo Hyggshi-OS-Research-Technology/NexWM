@@ -11,6 +11,7 @@
  * the gnome-themes-extra package is not installed.
  */
 #include "hde-settings.h"
+#include "hde-distro.h"
 #include "hde-theme.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -355,6 +356,78 @@ static void on_icons(GtkComboBox *c, gpointer d)
     cfg_commit(kf);
     write_system_now();
     settings_status("Icon theme: %s", id && *id ? id : "default");
+}
+
+static void refresh_icon_combo(const char *select_theme)
+{
+    if (!icon_combo) return;
+    loading = TRUE;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(icon_combo));
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), "", "Default");
+    char *cur_icons = select_theme ? g_strdup(select_theme) : cfg_get_string("icon_theme_name", "");
+    if (!*cur_icons && !hde_theme_has_system_icon_theme()) {
+        g_free(cur_icons);
+        cur_icons = g_strdup(HDE_BUILTIN_ICON_THEME);
+    }
+    gchar **icons = hde_theme_list_icon_themes();
+    for (int i = 0; icons && icons[i]; i++)
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), icons[i], icons[i]);
+    if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(icon_combo), cur_icons))
+        gtk_combo_box_set_active(GTK_COMBO_BOX(icon_combo), 0);
+    g_strfreev(icons);
+    g_free(cur_icons);
+    loading = FALSE;
+}
+
+typedef struct {
+    const char *pkg;
+    const char *theme_name;
+    int ticks;
+} IconInstallPoll;
+
+static gboolean poll_icon_install(gpointer d)
+{
+    IconInstallPoll *p = d;
+    p->ticks++;
+    if (hde_theme_icon_theme_exists(p->theme_name)) {
+        cfg_set_string("icon_theme_name", p->theme_name);
+        write_system_now();
+        refresh_icon_combo(p->theme_name);
+        settings_status("Installed and activated icon theme: %s", p->theme_name);
+        g_free(p);
+        return G_SOURCE_REMOVE;
+    }
+    if (p->ticks >= 60) {
+        refresh_icon_combo(NULL);
+        g_free(p);
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static void on_install_icon_pkg(GtkButton *b, gpointer d)
+{
+    (void)b;
+    const char *pkg = d;
+    const char *theme_name = !g_strcmp0(pkg, "papirus-icon-theme") ? "Papirus"
+                           : !g_strcmp0(pkg, "breeze-icon-theme") ? "breeze" : "Adwaita";
+    if (hde_theme_icon_theme_exists(theme_name)) {
+        cfg_set_string("icon_theme_name", theme_name);
+        write_system_now();
+        refresh_icon_combo(theme_name);
+        settings_status("Icon theme %s is already installed — activated", theme_name);
+        return;
+    }
+    char *status = NULL;
+    hde_theme_auto_install_icon_theme(pkg, TRUE, &status);
+    if (status) {
+        settings_status("%s", status);
+        g_free(status);
+    }
+    IconInstallPoll *p = g_new0(IconInstallPoll, 1);
+    p->pkg = pkg;
+    p->theme_name = theme_name;
+    g_timeout_add(2000, poll_icon_install, p);
 }
 
 static void on_font(GtkFontButton *b, gpointer d)
@@ -718,6 +791,51 @@ static void on_external_change(gpointer d)
     loading = FALSE;
 }
 
+static void sync_nexwm_animation_ms(int ms)
+{
+    char *dir = g_build_filename(g_get_user_config_dir(), "hde", NULL);
+    g_mkdir_with_parents(dir, 0755);
+    char *path = g_build_filename(dir, "nexwm.ini", NULL);
+    GKeyFile *kf = g_key_file_new();
+    g_key_file_load_from_file(kf, path, G_KEY_FILE_KEEP_COMMENTS, NULL);
+    g_key_file_set_integer(kf, "nexwm", "animation_ms", ms);
+    g_key_file_save_to_file(kf, path, NULL);
+    g_key_file_free(kf);
+    g_free(path);
+    g_free(dir);
+}
+
+static void on_animations_toggled(GObject *sw, GParamSpec *ps, gpointer d)
+{
+    (void)ps;
+    if (loading) return;
+    gboolean on = gtk_switch_get_active(GTK_SWITCH(sw));
+    GtkWidget *speed_combo = d;
+    if (speed_combo) gtk_widget_set_sensitive(speed_combo, on);
+    cfg_set_bool("enable_animations", on);
+    int spd = speed_combo ? gtk_combo_box_get_active(GTK_COMBO_BOX(speed_combo)) + 1 : cfg_get_int("animation_speed", 2);
+    spd = CLAMP(spd, 1, 3);
+    int ms = on ? (spd == 1 ? 100 : (spd == 3 ? 260 : 160)) : 0;
+    sync_nexwm_animation_ms(ms);
+    write_system_now();
+    settings_status(on ? "Visual effects and animations enabled." : "Visual effects and animations disabled.");
+}
+
+static void on_animation_speed_changed(GtkComboBox *c, gpointer d)
+{
+    if (loading) return;
+    GtkWidget *sw = d;
+    gboolean on = sw ? gtk_switch_get_active(GTK_SWITCH(sw)) : cfg_get_bool("enable_animations", TRUE);
+    int spd = CLAMP(gtk_combo_box_get_active(c) + 1, 1, 3);
+    cfg_set_int("animation_speed", spd);
+    int ms = on ? (spd == 1 ? 100 : (spd == 3 ? 260 : 160)) : 0;
+    sync_nexwm_animation_ms(ms);
+    write_system_now();
+    settings_status(spd == 1 ? "Animation speed: Fast (100 ms)"
+                  : spd == 3 ? "Animation speed: Slow (260 ms)"
+                             : "Animation speed: Normal (160 ms)");
+}
+
 GtkWidget *page_appearance_new(void)
 {
     loading = TRUE;
@@ -832,16 +950,25 @@ GtkWidget *page_appearance_new(void)
     gtk_box_pack_start(GTK_BOX(advanced), row_box("GTK theme", "Light and dark variants are selected automatically.", theme_combo), FALSE, FALSE, 0);
 
     icon_combo = gtk_combo_box_text_new();
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), "", "Default");
-    char *cur_icons = cfg_get_string("icon_theme_name", "");
-    gchar **icons = hde_theme_list_icon_themes();
-    for (int i = 0; icons && icons[i]; i++) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(icon_combo), icons[i], icons[i]);
-    if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(icon_combo), cur_icons))
-        gtk_combo_box_set_active(GTK_COMBO_BOX(icon_combo), 0);
-    g_strfreev(icons);
-    g_free(cur_icons);
+    refresh_icon_combo(NULL);
     g_signal_connect(icon_combo, "changed", G_CALLBACK(on_icons), NULL);
-    gtk_box_pack_start(GTK_BOX(advanced), row_box("Icon theme", "Icon set used by GTK applications.", icon_combo), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(advanced), row_box("Icon theme", "Icon set used by GTK applications (auto-falls back to Hyggshi-Icons if no OS icon theme is installed).", icon_combo), FALSE, FALSE, 0);
+
+    GtkWidget *icon_pkg_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *btn_adw = gtk_button_new_with_label("Adwaita");
+    GtkWidget *btn_pap = gtk_button_new_with_label("Papirus");
+    GtkWidget *btn_brz = gtk_button_new_with_label("Breeze");
+    gtk_widget_set_tooltip_text(btn_adw, "Install or activate adwaita-icon-theme");
+    gtk_widget_set_tooltip_text(btn_pap, "Install or activate papirus-icon-theme");
+    gtk_widget_set_tooltip_text(btn_brz, "Install or activate breeze-icon-theme");
+    g_signal_connect(btn_adw, "clicked", G_CALLBACK(on_install_icon_pkg), (gpointer)"adwaita-icon-theme");
+    g_signal_connect(btn_pap, "clicked", G_CALLBACK(on_install_icon_pkg), (gpointer)"papirus-icon-theme");
+    g_signal_connect(btn_brz, "clicked", G_CALLBACK(on_install_icon_pkg), (gpointer)"breeze-icon-theme");
+    gtk_box_pack_start(GTK_BOX(icon_pkg_box), btn_adw, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(icon_pkg_box), btn_pap, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(icon_pkg_box), btn_brz, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(advanced), row_box("Install system icon themes",
+        "One-click install and activate standard icon theme packages for this operating system.", icon_pkg_box), FALSE, FALSE, 0);
 
     GtkWidget *font = gtk_font_button_new();
     char *font_name = cfg_get_string("font", "Sans 10");
@@ -856,6 +983,36 @@ GtkWidget *page_appearance_new(void)
     gtk_combo_box_set_active(GTK_COMBO_BOX(mode), CLAMP(cfg_get_int("wallpaper_mode_index", 0), 0, 3));
     g_signal_connect(mode, "changed", G_CALLBACK(on_wallpaper_mode), NULL);
     gtk_box_pack_start(GTK_BOX(advanced), row_box("Background fit", "How the picture fills the screen.", mode), FALSE, FALSE, 0);
+
+    GtkWidget *fx_title = section("Visual Effects & Animations");
+    gtk_box_pack_start(GTK_BOX(box), fx_title, FALSE, FALSE, 0);
+    GtkWidget *fx_surface = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_style_context_add_class(gtk_widget_get_style_context(fx_surface), "appearance-surface");
+
+    GtkWidget *anim_sw = gtk_switch_new();
+    gtk_widget_set_valign(anim_sw, GTK_ALIGN_CENTER);
+    gtk_switch_set_active(GTK_SWITCH(anim_sw), cfg_get_bool("enable_animations", TRUE));
+
+    GtkWidget *speed_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(speed_combo), "Fast (100 ms)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(speed_combo), "Normal (160 ms)");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(speed_combo), "Slow (260 ms)");
+    int cur_spd = CLAMP(cfg_get_int("animation_speed", 2), 1, 3);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(speed_combo), cur_spd - 1);
+    gtk_widget_set_sensitive(speed_combo, gtk_switch_get_active(GTK_SWITCH(anim_sw)));
+
+    g_signal_connect(anim_sw, "notify::active", G_CALLBACK(on_animations_toggled), speed_combo);
+    g_signal_connect(speed_combo, "changed", G_CALLBACK(on_animation_speed_changed), anim_sw);
+
+    gtk_box_pack_start(GTK_BOX(fx_surface),
+        row_box("Enable animations and visual effects",
+                "Smooth transitions for windows, menus, panel popups, and GTK controls. Turn off for instant response on low-end hardware.",
+                anim_sw), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(fx_surface),
+        row_box("Animation speed",
+                "Duration of window, flyout, and widget animations when effects are enabled.",
+                speed_combo), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), fx_surface, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box), more, FALSE, FALSE, 0);
     loading = FALSE;

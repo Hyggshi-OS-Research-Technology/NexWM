@@ -3,6 +3,7 @@
 #include "hde-wl.h"
 #include "hde-osd.h"
 #include "hde-panel-config.h"
+#include "hde-theme.h"
 
 #define GAP 6                       /* between the panel and the frame, and from the screen edge */
 
@@ -11,7 +12,8 @@ struct _HdeFlyout {
     GtkWidget *win, *frame, *child, *anchor, *panel, *focus, *muted_tip;
     gboolean grabbed, panel_top;
     int grab_tries, placed_w, placed_h;
-    guint grab_retry_id;
+    guint grab_retry_id, anim_id;
+    int anim_step, anim_total;
     GdkRectangle geo;               /* where the frame is */
     void (*hide_cb)(gpointer);
     gpointer hide_data;
@@ -254,10 +256,38 @@ static void on_size_allocate(GtkWidget *w, GdkRectangle *a, gpointer d)
     place_sized(f, a->width, a->height, FALSE);
 }
 
+static gboolean flyout_anim_tick(gpointer d)
+{
+    HdeFlyout *f = d;
+    if (!f || !f->win || !gtk_widget_get_visible(f->win)) {
+        if (f) f->anim_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+    f->anim_step++;
+    double t = (double)f->anim_step / (double)MAX(1, f->anim_total);
+    if (t >= 1.0) {
+        gtk_widget_set_opacity(f->win, 1.0);
+        if (!hde_wl_is_layer(GTK_WINDOW(f->win)))
+            gtk_window_move(GTK_WINDOW(f->win), f->geo.x, f->geo.y);
+        f->anim_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+    /* cubic ease-out: 1 - (1 - t)^3 */
+    double inv = 1.0 - t;
+    double ease = 1.0 - inv * inv * inv;
+    gtk_widget_set_opacity(f->win, 0.25 + 0.75 * ease);
+    if (!hde_wl_is_layer(GTK_WINDOW(f->win))) {
+        int dy = (int)((1.0 - ease) * (f->panel_top ? -14.0 : 14.0));
+        gtk_window_move(GTK_WINDOW(f->win), f->geo.x, f->geo.y + dy);
+    }
+    return G_SOURCE_CONTINUE;
+}
+
 void hde_flyout_show(HdeFlyout *f, GtkWidget *anchor, GtkWidget *panel)
 {
     f->anchor = anchor;
     f->panel = panel;
+    if (f->anim_id) { g_source_remove(f->anim_id); f->anim_id = 0; }
     /* the tooltip of the button that opened it would stay over the frame (the pointer is still on the button) */
     if (f->muted_tip) { gtk_widget_set_has_tooltip(f->muted_tip, TRUE); g_object_remove_weak_pointer(G_OBJECT(f->muted_tip), (gpointer *)&f->muted_tip); f->muted_tip = NULL; }
     if (anchor && gtk_widget_get_has_tooltip(anchor)) {
@@ -267,6 +297,15 @@ void hde_flyout_show(HdeFlyout *f, GtkWidget *anchor, GtkWidget *panel)
         gtk_tooltip_trigger_tooltip_query(gtk_widget_get_display(anchor));
     }
     place(f);
+    int anim_ms = (!g_getenv("HDE_TEST_OUT") && hde_theme_animations_enabled()) ? hde_theme_animation_duration_ms() : 0;
+    if (anim_ms > 0) {
+        gtk_widget_set_opacity(f->win, 0.25);
+        f->anim_step = 0;
+        f->anim_total = CLAMP(anim_ms / 16, 4, 16);
+        f->anim_id = g_timeout_add(16, flyout_anim_tick, f);
+    } else {
+        gtk_widget_set_opacity(f->win, 1.0);
+    }
     gtk_widget_show(f->win);
     if (hde_wl_is_layer(GTK_WINDOW(f->win))) {
         gtk_window_present(GTK_WINDOW(f->win));
@@ -281,6 +320,7 @@ void hde_flyout_show(HdeFlyout *f, GtkWidget *anchor, GtkWidget *panel)
 void hde_flyout_hide(HdeFlyout *f)
 {
     if (!hde_flyout_visible(f)) return;
+    if (f->anim_id) { g_source_remove(f->anim_id); f->anim_id = 0; }
     if (f->grab_retry_id) { g_source_remove(f->grab_retry_id); f->grab_retry_id = 0; }
     if (f->grabbed) {
         gtk_grab_remove(f->win);

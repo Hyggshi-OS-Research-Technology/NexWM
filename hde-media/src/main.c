@@ -52,6 +52,7 @@ typedef struct {
     int    slideshow;
     int    fullscreen;
     int    play;                 /* --play: the player, even for a folder that could be a folder of pictures */
+    int    video;                /* --video: Hyggshi Video mode (scans ~/Videos by default, stays open when empty) */
     double interval;
 } MediaOptions;
 
@@ -142,9 +143,10 @@ static void usage(FILE *out)
             "A picture opens its folder (the list the arrow keys walk through); a folder opens with its first\n"
             "picture. What is shown is logged on stdout, one line per picture (the tests read those lines).\n"
             "\n"
-            "The music and the video (hde-media SONG, or --play):\n"
+            "The music and the video (hde-media SONG, or --play / --video):\n"
             "\n"
             "      --play             play what is given (a folder: its music and video; nothing: ~/Music)\n"
+            "      --video            open Hyggshi Video player (nothing: ~/Videos; stays open even when empty)\n"
             "\n"
             "A song or a video opens the player, a folder the picture viewer, and .m3u/.m3u8/.pls lists the player.\n"
             "The player does not decode anything itself: it runs mpv, ffplay, gst-launch-1.0, paplay or aplay —\n"
@@ -170,6 +172,7 @@ static int options_parse(MediaOptions *o, char **argv, int argc)
             break;
         }
         if (!strcmp(a, "--play")) { o->play = 1; continue; }
+        if (!strcmp(a, "--video")) { o->play = 1; o->video = 1; continue; }
         if (!strcmp(a, "-s") || !strcmp(a, "--slideshow")) { o->slideshow = 1; continue; }
         if (!strcmp(a, "-f") || !strcmp(a, "--fullscreen")) { o->fullscreen = 1; continue; }
         if (!strcmp(a, "-r") || !strcmp(a, "--recursive")) { o->recursive = 1; continue; }
@@ -229,8 +232,14 @@ static void show_player(GtkApplication *app, MediaOptions *o)
     char *const *paths = o->paths;
     int n_paths = o->n_paths;
     if (n_paths == 0 && !g_player) {
-        const char *dir = g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
-        music = g_strdup(dir && *dir ? dir : g_get_home_dir());
+        const char *dir = o->video ? g_get_user_special_dir(G_USER_DIRECTORY_VIDEOS)
+                                   : g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
+        if (o->video && (!dir || !*dir)) {
+            char *vdir = g_build_filename(g_get_home_dir(), "Videos", NULL);
+            if (g_file_test(vdir, G_FILE_TEST_IS_DIR)) music = vdir;
+            else g_free(vdir);
+        }
+        if (!music) music = g_strdup(dir && *dir ? dir : g_get_home_dir());
         one[0] = music;
         paths = (char *const *)one;
         n_paths = 1;
@@ -244,13 +253,16 @@ static void show_player(GtkApplication *app, MediaOptions *o)
     }
 
     g_player = hde_media_player_new(app, paths, n_paths, o->recursive);
-    if (!hde_media_player_has_tracks(g_player)) {
+    if (!o->video && !hde_media_player_has_tracks(g_player)) {
         fprintf(stderr, "hde-media: nothing to play in %s\n"
                         "           (give music or video, a folder of them, or a .m3u/.pls list: hde-media --play ~/Music)\n",
                 n_paths ? paths[0] : "the Music folder of this user");
         GtkWidget *widget = hde_media_player_widget(g_player);
         if (widget) gtk_widget_destroy(widget);
         g_status = 2;
+    } else if (o->fullscreen) {
+        GtkWidget *widget = hde_media_player_widget(g_player);
+        if (widget) gtk_window_fullscreen(GTK_WINDOW(widget));
     }
     g_free(music);
 }
@@ -302,6 +314,7 @@ static int command_line_cb(GtkApplication *app, GApplicationCommandLine *cmd, gp
     o.slideshow = defaults->slideshow;
     o.fullscreen = defaults->fullscreen;
     o.play = defaults->play;
+    o.video = defaults->video;
 
     g_status = 0;
     if (options_parse(&o, argv, argc) != 0) {
