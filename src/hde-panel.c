@@ -1267,19 +1267,22 @@ static void load_css(void)
     if (!composited) alpha = 1.0;
     int big = pcfg.size >= 44, small = pcfg.size < 30, vpad = small ? 0 : 2;
     const char *shadow = pcfg.shadow && composited && floating
-        ? (pcfg.top ? "0px 4px 14px alpha(black, 0.24)" : "0px -4px 14px alpha(black, 0.24)")
+        ? (pcfg.top ? "0px 4px 14px rgba(0, 0, 0, 0.24)" : "0px -4px 14px rgba(0, 0, 0, 0.24)")
         : "none";
+    char alpha_str[16];
+    if (alpha >= 1.0) snprintf(alpha_str, sizeof alpha_str, "1.0");
+    else snprintf(alpha_str, sizeof alpha_str, "0.%02d", (int)(alpha * 100));
     GString *s = g_string_new(NULL);
     if (floating) {
         g_string_append_printf(s, ".hde-panel { background: transparent; color: %s; border: none; box-shadow: none; }"
-                                  ".hde-panel .panel-surface { background: rgba(%s, %.2f); color: %s; border: 1px solid %s; "
+                                  ".hde-panel .panel-surface { background: rgba(%s, %s); color: %s; border: 1px solid %s; "
                                   "border-radius: %dpx; box-shadow: %s; }",
-                               fg, bg, alpha, fg, border, pcfg.rounded ? 14 : 0, shadow);
+                               fg, bg, alpha_str, fg, border, pcfg.rounded ? 14 : 0, shadow);
     } else {
         g_string_append_printf(s, ".hde-panel { background: transparent; color: %s; border: none; box-shadow: none; }"
-                                  ".hde-panel .panel-surface { background: rgba(%s, %.2f); color: %s; %s: 1px solid %s; "
+                                  ".hde-panel .panel-surface { background: rgba(%s, %s); color: %s; %s: 1px solid %s; "
                                   "border-radius: 0; box-shadow: none; }",
-                               fg, bg, alpha, fg, pcfg.top ? "border-bottom" : "border-top", border);
+                               fg, bg, alpha_str, fg, pcfg.top ? "border-bottom" : "border-top", border);
     }
     /* min-height: 0 — themes give buttons 24 px + padding, more than a thin panel has (the panel never grows) */
     g_string_append_printf(s, ".hde-panel button { background: transparent; background-image: none; border: none; border-radius: 4px;"

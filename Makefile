@@ -3,6 +3,8 @@ CFLAGS ?= -O2 -Wall -Wextra -Wpedantic -std=c11
 CPPFLAGS += -Ihde-core/include -Isrc
 BUILD ?= build
 .DEFAULT_GOAL := all
+comma := ,
+export PKG_CONFIG_PATH := $(HOME)/.local/lib/pkgconfig:$(HOME)/.local/lib/x86_64-linux-gnu/pkgconfig:$(PKG_CONFIG_PATH)
 CORE_SRC=hde-core/integration/core.c hde-core/settings/settings.c hde-core/session/session.c hde-core/desktop/desktop.c hde-core/panel/panel.c hde-core/notifications/notifications.c
 BACKEND_SRC=backend/backend.c backend/x11/x11_backend.c backend/wayland/wayland_backend.c
 CORE_OBJ=$(CORE_SRC:.c=.o) $(BACKEND_SRC:.c=.o)
@@ -58,10 +60,9 @@ NEXWM_WAYLAND_PROBE_TARGET=$(BUILD)/nexwm-wayland-probe
 NEXWM_WAYLAND_CLIENT_CFLAGS=$(shell pkg-config --cflags wayland-client)
 NEXWM_WAYLAND_CLIENT_LIBS=$(shell pkg-config --libs wayland-client)
 endif
-# gtk-layer-shell (libgtk-layer-shell-dev): the "HDE (Wayland)" session — panel, desktop, Start menu and popups as
-# layer-shell surfaces. Without it HDE builds for X11 only. It must come before libwayland-client when linking.
+LAYER_LIBDIR:=$(shell pkg-config --variable=libdir gtk-layer-shell-0 2>/dev/null)
 LAYER_CFLAGS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo "-DHAVE_GTK_LAYER_SHELL `pkg-config --cflags gtk-layer-shell-0`")
-LAYER_LIBS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && pkg-config --libs gtk-layer-shell-0)
+LAYER_LIBS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && pkg-config --libs gtk-layer-shell-0)$(if $(LAYER_LIBDIR), -Wl$(comma)-rpath$(comma)$(LAYER_LIBDIR))
 # wayland-scanner is used both for the panel's Wayland taskbar and for the xdg-shell header wlroots asks compositor
 # consumers to generate. The latter comes from wayland-protocols (Debian: wayland-protocols; Fedora: wayland-protocols-devel).
 WAYLAND_SCANNER:=$(shell pkg-config --variable=wayland_scanner wayland-scanner 2>/dev/null || command -v wayland-scanner 2>/dev/null)

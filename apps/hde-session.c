@@ -238,6 +238,24 @@ static int wayland_launch_nexwm(const char *inner)
     return WIFEXITED(st) ? WEXITSTATUS(st) : 0;
 }
 
+/* A WAYLAND_DISPLAY that is set does not mean a compositor is there: it can be left over from a previous session or
+ * from the login manager's environment. Only a live socket counts as "already inside a compositor". */
+static int wayland_socket_alive(void)
+{
+    const char *wd = getenv("WAYLAND_DISPLAY");
+    char path[4096];
+    struct stat st;
+    if (!wd || !*wd) return 0;
+    if (wd[0] == '/') snprintf(path, sizeof path, "%s", wd);
+    else {
+        const char *rd = getenv("XDG_RUNTIME_DIR");
+        char rbuf[256];
+        if (!rd || !*rd) { snprintf(rbuf, sizeof rbuf, "/run/user/%u", (unsigned)getuid()); rd = rbuf; }
+        snprintf(path, sizeof path, "%s/%s", rd, wd);
+    }
+    return stat(path, &st) == 0 && S_ISSOCK(st.st_mode);
+}
+
 /* hde-session --wayland (from hde-start --wayland, i.e. the login screen): become the compositor, which then starts
  * `hde-session --wayland-inner` (the real session). "HDE (Wayland)" is labwc; "NexWM (Wayland)" asks for HDE's own
  * compositor with --wm nexwm and falls back to labwc on the machines where it cannot run yet. */
@@ -905,7 +923,7 @@ int main(int argc, char **argv)
     if (arg_wayland || arg_wayland_inner) {
         self_dir(g_bindir, sizeof(g_bindir), argv[0]);
         /* outside the compositor (from the login screen): start labwc, which starts us again inside */
-        if (arg_wayland && !arg_wayland_inner && !getenv("WAYLAND_DISPLAY")) {
+        if (arg_wayland && !arg_wayland_inner && !wayland_socket_alive()) {
             start_keyring();        /* before labwc: the compositor and everything it starts inherit it */
             return wayland_launch();
         }

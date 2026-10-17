@@ -160,6 +160,44 @@ static char *rc_xml(void)
                               "  </libinput>\n",
                            p.touchpad_natural ? "yes" : "no", p.tap_to_click ? "yes" : "no", speed, accel,
                            p.has_mouse_natural && p.mouse_natural ? "yes" : "no", speed, accel);
+    /* windowRules: when hde-desktop and hde-panel run without gtk-layer-shell (no layer surfaces), these
+     * rules tell labwc to treat them correctly — the desktop maximized behind everything, the panel on top
+     * without decorations and pinned to the correct edge. With gtk-layer-shell (the proper build) the windows
+     * become layer surfaces and never match these rules, so they are harmless. */
+    {
+        char *pos = cfg_get_string("panel_position", "bottom");
+        int at_top = pos && strcmp(pos, "top") == 0;
+        const char *dir = at_top ? "up" : "down";
+        g_string_append(s,
+            "  <windowRules>\n"
+            "    <windowRule identifier=\"*hde-desktop*\" serverDecoration=\"no\" skipTaskbar=\"yes\""
+            " skipWindowSwitcher=\"yes\" fixedPosition=\"yes\" />\n"
+            "    <windowRule title=\"*hde-desktop*\" serverDecoration=\"no\" skipTaskbar=\"yes\""
+            " skipWindowSwitcher=\"yes\" fixedPosition=\"yes\" />\n"
+            "    <windowRule identifier=\"*hde-desktop*\">\n"
+            "      <action name=\"Maximize\" />\n"
+            "      <action name=\"ToggleAlwaysOnBottom\" />\n"
+            "    </windowRule>\n"
+            "    <windowRule title=\"*hde-desktop*\">\n"
+            "      <action name=\"Maximize\" />\n"
+            "      <action name=\"ToggleAlwaysOnBottom\" />\n"
+            "    </windowRule>\n");
+        g_string_append_printf(s,
+            "    <windowRule identifier=\"*hde-panel*\" serverDecoration=\"no\" skipTaskbar=\"yes\""
+            " skipWindowSwitcher=\"yes\" fixedPosition=\"yes\" />\n"
+            "    <windowRule title=\"*hde-panel*\" serverDecoration=\"no\" skipTaskbar=\"yes\""
+            " skipWindowSwitcher=\"yes\" fixedPosition=\"yes\" />\n"
+            "    <windowRule identifier=\"*hde-panel*\">\n"
+            "      <action name=\"MoveToEdge\" direction=\"%s\" />\n"
+            "      <action name=\"ToggleAlwaysOnTop\" />\n"
+            "    </windowRule>\n"
+            "    <windowRule title=\"*hde-panel*\">\n"
+            "      <action name=\"MoveToEdge\" direction=\"%s\" />\n"
+            "      <action name=\"ToggleAlwaysOnTop\" />\n"
+            "    </windowRule>\n", dir, dir);
+        g_string_append(s, "  </windowRules>\n");
+        g_free(pos);
+    }
     g_string_append(s, "</labwc_config>\n");
     g_free(panel); g_free(hot); g_free(settings);
     return g_string_free(s, FALSE);
