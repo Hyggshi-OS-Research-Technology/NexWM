@@ -79,7 +79,11 @@ int hde_gamma_apply(Display *dpy, int force)
     if (neutral && !marked && !force) return 0;
     int n = hde_randr_set_gamma(dpy, pct, k);
     if (neutral) XDeleteProperty(dpy, DefaultRootWindow(dpy), XInternAtom(dpy, "_HDE_GAMMA_SET", False));
-    else if (n > 0) set_cardinal(dpy, "_HDE_GAMMA_SET", 1);
+    /* The mark says "the screens show what HDE set", so that a later plain state is written back (the screens
+     * keep what they have otherwise). It is set whenever a coloured state is asked for - also when the driver
+     * took none of it: a mark that is missing would let a later "plain" state skip the write, and the screens
+     * would keep a ramp that belongs to a Night Light that is off. */
+    else set_cardinal(dpy, "_HDE_GAMMA_SET", 1);
     XFlush(dpy);
     return n;
 }

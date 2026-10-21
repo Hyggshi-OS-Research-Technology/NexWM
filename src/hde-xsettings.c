@@ -386,7 +386,9 @@ static void apply_night_light(void)
     int want = on ? CLAMP(k, 1500, 6000) : 0;
     if (want == hde_gamma_night_kelvin(dpy)) return;
     hde_gamma_set_night_kelvin(dpy, want);
-    int n = hde_gamma_apply(dpy, 0);
+    /* The Night Light changed, so the screens are written again - always, not only when the state asks for it:
+     * a ramp of the Night Light that is now off must not stay on the screens. */
+    int n = hde_gamma_apply(dpy, 1);
     if (want) fprintf(stderr, "hde-xsettings: night light on (%d K) on %d screen(s)\n", want, n);
     else fprintf(stderr, "hde-xsettings: night light off\n");
 }
