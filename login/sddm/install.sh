@@ -10,6 +10,7 @@
 #   sudo sh login/sddm/install.sh --no-config         only the theme files (leave SDDM's configuration alone)
 #   sudo sh login/sddm/install.sh --root DIR          install under DIR as if it were /  (packaging, tests, ISOs)
 #   sudo sh login/sddm/install.sh --dir DIR           install the theme into DIR (default /usr/share/sddm/themes)
+#   sudo sh login/sddm/install.sh --prefix DIR        the prefix HDE itself is installed in (default: guessed)
 #        sh login/sddm/install.sh --dry-run           say what would happen, change nothing
 #   sudo sh login/sddm/install.sh --uninstall         remove the theme and the configuration this script wrote
 #
@@ -30,6 +31,7 @@ SESSION=${HDE_SDDM_SESSION:-hde.desktop}
 ROOT=${HDE_SDDM_ROOT:-}
 THEME_DIR_DEFAULT=/usr/share/sddm/themes
 THEME_DIR=""
+PREFIX_OVERRIDE=""
 DO_CONFIG=1
 DO_SESSION=0
 DRY=0
@@ -73,6 +75,8 @@ while [ $# -gt 0 ]; do
     --dir=*)           THEME_DIR=${1#*=} ;;
     --root)            shift; ROOT=${1:-} ;;
     --root=*)          ROOT=${1#*=} ;;
+    --prefix)          shift; PREFIX_OVERRIDE=${1:-} ;;
+    --prefix=*)        PREFIX_OVERRIDE=${1#*=} ;;
     --dry-run)         DRY=1 ;;
     --uninstall)       UNINSTALL=1 ;;
     -h|--help)         usage 0 ;;
@@ -201,8 +205,20 @@ ${SESSION_LINE}EOF"
         DATA_DIR=""
         if [ -d "$HERE/../data" ]; then DATA_DIR=$(cd "$HERE/../data" && pwd);
         elif [ -d "$HERE/../../data" ]; then DATA_DIR=$(cd "$HERE/../../data" && pwd); fi
-        PREF="/usr/local"
-        [ -x /usr/bin/hde-session ] && [ ! -x /usr/local/bin/hde-session ] && PREF="/usr"
+        # where HDE itself lives: the session entries have to start THAT build. 'make install' passes its
+        # prefix; without it the prefix is guessed (/usr when only it has the programs, else /usr/local).
+        PREF="$PREFIX_OVERRIDE"
+        if [ -z "$PREF" ]; then
+            PREF="/usr/local"
+            [ -x /usr/bin/hde-session ] && [ ! -x /usr/local/bin/hde-session ] && PREF="/usr"
+        fi
+        # an HDE of another prefix that is still on the disk would keep an old build alive: say so
+        for other in /usr /usr/local; do
+            if [ "$other" != "$PREF" ] && [ -x "$other/bin/hde-session" ]; then
+                say "  note:       an older HDE is still installed in $other (its session entry is ignored now;"
+                say "               remove it with: sudo rm -f $other/bin/hde-* )"
+            fi
+        done
         if [ -n "$DATA_DIR" ] && [ -f "$DATA_DIR/hde.desktop" ] && [ -f "$DATA_DIR/hde-wayland.desktop" ]; then
             mkdir -p /usr/share/xsessions /usr/share/wayland-sessions "$PREF/bin"
             [ -f "$DATA_DIR/hde-start" ] && install -m 755 "$DATA_DIR/hde-start" "$PREF/bin/hde-start"

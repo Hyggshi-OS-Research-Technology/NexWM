@@ -667,7 +667,7 @@ install: all
 	      if [ -x $(PREFIX)/bin/$$b ]; then install -m755 $(PREFIX)/bin/$$b /usr/bin/$$b; fi; \
 	    done; \
 	  fi; \
-	  sh login/sddm/install.sh || true; \
+	  sh login/sddm/install.sh --prefix "$(PREFIX)" || true; \
 	fi
 	@command -v sddm >/dev/null 2>&1 || echo "NOTE: the HDE login screen needs SDDM (sudo apt install sddm / sudo dnf install sddm), then: sudo hde-login"
 # To see a new build WITHOUT LOGGING OUT:
