@@ -1500,7 +1500,12 @@ static void build_window(void)
     clear_window_refs();
     if (apps_dirty || !apps) load_apps();
     gboolean wl = hde_wl_layer_available();
-    win = gtk_window_new(wl ? GTK_WINDOW_TOPLEVEL : GTK_WINDOW_POPUP);
+    /* A GTK_WINDOW_POPUP is an override-redirect popup only on X11: there it can be put anywhere (gtk_window_move).
+     * A Wayland popup cannot be mapped without a parent ("window without parent", labwc leaves it where it likes),
+     * and a build without gtk-layer-shell has no way to anchor, so there the menu is an ordinary window: it maps,
+     * above the panel, and is still usable (Escape, the tabs, everything works), while a build with layer shell
+     * takes the full-screen transparent layer below. */
+    win = gtk_window_new(wl || hde_is_wayland() ? GTK_WINDOW_TOPLEVEL : GTK_WINDOW_POPUP);
     gtk_window_set_title(GTK_WINDOW(win), "Start menu");
     gtk_window_set_type_hint(GTK_WINDOW(win), GDK_WINDOW_TYPE_HINT_POPUP_MENU);
     gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
@@ -1633,6 +1638,8 @@ static void place_window(int *ox, int *oy)
         gtk_widget_set_margin_top(frame, panel_top ? 4 : 0);
         gtk_widget_set_margin_bottom(frame, panel_top ? 0 : 4);
     } else {
+        if (hde_is_wayland() && !hde_wl_is_layer(GTK_WINDOW(win)) && panel_w)
+            gtk_window_set_transient_for(GTK_WINDOW(win), GTK_WINDOW(panel_w));   /* above the panel, no layer shell */
         gtk_window_move(GTK_WINDOW(win), x, y);
         gtk_window_resize(GTK_WINDOW(win), w, h);
     }

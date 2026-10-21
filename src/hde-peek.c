@@ -96,14 +96,46 @@ static void set_anchor(GtkWidget *a)
 
 static gboolean on_win_enter(GtkWidget *w, GdkEventCrossing *e, gpointer d)
 {
-    (void)w; (void)e; (void)d;
+    (void)w; (void)d;
     if (hide_id) { g_source_remove(hide_id); hide_id = 0; }     /* the pointer is inside: stay */
+    return FALSE;
+}
+
+/* Leaving the window AND its children: only a "normal" crossing (from the popup to the taskbar, the desktop...)
+ * closes it. When the pointer moves from the frame into a thumb or the × of one, GTK says the window was left
+ * (detail: GDK_NOTIFY_INFERIOR on X11): that is still inside, so no timer — that "leave" is exactly what used
+ * to close the picture while the pointer entered it. On Wayland the moves inside the popup surface arrive as
+ * NONLINEAR/NONLINEAR_VIRTUAL leaves *with the pointer still inside the popup*, so every leave is answered
+ * with where the pointer is now, asked from the seat: the "window under the pointer" is ours only while the
+ * pointer is over something of this program (NULL once it reached a foreign window or the desktop). */
+static gboolean pointer_inside(void)
+{
+    if (!win || !gtk_widget_get_visible(win)) return FALSE;
+    GdkWindow *gw = gtk_widget_get_window(win);
+    if (!gw) return FALSE;
+    GdkDisplay *dpy = gdk_window_get_display(gw);
+    GdkSeat *seat = gdk_display_get_default_seat(dpy);
+    GdkDevice *dev = seat ? gdk_seat_get_pointer(seat) : NULL;
+    if (!dev) return FALSE;
+    gint px = -1, py = -1;
+    GdkModifierType mask = 0;
+    gdk_window_get_device_position(gw, dev, &px, &py, &mask);
+    GtkAllocation a;
+    gtk_widget_get_allocation(win, &a);
+    if (px < 0 || py < 0 || px >= a.width || py >= a.height) return FALSE;      /* outside this window */
+    /* a Wayland pointer that has left this window keeps reporting its last position, so the seat has to
+     * confirm which GdkWindow the pointer is over; a window of the popup is under it? (NULL: no window) */
+    GdkWindow *under = gdk_device_get_window_at_position(dev, NULL, NULL);
+    if (!under) return FALSE;
+    for (GdkWindow *u = under; u; u = gdk_window_get_parent(u))
+        if (u == gw) return TRUE;
     return FALSE;
 }
 
 static gboolean on_win_leave(GtkWidget *w, GdkEventCrossing *e, gpointer d)
 {
-    (void)w; (void)e; (void)d;
+    (void)w; (void)d;
+    if (e->detail == GDK_NOTIFY_INFERIOR || pointer_inside()) return FALSE;
     hde_peek_leave();
     return FALSE;
 }

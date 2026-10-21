@@ -153,6 +153,7 @@ GtkWidget *hde_popup_window_new(const char *name_space, HdeLayer layer, guint ed
         hde_wl_layer_init(GTK_WINDOW(w), name_space, layer, edges, kb);
         return w;
     }
+    if (hde_is_wayland()) return gtk_window_new(GTK_WINDOW_TOPLEVEL);   /* a popup needs a parent on Wayland */
     return gtk_window_new(GTK_WINDOW_POPUP);
 }
 
