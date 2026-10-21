@@ -84,6 +84,21 @@ if [ "$HDE_RUNTIME" != "minimal" ]; then
     fi
 fi
 
+# wlroots builds NexWM's own Wayland compositor. Debian names the package after its series, and the newest one
+# that is there is used; without it NexWM is built as the X11 window manager only (and the session metadata
+# follows: no "NexWM (Wayland)" entry).
+WLR_PKG=""
+for p in libwlroots-dev libwlroots-0.21-dev libwlroots-0.20-dev libwlroots-0.19-dev libwlroots-0.18-dev; do
+    if available "$p"; then WLR_PKG="$p"; break; fi
+done
+if [ -n "$WLR_PKG" ]; then
+    say "wlroots: installing $WLR_PKG (NexWM's own Wayland compositor)"
+    apt-get install -y --no-install-recommends "$WLR_PKG" ||
+        echo "note: $WLR_PKG could not be installed: skipped"
+else
+    echo "note: no wlroots here: NexWM is built as the X11 window manager only"
+fi
+
 if [ -n "${NEXWM_LOCAL_SRC:-}" ]; then
     say "source: $NEXWM_LOCAL_SRC"
     [ -f "$NEXWM_LOCAL_SRC/Makefile" ] || die "$NEXWM_LOCAL_SRC is not a checkout of HDE (no Makefile)"
