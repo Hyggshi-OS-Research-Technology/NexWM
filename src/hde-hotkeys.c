@@ -491,8 +491,200 @@ static void screenshot(int act)
     notify("Screenshot", "hde-screenshot is missing. Reinstall HDE (make && sudo make install).");
 }
 
+/* ---------------- media keys: the players of the desktop speak MPRIS ----------------
+ *
+ * The media keys talk to the players over the session bus (org.mpris.MediaPlayer2): that works for every
+ * player that implements MPRIS (VLC, mpv, Rhythmbox, Spotify, browsers...) and needs no extra program.
+ * playerctl stays the fallback for the players that do not.
+ */
+#ifdef HDE_HAVE_GIO
+#include <gio/gio.h>
+
+#define MPRIS_PREFIX "org.mpris.MediaPlayer2."
+#define MPRIS_PATH "/org/mpris/MediaPlayer2"
+#define MPRIS_PLAYER_IFACE "org.mpris.MediaPlayer2.Player"
+
+static GDBusConnection *mpris_bus(void)
+{
+    static GDBusConnection *bus = NULL;
+    static gboolean tried = FALSE;
+    if (!tried) {
+        tried = TRUE;
+        GError *error = NULL;
+        bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+        if (!bus) {
+            g_clear_error(&error);
+        }
+    }
+    return bus;
+}
+
+/* the property of the player (Status, Metadata, ...) */
+static GVariant *mpris_property(const char *player, const char *iface, const char *name)
+{
+    GDBusConnection *bus = mpris_bus();
+    if (!bus) return NULL;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_sync(bus, player, MPRIS_PATH, "org.freedesktop.DBus.Properties",
+                                                  "Get", g_variant_new("(ss)", iface, name),
+                                                  G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 1500, NULL, &error);
+    if (!reply) {
+        if (debug_on) fprintf(stderr, "hde-hotkeys: mpris %s %s %s: %s\n", player, iface, name, error->message);
+        g_clear_error(&error);
+        return NULL;
+    }
+    GVariant *value = g_variant_get_child_value(reply, 0);
+    g_variant_unref(reply);
+    /* the reply of Properties.Get is "(v)": the value is a variant inside the variant */
+    if (g_variant_is_of_type(value, G_VARIANT_TYPE_VARIANT)) {
+        GVariant *inner = g_variant_get_variant(value);
+        g_variant_unref(value);
+        value = inner;
+    }
+    return value;
+}
+
+/* the names of the MPRIS players of the desktop */
+static char **mpris_players(void)
+{
+    GDBusConnection *bus = mpris_bus();
+    if (!bus) return NULL;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                                  "org.freedesktop.DBus", "ListNames", NULL, G_VARIANT_TYPE("(as)"),
+                                                  G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &error);
+    if (!reply) {
+        g_clear_error(&error);
+        return NULL;
+    }
+    GVariant *names = g_variant_get_child_value(reply, 0);
+    GVariantIter iter;
+    const char *name;
+    GPtrArray *players = g_ptr_array_new();
+    g_variant_iter_init(&iter, names);
+    while (g_variant_iter_next(&iter, "&s", &name)) {
+        if (!g_str_has_prefix(name, MPRIS_PREFIX) || !strcmp(name, "org.mpris.MediaPlayer2")) continue;
+        g_ptr_array_add(players, g_strdup(name));
+    }
+    g_variant_unref(names);
+    g_variant_unref(reply);
+    g_ptr_array_add(players, NULL);
+    return (char **)g_ptr_array_free(players, FALSE);
+}
+
+/* the player that plays comes first, then the first one that answers at all (a browser that only shows
+ * its MPRIS interface without a state is not a player to control) */
+static char *mpris_player(void)
+{
+    char **players = mpris_players();
+    if (!players) return NULL;
+    char *fallback = NULL;
+    for (int i = 0; players[i]; i++) {
+        GVariant *status = mpris_property(players[i], MPRIS_PLAYER_IFACE, "Status");
+        if (!status) continue;                       /* it does not answer: not our player */
+        gboolean playing = g_variant_is_of_type(status, G_VARIANT_TYPE_STRING) &&
+                           g_strcmp0(g_variant_get_string(status, NULL), "Playing") == 0;
+        g_variant_unref(status);
+        if (playing) {
+            fallback = g_strdup(players[i]);
+            break;
+        }
+        if (!fallback) fallback = g_strdup(players[i]);
+    }
+    g_strfreev(players);
+    return fallback;
+}
+
+/* what the player plays: "Title — Artist" */
+static char *mpris_track(void)
+{
+    char *player = mpris_player();
+    if (!player) return NULL;
+    GVariant *meta = mpris_property(player, MPRIS_PLAYER_IFACE, "Metadata");
+    g_free(player);
+    if (!meta) return NULL;
+    char *title = NULL, *artist = NULL;
+    if (g_variant_is_of_type(meta, G_VARIANT_TYPE("a{sv}"))) {
+        GVariantIter iter;
+        const char *key;
+        GVariant *value;
+        g_variant_iter_init(&iter, meta);
+        while (g_variant_iter_next(&iter, "{&sv}", &key, &value)) {
+            if (!strcmp(key, "xesam:title") && g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+                g_free(title);
+                title = g_variant_dup_string(value, NULL);
+            } else if (!strcmp(key, "xesam:artist") && g_variant_is_of_type(value, G_VARIANT_TYPE("as"))) {
+                GVariantIter artists;
+                const char *name;
+                g_variant_iter_init(&artists, value);
+                if (g_variant_iter_next(&artists, "&s", &name)) {
+                    g_free(artist);
+                    artist = g_strdup(name);
+                }
+            }
+            g_variant_unref(value);
+        }
+    }
+    g_variant_unref(meta);
+    if (title && artist && *artist) {
+        char *both = g_strdup_printf("%s — %s", title, artist);
+        g_free(title);
+        g_free(artist);
+        return both;
+    }
+    g_free(artist);
+    return title;
+}
+
+/* the method of the MPRIS player that does what the key asks for */
+static const char *mpris_method(const char *what)
+{
+    if (!strcmp(what, "play-pause")) return "PlayPause";
+    if (!strcmp(what, "next")) return "Next";
+    if (!strcmp(what, "previous")) return "Previous";
+    if (!strcmp(what, "stop")) return "Stop";
+    if (!strcmp(what, "play")) return "Play";
+    if (!strcmp(what, "pause")) return "Pause";
+    return NULL;
+}
+
+static gboolean media_mpris(const char *what)
+{
+    const char *method = mpris_method(what);
+    if (!method) return FALSE;
+    GDBusConnection *bus = mpris_bus();
+    if (!bus) return FALSE;
+    char **players = mpris_players();
+    if (!players) return FALSE;
+    gboolean done = FALSE;
+    for (int i = 0; players[i] && !done; i++) {
+        GError *error = NULL;
+        g_dbus_connection_call_sync(bus, players[i], MPRIS_PATH, MPRIS_PLAYER_IFACE, method, NULL, NULL,
+                                    G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &error);
+        if (error) {
+            if (debug_on) fprintf(stderr, "hde-hotkeys: mpris %s %s: %s\n", players[i], method, error->message);
+            g_clear_error(&error);
+        } else {
+            done = TRUE;
+        }
+    }
+    g_strfreev(players);
+    return done;
+}
+#endif /* HDE_HAVE_GIO */
+
 static void media(const char *what)
 {
+#ifdef HDE_HAVE_GIO
+    if (media_mpris(what)) {                      /* the players of the desktop speak MPRIS */
+        char *track = mpris_track();
+        if (debug_on) fprintf(stderr, "hde-hotkeys: media: %s -> %s\n", what, track ? track : "(nothing)");
+        if (track && *track) notify("Media", track);
+        else if (!strcmp(what, "stop")) notify("Media", "Playback stopped");
+        free(track);
+        return;
+    }
+#endif
     if (have_bin("playerctl")) {
         char cmd[128];
         snprintf(cmd, sizeof cmd, "playerctl %s", what);

@@ -253,7 +253,8 @@ $(BUILD)/hde-settings: $(SETTINGS_SRC) $(HDE_HEADERS) $(VERSION_H) | $(BUILD)
 $(BUILD)/hde-hotkeys: src/hde-hotkeys.c src/hde-brightness.c src/hde-randr.c src/hde-ipc.h src/hde-commands.h \
                       src/hde-brightness.h src/hde-randr.h | $(BUILD)
 	@[ -n "$(XI_CFLAGS)" ] || echo "WARNING: libxi-dev (pkg-config xi) not found: Super key will not open the Start menu"
-	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(XI_CFLAGS) $(XRANDR_CFLAGS) -o $@ $(filter %.c,$^) $(XI_LIBS) $(XRANDR_LIBS) \
+	$(CC) -O2 -Wall -Wextra -std=c11 -Isrc $(XI_CFLAGS) $(XRANDR_CFLAGS) $(GIO_CFLAGS) \
+	    $(if $(GIO_LIBS),-DHDE_HAVE_GIO) -o $@ $(filter %.c,$^) $(XI_LIBS) $(XRANDR_LIBS) $(GIO_LIBS) \
 	    -lX11 -lm
 # Built-in screenshot tool (PrtSc / Shift+PrtSc / Alt+PrtSc via hde-hotkeys): no scrot & co. needed
 $(BUILD)/hde-screenshot: src/hde-screenshot.c | $(BUILD)
