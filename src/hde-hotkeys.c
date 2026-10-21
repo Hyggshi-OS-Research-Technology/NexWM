@@ -680,7 +680,15 @@ static void media(const char *what)
         char *track = mpris_track();
         if (debug_on) fprintf(stderr, "hde-hotkeys: media: %s -> %s\n", what, track ? track : "(nothing)");
         if (track && *track) notify("Media", track);
-        else if (!strcmp(what, "stop")) notify("Media", "Playback stopped");
+        else {
+            /* the player does not say what it plays (a browser without media, for instance): say what
+             * the key did, so the key does not look broken */
+            const char *done = !strcmp(what, "play-pause") ? "Play/Pause"
+                             : !strcmp(what, "next") ? "Next"
+                             : !strcmp(what, "previous") ? "Previous"
+                             : !strcmp(what, "stop") ? "Stopped" : what;
+            notify("Media", done);
+        }
         free(track);
         return;
     }
