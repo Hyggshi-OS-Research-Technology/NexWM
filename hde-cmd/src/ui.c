@@ -58,7 +58,10 @@ typedef struct {
     GtkApplication *application;
     GtkWidget *window;
     GtkWidget *terminal_widget;
+    GtkWidget *terminal_frame;
     GtkWidget *header;
+    GtkWidget *status_label;
+    GtkWidget *status_details;
     GtkWidget *context_menu;
     GtkWidget *open_url_item;
     GtkWidget *copy_url_item;
@@ -115,6 +118,101 @@ static const CmdTheme *current_theme(const CmdWindow *app)
     return &CMD_THEMES[idx];
 }
 
+static void css_rgba(double r, double g, double b, double a, char *out, size_t out_size)
+{
+    /* GTK CSS needs a dot decimal separator even when the user's LC_NUMERIC uses a comma. */
+    char alpha[G_ASCII_DTOSTR_BUF_SIZE];
+    g_ascii_formatd(alpha, sizeof(alpha), "%.2f", CLAMP(a, 0.0, 1.0));
+    snprintf(out, out_size, "rgba(%d, %d, %d, %s)",
+             (int)(CLAMP(r, 0.0, 1.0) * 255.0 + 0.5),
+             (int)(CLAMP(g, 0.0, 1.0) * 255.0 + 0.5),
+             (int)(CLAMP(b, 0.0, 1.0) * 255.0 + 0.5), alpha);
+}
+
+static void css_hex(double r, double g, double b, char *out, size_t out_size)
+{
+    snprintf(out, out_size, "#%02x%02x%02x",
+             (int)(CLAMP(r, 0.0, 1.0) * 255.0 + 0.5),
+             (int)(CLAMP(g, 0.0, 1.0) * 255.0 + 0.5),
+             (int)(CLAMP(b, 0.0, 1.0) * 255.0 + 0.5));
+}
+
+/* Paint the whole window with the terminal theme: the header, find bar, frame and status bar all follow the
+ * terminal's dark/light palette instead of the GTK theme's header colour. */
+static void apply_cmd_css(CmdWindow *app)
+{
+    static GtkCssProvider *cmd_css = NULL;
+    if (!cmd_css) {
+        cmd_css = gtk_css_provider_new();
+        gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(cmd_css),
+                                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    const CmdTheme *th = current_theme(app);
+    char bg[8], hdr[8], status[8];
+    char fg[64], fg_soft[64], fg_mute[64], border[64], hover[64], active[64], field[64], field_border[64], accent[64];
+    double hr = th->bg_r + (th->fg_r - th->bg_r) * 0.045;
+    double hg = th->bg_g + (th->fg_g - th->bg_g) * 0.045;
+    double hb = th->bg_b + (th->fg_b - th->bg_b) * 0.045;
+    double sr = th->bg_r + (th->fg_r - th->bg_r) * 0.025;
+    double sg = th->bg_g + (th->fg_g - th->bg_g) * 0.025;
+    double sb = th->bg_b + (th->fg_b - th->bg_b) * 0.025;
+    css_hex(th->bg_r, th->bg_g, th->bg_b, bg, sizeof(bg));
+    css_hex(hr, hg, hb, hdr, sizeof(hdr));
+    css_hex(sr, sg, sb, status, sizeof(status));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.96, fg, sizeof(fg));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.68, fg_soft, sizeof(fg_soft));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.50, fg_mute, sizeof(fg_mute));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.13, border, sizeof(border));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.10, hover, sizeof(hover));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.17, active, sizeof(active));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.07, field, sizeof(field));
+    css_rgba(th->fg_r, th->fg_g, th->fg_b, 0.16, field_border, sizeof(field_border));
+    css_rgba(th->cur_r, th->cur_g, th->cur_b, 0.75, accent, sizeof(accent));
+
+    char *css = g_strdup_printf(
+        ".cmd-window { background-color: %s; }"
+        "headerbar.cmd-header { background-color: %s; background-image: none; color: %s;"
+        " border-bottom: 1px solid %s; box-shadow: none; min-height: 42px; padding: 0 4px; }"
+        "headerbar.cmd-header:backdrop { background-color: %s; color: %s; }"
+        "headerbar.cmd-header label { color: %s; }"
+        "headerbar.cmd-header .title { color: %s; font-weight: 700; }"
+        "headerbar.cmd-header .subtitle { color: %s; font-size: 90%%; }"
+        "headerbar.cmd-header button { color: %s; background: transparent; background-image: none;"
+        " border: none; box-shadow: none; border-radius: 8px; padding: 5px; min-width: 22px; min-height: 22px; }"
+        "headerbar.cmd-header button:hover { background-color: %s; color: %s; }"
+        "headerbar.cmd-header button:active, headerbar.cmd-header button:checked { background-color: %s; }"
+        ".cmd-find { background-color: %s; border-bottom: 1px solid %s; padding: 3px 8px; }"
+        ".cmd-find entry { background-color: %s; color: %s; border: 1px solid %s; border-radius: 8px; }"
+        ".cmd-find entry image { color: %s; }"
+        ".cmd-find entry:focus { border-color: %s; }"
+        ".cmd-find button { color: %s; background: transparent; border: none; box-shadow: none; }"
+        ".cmd-find button:hover { background-color: %s; }"
+        ".cmd-terminal-frame { background-color: %s; border: 1px solid %s; border-radius: 12px; }"
+        ".cmd-status { background-color: %s; border-top: 1px solid %s; }"
+        ".cmd-status label { color: %s; font-size: 11px; }"
+        ".cmd-status .cmd-status-left { color: %s; font-weight: 600; }",
+        bg, hdr, fg, border, hdr, fg, fg, fg, fg_soft, fg_soft, hover, fg, active,
+        hdr, border, field, fg, field_border, fg_soft, accent, fg_soft, hover,
+        bg, border, status, border, fg_mute, fg_soft);
+    gtk_css_provider_load_from_data(cmd_css, css, -1, NULL);
+    g_free(css);
+}
+
+#ifdef HDE_CMD_HAVE_VTE
+static void apply_vte_theme(CmdWindow *app)
+{
+    if (!app || !app->vte) return;
+    const CmdTheme *th = current_theme(app);
+    GdkRGBA fg = { th->fg_r, th->fg_g, th->fg_b, 1.0 };
+    GdkRGBA bg = { th->bg_r, th->bg_g, th->bg_b, 1.0 };
+    GdkRGBA cur = { th->cur_r, th->cur_g, th->cur_b, 1.0 };
+    vte_terminal_set_colors(app->vte, &fg, &bg, NULL, 0);
+    vte_terminal_set_color_cursor(app->vte, &cur);
+}
+#else
+static void apply_vte_theme(CmdWindow *app) { (void)app; }
+#endif
+
 static char *cmd_config_path(void)
 {
     return g_build_filename(g_get_user_config_dir(), "hde", "cmd.ini", NULL);
@@ -154,18 +252,28 @@ static void save_preferences(const CmdWindow *app)
 
 static void update_subtitle(CmdWindow *app)
 {
-    if (!app || !app->header) return;
-    if (app->options.use_vte || !app->vt) {
-        gtk_header_bar_set_subtitle(GTK_HEADER_BAR(app->header), "Terminal");
-        return;
+    if (!app) return;
+    if (app->header)
+        gtk_header_bar_set_subtitle(GTK_HEADER_BAR(app->header),
+                                    app->options.use_vte ? "VTE backend" : "Built-in VT engine");
+
+    if (app->status_label) {
+        char sub[128];
+        if (app->options.use_vte || !app->vt)
+            g_snprintf(sub, sizeof sub, "%s  ·  VTE", current_theme(app)->name);
+        else
+            g_snprintf(sub, sizeof sub, "%s  ·  %d × %d", current_theme(app)->name, app->columns, app->rows);
+        gtk_label_set_text(GTK_LABEL(app->status_label), sub);
     }
-    int off = hde_cmd_vt_view_offset(app->vt);
-    char sub[96];
-    if (off > 0)
-        g_snprintf(sub, sizeof sub, "Terminal · %d×%d · History -%d", app->columns, app->rows, off);
-    else
-        g_snprintf(sub, sizeof sub, "Terminal · %d×%d", app->columns, app->rows);
-    gtk_header_bar_set_subtitle(GTK_HEADER_BAR(app->header), sub);
+    if (app->status_details) {
+        char detail[128];
+        int off = (!app->options.use_vte && app->vt) ? hde_cmd_vt_view_offset(app->vt) : 0;
+        if (off > 0)
+            g_snprintf(detail, sizeof detail, "UTF-8 · xterm-256color · History -%d", off);
+        else
+            g_snprintf(detail, sizeof detail, "UTF-8 · xterm-256color");
+        gtk_label_set_text(GTK_LABEL(app->status_details), detail);
+    }
 }
 
 static void queue_draw(CmdWindow *app)
@@ -943,7 +1051,7 @@ static gboolean button_press(GtkWidget *widget, GdkEventButton *event, gpointer 
         }
         gtk_widget_grab_focus(app->terminal_widget);
         if (app->context_menu) {
-            gtk_menu_popup(GTK_MENU(app->context_menu), NULL, NULL, NULL, NULL, event->button, event->time);
+            gtk_menu_popup_at_pointer(GTK_MENU(app->context_menu), (GdkEvent *)event);
             return TRUE;
         }
         return FALSE;
@@ -1302,6 +1410,7 @@ static void toggle_find_bar(CmdWindow *app, gboolean show)
 {
     if (!app || !app->find_bar) return;
     if (show) {
+        gtk_widget_show(app->find_bar);
         gtk_widget_show_all(app->find_bar);
         if (app->find_entry) gtk_widget_grab_focus(app->find_entry);
     } else {
@@ -1312,11 +1421,33 @@ static void toggle_find_bar(CmdWindow *app, gboolean show)
     }
 }
 
+static GtkWidget *build_status_bar(CmdWindow *app)
+{
+    GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_style_context_add_class(gtk_widget_get_style_context(bar), "cmd-status");
+    gtk_widget_set_margin_start(bar, 14);
+    gtk_widget_set_margin_end(bar, 14);
+    gtk_widget_set_margin_top(bar, 5);
+    gtk_widget_set_margin_bottom(bar, 6);
+
+    app->status_label = gtk_label_new("");
+    gtk_style_context_add_class(gtk_widget_get_style_context(app->status_label), "cmd-status-left");
+    gtk_label_set_xalign(GTK_LABEL(app->status_label), 0.0);
+    gtk_widget_set_hexpand(app->status_label, TRUE);
+    gtk_box_pack_start(GTK_BOX(bar), app->status_label, TRUE, TRUE, 0);
+
+    app->status_details = gtk_label_new("UTF-8 · xterm-256color");
+    gtk_label_set_xalign(GTK_LABEL(app->status_details), 1.0);
+    gtk_box_pack_end(GTK_BOX(bar), app->status_details, FALSE, FALSE, 0);
+    return bar;
+}
+
 static GtkWidget *build_find_bar(CmdWindow *app)
 {
     GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_style_context_add_class(gtk_widget_get_style_context(bar), "cmd-find");
     gtk_container_set_border_width(GTK_CONTAINER(bar), 6);
-    gtk_widget_set_no_show_all(bar, TRUE);
+    gtk_widget_set_visible(bar, FALSE);
 
     app->find_entry = gtk_search_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(app->find_entry), "Find in terminal…");
@@ -1415,6 +1546,9 @@ static void menu_set_theme(GtkMenuItem *item, gpointer userdata)
     int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "hde-theme-idx"));
     app->theme_index = CLAMP(idx, 0, (int)G_N_ELEMENTS(CMD_THEMES) - 1);
     save_preferences(app);
+    apply_cmd_css(app);
+    apply_vte_theme(app);
+    update_subtitle(app);
     queue_draw(app);
 }
 
@@ -1469,28 +1603,18 @@ static void menu_about(GtkMenuItem *mi, gpointer userdata)
         NULL);
 }
 
-static void on_about_btn_clicked(GtkButton *b, gpointer userdata)
-{
-    (void)b;
-    menu_about(NULL, userdata);
-}
-
 static GtkWidget *build_header(CmdWindow *app)
 {
     GtkWidget *header = gtk_header_bar_new();
+    gtk_style_context_add_class(gtk_widget_get_style_context(header), "cmd-header");
     gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(header), TRUE);
     gtk_header_bar_set_title(GTK_HEADER_BAR(header), "HDE Cmd");
-    gtk_header_bar_set_subtitle(GTK_HEADER_BAR(header), "Terminal");
+    gtk_header_bar_set_subtitle(GTK_HEADER_BAR(header), "Built-in VT engine");
 
     GtkWidget *new_button = gtk_button_new_from_icon_name("list-add-symbolic", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(new_button, "Open a new terminal window (Ctrl+Shift+T)");
     g_signal_connect(new_button, "clicked", G_CALLBACK(menu_new), app);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), new_button);
-
-    GtkWidget *about_button = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
-    gtk_widget_set_tooltip_text(about_button, "About HDE Cmd");
-    g_signal_connect(about_button, "clicked", G_CALLBACK(on_about_btn_clicked), app);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), about_button);
 
     GtkWidget *find_button = gtk_button_new_from_icon_name("edit-find-symbolic", GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(find_button, "Find in terminal (Ctrl+Shift+F)");
@@ -1626,12 +1750,14 @@ static void activate(GtkApplication *application, gpointer userdata)
         return;
     }
     app->window = gtk_application_window_new(application);
+    gtk_style_context_add_class(gtk_widget_get_style_context(app->window), "cmd-window");
     gtk_window_set_title(GTK_WINDOW(app->window), app->options.title ? app->options.title : "HDE Cmd");
     gtk_window_set_icon_name(GTK_WINDOW(app->window), "utilities-terminal");
-    gtk_window_set_default_size(GTK_WINDOW(app->window), 880, 560);
+    gtk_window_set_default_size(GTK_WINDOW(app->window), 960, 620);
     gtk_window_set_position(GTK_WINDOW(app->window), GTK_WIN_POS_CENTER);
     gtk_window_set_decorated(GTK_WINDOW(app->window), TRUE);
     gtk_window_set_titlebar(GTK_WINDOW(app->window), build_header(app));
+    apply_cmd_css(app);
     g_signal_connect(app->window, "delete-event", G_CALLBACK(window_delete), app);
     g_signal_connect(app->window, "destroy", G_CALLBACK(window_destroy), app);
 
@@ -1652,10 +1778,25 @@ static void activate(GtkApplication *application, gpointer userdata)
         g_signal_connect(app->vte, "key-press-event", G_CALLBACK(app_key_press), app);
         gtk_widget_add_events(app->terminal_widget, GDK_BUTTON_PRESS_MASK);
         g_signal_connect(app->vte, "button-press-event", G_CALLBACK(button_press), app);
-        gtk_container_add(GTK_CONTAINER(app->window), app->terminal_widget);
+
+        app->terminal_frame = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_style_context_add_class(gtk_widget_get_style_context(app->terminal_frame), "cmd-terminal-frame");
+        gtk_widget_set_margin_start(app->terminal_frame, 12);
+        gtk_widget_set_margin_end(app->terminal_frame, 12);
+        gtk_widget_set_margin_top(app->terminal_frame, 4);
+        gtk_widget_set_margin_bottom(app->terminal_frame, 8);
+        gtk_box_pack_start(GTK_BOX(app->terminal_frame), app->terminal_widget, TRUE, TRUE, 0);
+
+        GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_box_pack_start(GTK_BOX(vbox), app->terminal_frame, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(vbox), build_status_bar(app), FALSE, FALSE, 0);
+        gtk_container_add(GTK_CONTAINER(app->window), vbox);
         gtk_widget_show_all(app->window);
+        apply_cmd_css(app);
+        apply_vte_theme(app);
         update_font(app, DEFAULT_FONT_SIZE);
         set_title(app, app->options.title ? app->options.title : "HDE Cmd");
+        update_subtitle(app);
         start_vte_session(app);
         gtk_widget_grab_focus(app->terminal_widget);
         return;
@@ -1672,6 +1813,12 @@ static void activate(GtkApplication *application, gpointer userdata)
     }
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_pack_start(GTK_BOX(vbox), build_find_bar(app), FALSE, FALSE, 0);
+    app->terminal_frame = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_style_context_add_class(gtk_widget_get_style_context(app->terminal_frame), "cmd-terminal-frame");
+    gtk_widget_set_margin_start(app->terminal_frame, 12);
+    gtk_widget_set_margin_end(app->terminal_frame, 12);
+    gtk_widget_set_margin_top(app->terminal_frame, 4);
+    gtk_widget_set_margin_bottom(app->terminal_frame, 8);
     app->terminal_widget = gtk_drawing_area_new();
     gtk_widget_set_can_focus(app->terminal_widget, TRUE);
     gtk_widget_set_hexpand(app->terminal_widget, TRUE);
@@ -1688,7 +1835,9 @@ static void activate(GtkApplication *application, gpointer userdata)
     g_signal_connect(app->terminal_widget, "scroll-event", G_CALLBACK(scroll_event), app);
     g_signal_connect(app->terminal_widget, "focus-in-event", G_CALLBACK(focus_in), app);
     g_signal_connect(app->terminal_widget, "focus-out-event", G_CALLBACK(focus_out), app);
-    gtk_box_pack_start(GTK_BOX(vbox), app->terminal_widget, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(app->terminal_frame), app->terminal_widget, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(vbox), app->terminal_frame, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(vbox), build_status_bar(app), FALSE, FALSE, 0);
     gtk_container_add(GTK_CONTAINER(app->window), vbox);
     app->rows = init_rows;
     app->columns = init_cols;
@@ -1696,10 +1845,14 @@ static void activate(GtkApplication *application, gpointer userdata)
     update_font(app, app->font_size);
     if (app->options.initial_columns > 0 && app->options.initial_rows > 0 && app->cell_width > 0 && app->cell_height > 0) {
         gtk_window_resize(GTK_WINDOW(app->window),
-                          2 * PAD_X + init_cols * app->cell_width,
-                          2 * PAD_Y + init_rows * app->cell_height + 42);
+                          2 * PAD_X + init_cols * app->cell_width + 24,
+                          2 * PAD_Y + init_rows * app->cell_height + 42 + 40 + 26);
     }
     gtk_widget_show_all(app->window);
+    if (app->find_bar)
+        gtk_widget_hide(app->find_bar);
+    apply_cmd_css(app);
+    update_subtitle(app);
     gtk_widget_grab_focus(app->terminal_widget);
     if (app->options.title) set_title(app, app->options.title);
     update_pty_size(app);

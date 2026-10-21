@@ -9,6 +9,7 @@
 #include <gio/gio.h>
 #include <gtk/gtk.h>
 #include <math.h>
+#include <pango/pangocairo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,12 +39,18 @@ static GtkWidget *main_win = NULL;
 static GtkWidget *city_list_box = NULL;
 static GtkWidget *city_filter_entry = NULL;
 static GtkWidget *status_spinner = NULL;
+static GtkWidget *status_label = NULL;
+static GtkWidget *meta_label = NULL;
+static GtkWidget *page_title = NULL;
+static GtkWidget *page_subtitle = NULL;
 static GtkWidget *unit_temp_btn = NULL;
 static GtkWidget *unit_wind_combo = NULL;
 static GtkWidget *hero_area = NULL;
 static GtkWidget *chart_area = NULL;
 static GtkWidget *hourly_box = NULL;
 static GtkWidget *daily_box = NULL;
+static char ui_font_family[96] = "Sans";
+static double accent_r = 0.208, accent_g = 0.518, accent_b = 0.894;
 static GtkWidget *row_temp_lbl[MAX_SAVED_CITIES];
 static GtkWidget *row_sub_lbl[MAX_SAVED_CITIES];
 static GtkWidget *row_icon_img[MAX_SAVED_CITIES];
@@ -90,6 +97,122 @@ static void format_pressure(double hpa, char *buf, size_t bufsz)
         snprintf(buf, bufsz, "%.2f inHg", hde_weather_hpa_to_inhg(hpa));
     else
         snprintf(buf, bufsz, "%.0f hPa", hpa);
+}
+
+static void set_ui_font_family(const char *font)
+{
+    if (!font || !*font) return;
+    PangoFontDescription *desc = pango_font_description_from_string(font);
+    const char *family = desc ? pango_font_description_get_family(desc) : NULL;
+    if (family && *family) {
+        g_strlcpy(ui_font_family, family, sizeof(ui_font_family));
+    } else {
+        g_strlcpy(ui_font_family, "Sans", sizeof(ui_font_family));
+    }
+    if (desc) pango_font_description_free(desc);
+}
+
+/* Pango gives the Cairo hero card the same font family as the rest of the desktop. */
+static void set_source_style_color(cairo_t *cr, GtkWidget *widget, double alpha)
+{
+    GdkRGBA c = { 0.5, 0.55, 0.65, 1.0 };
+    gtk_style_context_get_color(gtk_widget_get_style_context(widget),
+                                gtk_widget_get_state_flags(widget), &c);
+    cairo_set_source_rgba(cr, c.red, c.green, c.blue, alpha);
+}
+
+static void draw_hero_text(cairo_t *cr, const char *text, double x, double y, double size,
+                           PangoWeight weight, double alpha, double max_width)
+{
+    if (!text || !*text) return;
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoFontDescription *desc = pango_font_description_new();
+    pango_font_description_set_family(desc, ui_font_family);
+    pango_font_description_set_absolute_size(desc, size * PANGO_SCALE);
+    pango_font_description_set_weight(desc, weight);
+    pango_layout_set_font_description(layout, desc);
+    pango_layout_set_text(layout, text, -1);
+    if (max_width > 0) {
+        pango_layout_set_width(layout, (int)(max_width * PANGO_SCALE));
+        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+    }
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, alpha);
+    cairo_move_to(cr, x, y);
+    pango_cairo_show_layout(cr, layout);
+    pango_font_description_free(desc);
+    g_object_unref(layout);
+}
+
+static void set_status_text(const char *text)
+{
+    if (status_label)
+        gtk_label_set_text(GTK_LABEL(status_label), text ? text : "");
+}
+
+static void set_fetch_indicator(gboolean active)
+{
+    if (!status_spinner) return;
+    gtk_widget_set_visible(status_spinner, active);
+    if (active)
+        gtk_spinner_start(GTK_SPINNER(status_spinner));
+    else
+        gtk_spinner_stop(GTK_SPINNER(status_spinner));
+}
+
+static const char *utc_offset_label(double hours, char *buf, size_t bufsz)
+{
+    if (fabs(hours) < 0.01)
+        g_strlcpy(buf, "UTC", bufsz);
+    else if (fabs(hours - (int)hours) < 0.01)
+        snprintf(buf, bufsz, "UTC%+.0f", hours);
+    else
+        snprintf(buf, bufsz, "UTC%+.1f", hours);
+    return buf;
+}
+
+static void update_page_header(void)
+{
+    if (!page_title || !page_subtitle) return;
+    if (!active_fc.city.name[0]) {
+        gtk_label_set_text(GTK_LABEL(page_title), "Weather");
+        gtk_label_set_text(GTK_LABEL(page_subtitle), "Choose a saved location to see its forecast");
+        return;
+    }
+
+    char hi[24], lo[24], sub[220];
+    double dmax = active_fc.daily_count > 0 ? active_fc.daily[0].temp_max_c : active_fc.current_temp_c;
+    double dmin = active_fc.daily_count > 0 ? active_fc.daily[0].temp_min_c : active_fc.current_temp_c;
+    format_temp(dmax, hi, sizeof(hi), FALSE);
+    format_temp(dmin, lo, sizeof(lo), FALSE);
+    gtk_label_set_text(GTK_LABEL(page_title), active_fc.city.name);
+    if (active_fc.city.country[0])
+        snprintf(sub, sizeof(sub), "%s · %s · High %s  Low %s",
+                 active_fc.city.country, hde_weather_wmo_description(active_fc.wmo_code), hi, lo);
+    else
+        snprintf(sub, sizeof(sub), "%s · High %s  Low %s",
+                 hde_weather_wmo_description(active_fc.wmo_code), hi, lo);
+    gtk_label_set_text(GTK_LABEL(page_subtitle), sub);
+
+    if (meta_label) {
+        char tz[32], meta[128];
+        utc_offset_label(active_fc.city.utc_offset_hours, tz, sizeof(tz));
+        snprintf(meta, sizeof(meta), "%s · 7-day forecast", tz);
+        gtk_label_set_text(GTK_LABEL(meta_label), meta);
+    }
+}
+
+static void update_status_text(void)
+{
+    if (!status_label) return;
+    if (!active_fc.city.name[0]) {
+        set_status_text("Ready");
+        return;
+    }
+    char text[240];
+    snprintf(text, sizeof(text), "Updated %s · %s",
+             active_fc.updated_at,
+             active_fc.is_live ? "Open-Meteo live data" : "local forecast model");
+    set_status_text(text);
 }
 
 /* --- Config load / save --- */
@@ -213,6 +336,7 @@ static void on_fetch_finished(GObject *source, GAsyncResult *res, gpointer user_
     GSubprocess *proc = G_SUBPROCESS(source);
     FetchTaskData *td = user_data;
     char *stdout_buf = NULL;
+    gboolean got_live_data = FALSE;
 
     if (g_subprocess_communicate_utf8_finish(proc, res, &stdout_buf, NULL, NULL)) {
         if (stdout_buf && *stdout_buf && td->city_idx >= 0 && td->city_idx < saved_city_count) {
@@ -222,14 +346,18 @@ static void on_fetch_finished(GObject *source, GAsyncResult *res, gpointer user_
                 if (td->city_idx == active_city_idx)
                     active_fc = parsed;
                 refresh_forecast_views();
+                got_live_data = TRUE;
             }
         }
     }
     g_free(stdout_buf);
     g_free(td);
     fetch_in_progress = FALSE;
-    if (status_spinner)
-        gtk_spinner_stop(GTK_SPINNER(status_spinner));
+    set_fetch_indicator(FALSE);
+    if (!got_live_data)
+        set_status_text("Open-Meteo unavailable · showing the local forecast model");
+    else
+        update_status_text();
 }
 
 static void start_async_fetch_for_city(int idx)
@@ -239,8 +367,10 @@ static void start_async_fetch_for_city(int idx)
 
     char *curl_bin = g_find_program_in_path("curl");
     char *wget_bin = curl_bin ? NULL : g_find_program_in_path("wget");
-    if (!curl_bin && !wget_bin)
+    if (!curl_bin && !wget_bin) {
+        update_status_text();
         return;
+    }
 
     char url[512];
     snprintf(url, sizeof(url),
@@ -266,12 +396,15 @@ static void start_async_fetch_for_city(int idx)
 
     if (!proc) {
         if (err) g_error_free(err);
+        update_status_text();
         return;
     }
 
     fetch_in_progress = TRUE;
-    if (status_spinner)
-        gtk_spinner_start(GTK_SPINNER(status_spinner));
+    set_fetch_indicator(TRUE);
+    char status[160];
+    snprintf(status, sizeof(status), "Updating %s…", saved_cities[idx].name);
+    set_status_text(status);
 
     FetchTaskData *td = g_new0(FetchTaskData, 1);
     td->city_idx = idx;
@@ -426,50 +559,29 @@ static gboolean on_hero_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
         }
     }
 
-    /* Typography on the left & bottom of hero card */
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-
-    /* City & Country */
+    /* Typography on the left & bottom of the hero card. Pango follows the desktop font. */
     char title[140];
-    if (active_fc.city.country[0])
-        snprintf(title, sizeof(title), "%s, %s", active_fc.city.name, active_fc.city.country);
-    else
-        snprintf(title, sizeof(title), "%s", active_fc.city.name);
+    g_strlcpy(title, "Current conditions", sizeof(title));
 
-    cairo_set_font_size(cr, 22.0);
-    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-    cairo_move_to(cr, 24.0, 38.0);
-    cairo_show_text(cr, title);
+    double text_width = MAX(180.0, width - 310.0);
+    draw_hero_text(cr, title, 24.0, 20.0, 20.0, PANGO_WEIGHT_BOLD, 1.0, text_width);
 
-    /* Coordinates & status badge */
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 12.0);
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.82);
-    char meta[160];
-    snprintf(meta, sizeof(meta), "%.2f°%s, %.2f°%s  •  %s (%s)",
+    char meta[180];
+    snprintf(meta, sizeof(meta), "%.2f°%s, %.2f°%s  •  %s  •  %s",
              fabs(active_fc.city.lat), active_fc.city.lat >= 0 ? "N" : "S",
              fabs(active_fc.city.lon), active_fc.city.lon >= 0 ? "E" : "W",
-             active_fc.is_live ? "Live Open-Meteo Data" : "Local Forecast Model",
+             active_fc.is_live ? "Live Open-Meteo data" : "Local forecast model",
              active_fc.updated_at);
-    cairo_move_to(cr, 24.0, 58.0);
-    cairo_show_text(cr, meta);
+    draw_hero_text(cr, meta, 24.0, 50.0, 11.5, PANGO_WEIGHT_NORMAL, 0.78, text_width);
 
-    /* Big current temperature */
     char tbuf[32];
     format_temp(active_fc.current_temp_c, tbuf, sizeof(tbuf), TRUE);
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 56.0);
-    cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-    cairo_move_to(cr, 22.0, 126.0);
-    cairo_show_text(cr, tbuf);
+    draw_hero_text(cr, tbuf, 22.0, 69.0, 58.0, PANGO_WEIGHT_BOLD, 1.0, 0.0);
 
-    /* Condition + High / Low + Feels Like */
     const char *cond = hde_weather_wmo_description(active_fc.wmo_code);
-    cairo_set_font_size(cr, 16.0);
-    cairo_move_to(cr, 24.0, 156.0);
-    cairo_show_text(cr, cond);
+    draw_hero_text(cr, cond, 25.0, 143.0, 16.0, PANGO_WEIGHT_SEMIBOLD, 0.98, text_width);
 
-    char fl_buf[32], hi_buf[32], lo_buf[32], sub_line[160];
+    char fl_buf[32], hi_buf[32], lo_buf[32], sub_line[180];
     format_temp(active_fc.feels_like_c, fl_buf, sizeof(fl_buf), TRUE);
     double dmax = active_fc.daily_count > 0 ? active_fc.daily[0].temp_max_c : active_fc.current_temp_c + 3.0;
     double dmin = active_fc.daily_count > 0 ? active_fc.daily[0].temp_min_c : active_fc.current_temp_c - 4.0;
@@ -477,12 +589,7 @@ static gboolean on_hero_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
     format_temp(dmin, lo_buf, sizeof(lo_buf), FALSE);
     snprintf(sub_line, sizeof(sub_line), "High %s  •  Low %s  •  Feels like %s  •  Humidity %d%%",
              hi_buf, lo_buf, fl_buf, active_fc.humidity_pct);
-
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 13.0);
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.90);
-    cairo_move_to(cr, 24.0, 180.0);
-    cairo_show_text(cr, sub_line);
+    draw_hero_text(cr, sub_line, 24.0, 174.0, 12.5, PANGO_WEIGHT_NORMAL, 0.88, text_width);
 
     return FALSE;
 }
@@ -512,7 +619,7 @@ static gboolean on_chart_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
     }
 
     /* Subtle horizontal guide lines */
-    cairo_set_source_rgba(cr, 0.5, 0.55, 0.65, 0.18);
+    set_source_style_color(cr, w, 0.14);
     cairo_set_line_width(cr, 1.0);
     for (int g = 0; g <= 2; g++) {
         double gy = pad_t + ch * (g / 2.0);
@@ -527,7 +634,7 @@ static gboolean on_chart_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
         double pop = active_fc.hourly[i].pop_pct / 100.0;
         if (pop > 0.05) {
             double bh = pop * (ch * 0.38);
-            cairo_set_source_rgba(cr, 0.21, 0.52, 0.89, 0.22);
+            cairo_set_source_rgba(cr, accent_r, accent_g, accent_b, 0.24);
             cairo_rectangle(cr, x - 5.0, pad_t + ch - bh, 10.0, bh);
             cairo_fill(cr);
         }
@@ -536,7 +643,7 @@ static gboolean on_chart_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
     /* Area fill under temperature curve */
     cairo_pattern_t * grad = cairo_pattern_create_linear(0, pad_t, 0, pad_t + ch);
     cairo_pattern_add_color_stop_rgba(grad, 0.0, 0.96, 0.62, 0.18, 0.38);
-    cairo_pattern_add_color_stop_rgba(grad, 1.0, 0.21, 0.52, 0.89, 0.03);
+    cairo_pattern_add_color_stop_rgba(grad, 1.0, accent_r, accent_g, accent_b, 0.04);
 
     for (int i = 0; i < n; i++) {
         double x = pad_l + (cw * i) / (n - 1);
@@ -565,7 +672,7 @@ static gboolean on_chart_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
     cairo_stroke(cr);
 
     /* Points and labels every 3 hours */
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_select_font_face(cr, ui_font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
     for (int i = 0; i < n; i += 3) {
         double x = pad_l + (cw * i) / (n - 1);
         double norm = (active_fc.hourly[i].temp_c - tmin) / (tmax - tmin);
@@ -578,7 +685,7 @@ static gboolean on_chart_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
         char tbuf[16];
         format_temp(active_fc.hourly[i].temp_c, tbuf, sizeof(tbuf), FALSE);
         cairo_set_font_size(cr, 11.0);
-        cairo_set_source_rgba(cr, 0.55, 0.60, 0.68, 0.95);
+        set_source_style_color(cr, w, 0.82);
         cairo_move_to(cr, x - 10.0, y - 8.0);
         cairo_show_text(cr, tbuf);
 
@@ -608,7 +715,7 @@ static gboolean on_day_range_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
     double by = (height - bh) / 2.0;
 
     /* Track background */
-    cairo_set_source_rgba(cr, 0.5, 0.55, 0.65, 0.20);
+    set_source_style_color(cr, w, 0.16);
     cairo_rectangle(cr, 0, by, width, bh);
     cairo_fill(cr);
 
@@ -649,7 +756,7 @@ static gboolean on_compass_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
     double r = MIN(cx, cy) - 6.0;
     if (r <= 8.0) return FALSE;
 
-    cairo_set_source_rgba(cr, 0.5, 0.55, 0.65, 0.28);
+    set_source_style_color(cr, w, 0.24);
     cairo_set_line_width(cr, 2.0);
     cairo_arc(cr, cx, cy, r, 0, 2 * G_PI);
     cairo_stroke(cr);
@@ -660,7 +767,7 @@ static gboolean on_compass_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
     cairo_translate(cr, cx, cy);
     cairo_rotate(cr, ang);
 
-    cairo_set_source_rgb(cr, 0.21, 0.52, 0.89);
+    cairo_set_source_rgb(cr, accent_r, accent_g, accent_b);
     cairo_move_to(cr, r * 0.78, 0);
     cairo_line_to(cr, -r * 0.45, -5.0);
     cairo_line_to(cr, -r * 0.25, 0);
@@ -692,6 +799,8 @@ static gboolean delete_city_idle_cb(gpointer user_data)
         forecasts[i] = forecasts[i + 1];
     }
     saved_city_count--;
+    if (idx < active_city_idx)
+        active_city_idx--;
     if (active_city_idx >= saved_city_count)
         active_city_idx = saved_city_count - 1;
     active_fc = forecasts[active_city_idx];
@@ -704,6 +813,30 @@ static void on_delete_city_clicked(GtkButton *btn, gpointer user_data)
 {
     (void)btn;
     g_idle_add(delete_city_idle_cb, user_data);
+}
+
+/* Keep the location rows clean: removal lives in a context menu instead of a permanent close button.
+ * Listen on the list box itself: GtkListBoxRow does not own a GdkWindow, so row-level button events
+ * are not guaranteed to reach it. */
+static gboolean on_city_list_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data)
+{
+    (void)user_data;
+    if (event->type != GDK_BUTTON_PRESS || event->button != 3 || saved_city_count <= 1)
+        return FALSE;
+    GtkListBoxRow *row = gtk_list_box_get_row_at_y(GTK_LIST_BOX(widget), (int)event->y);
+    if (!row)
+        return FALSE;
+    int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "city-idx"));
+    if (idx < 0 || idx >= saved_city_count)
+        return FALSE;
+    GtkWidget *menu = gtk_menu_new();
+    GtkWidget *remove = gtk_menu_item_new_with_label("Remove Location");
+    g_signal_connect(remove, "activate", G_CALLBACK(on_delete_city_clicked), GINT_TO_POINTER(idx));
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), remove);
+    g_signal_connect_swapped(menu, "deactivate", G_CALLBACK(gtk_widget_destroy), menu);
+    gtk_widget_show_all(menu);
+    gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)event);
+    return TRUE;
 }
 
 static void update_sidebar_labels_in_place(void)
@@ -745,26 +878,30 @@ static void rebuild_city_sidebar(void)
 
         GtkWidget *row = gtk_list_box_row_new();
         g_object_set_data(G_OBJECT(row), "city-idx", GINT_TO_POINTER(i));
+        gtk_style_context_add_class(gtk_widget_get_style_context(row), "wx-city-row");
+        if (saved_city_count > 1)
+            gtk_widget_set_tooltip_text(row, "Right-click to remove this location");
 
         GtkWidget *hb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        gtk_container_set_border_width(GTK_CONTAINER(hb), 8);
+        gtk_container_set_border_width(GTK_CONTAINER(hb), 2);
 
         const char *icon_name = hde_weather_wmo_icon(forecasts[i].wmo_code, forecasts[i].is_day);
         GtkWidget *img = gtk_image_new_from_icon_name(icon_name, GTK_ICON_SIZE_LARGE_TOOLBAR);
         row_icon_img[i] = img;
         gtk_box_pack_start(GTK_BOX(hb), img, FALSE, FALSE, 0);
 
-        GtkWidget *vb = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        GtkWidget *vb = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
         GtkWidget *nm = gtk_label_new(saved_cities[i].name);
-        gtk_style_context_add_class(gtk_widget_get_style_context(nm), "city-row-title");
+        gtk_style_context_add_class(gtk_widget_get_style_context(nm), "wx-city-title");
         gtk_label_set_xalign(GTK_LABEL(nm), 0.0);
         gtk_label_set_ellipsize(GTK_LABEL(nm), PANGO_ELLIPSIZE_END);
 
         const char *cond = hde_weather_wmo_description(forecasts[i].wmo_code);
         GtkWidget *sub = gtk_label_new(cond);
         row_sub_lbl[i] = sub;
-        gtk_style_context_add_class(gtk_widget_get_style_context(sub), "dim-label");
+        gtk_style_context_add_class(gtk_widget_get_style_context(sub), "wx-city-sub");
         gtk_label_set_xalign(GTK_LABEL(sub), 0.0);
+        gtk_label_set_ellipsize(GTK_LABEL(sub), PANGO_ELLIPSIZE_END);
         gtk_box_pack_start(GTK_BOX(vb), nm, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(vb), sub, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(hb), vb, TRUE, TRUE, 0);
@@ -773,16 +910,8 @@ static void rebuild_city_sidebar(void)
         format_temp(forecasts[i].current_temp_c, tbuf, sizeof(tbuf), FALSE);
         GtkWidget *tlbl = gtk_label_new(tbuf);
         row_temp_lbl[i] = tlbl;
-        gtk_style_context_add_class(gtk_widget_get_style_context(tlbl), "city-row-temp");
-        gtk_box_pack_start(GTK_BOX(hb), tlbl, FALSE, FALSE, 2);
-
-        if (saved_city_count > 1) {
-            GtkWidget *del_btn = gtk_button_new_from_icon_name("window-close-symbolic", GTK_ICON_SIZE_MENU);
-            gtk_button_set_relief(GTK_BUTTON(del_btn), GTK_RELIEF_NONE);
-            gtk_widget_set_tooltip_text(del_btn, "Remove location");
-            g_signal_connect(del_btn, "clicked", G_CALLBACK(on_delete_city_clicked), GINT_TO_POINTER(i));
-            gtk_box_pack_start(GTK_BOX(hb), del_btn, FALSE, FALSE, 0);
-        }
+        gtk_style_context_add_class(gtk_widget_get_style_context(tlbl), "wx-city-temp");
+        gtk_box_pack_start(GTK_BOX(hb), tlbl, FALSE, FALSE, 0);
 
         gtk_container_add(GTK_CONTAINER(row), hb);
         gtk_list_box_insert(GTK_LIST_BOX(city_list_box), row, -1);
@@ -800,7 +929,7 @@ static void rebuild_hourly_strip(void)
 
     for (int i = 0; i < active_fc.hourly_count; i++) {
         GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-        gtk_style_context_add_class(gtk_widget_get_style_context(card), "weather-hour-card");
+        gtk_style_context_add_class(gtk_widget_get_style_context(card), "wx-hour-card");
         gtk_widget_set_size_request(card, 72, -1);
 
         GtkWidget *tl = gtk_label_new(active_fc.hourly[i].label);
@@ -812,12 +941,12 @@ static void rebuild_hourly_strip(void)
         char tbuf[24];
         format_temp(active_fc.hourly[i].temp_c, tbuf, sizeof(tbuf), FALSE);
         GtkWidget *temp_l = gtk_label_new(tbuf);
-        gtk_style_context_add_class(gtk_widget_get_style_context(temp_l), "hour-temp-label");
+        gtk_style_context_add_class(gtk_widget_get_style_context(temp_l), "wx-hour-temp");
 
         char pbuf[24];
         snprintf(pbuf, sizeof(pbuf), "%d%%", active_fc.hourly[i].pop_pct);
         GtkWidget *pop_l = gtk_label_new(pbuf);
-        gtk_style_context_add_class(gtk_widget_get_style_context(pop_l), "rain-pill");
+        gtk_style_context_add_class(gtk_widget_get_style_context(pop_l), "wx-rain");
 
         gtk_box_pack_start(GTK_BOX(card), tl, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(card), img, FALSE, FALSE, 0);
@@ -841,13 +970,13 @@ static void rebuild_daily_list(void)
 
     for (int i = 0; i < active_fc.daily_count; i++) {
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-        gtk_style_context_add_class(gtk_widget_get_style_context(row), "weather-day-row");
+        gtk_style_context_add_class(gtk_widget_get_style_context(row), "wx-day-row");
 
         /* Day & Date */
         GtkWidget *dbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
         gtk_widget_set_size_request(dbox, 90, -1);
         GtkWidget *dl = gtk_label_new(active_fc.daily[i].day_name);
-        gtk_style_context_add_class(gtk_widget_get_style_context(dl), "city-row-title");
+        gtk_style_context_add_class(gtk_widget_get_style_context(dl), "wx-city-title");
         gtk_label_set_xalign(GTK_LABEL(dl), 0.0);
         GtkWidget *dtl = gtk_label_new(active_fc.daily[i].date_label);
         gtk_style_context_add_class(gtk_widget_get_style_context(dtl), "dim-label");
@@ -870,7 +999,7 @@ static void rebuild_daily_list(void)
         char pop_str[32];
         snprintf(pop_str, sizeof(pop_str), "%d%% rain", active_fc.daily[i].pop_pct);
         GtkWidget *pl = gtk_label_new(pop_str);
-        gtk_style_context_add_class(gtk_widget_get_style_context(pl), "rain-pill");
+        gtk_style_context_add_class(gtk_widget_get_style_context(pl), "wx-rain");
         gtk_widget_set_size_request(pl, 74, -1);
         gtk_box_pack_start(GTK_BOX(row), pl, FALSE, FALSE, 0);
 
@@ -899,7 +1028,7 @@ static void rebuild_daily_list(void)
         gtk_box_pack_start(GTK_BOX(row), bar, TRUE, TRUE, 0);
 
         GtkWidget *max_l = gtk_label_new(max_b);
-        gtk_style_context_add_class(gtk_widget_get_style_context(max_l), "hour-temp-label");
+        gtk_style_context_add_class(gtk_widget_get_style_context(max_l), "wx-hour-temp");
         gtk_widget_set_size_request(max_l, 42, -1);
         gtk_label_set_xalign(GTK_LABEL(max_l), 0.0);
         gtk_box_pack_start(GTK_BOX(row), max_l, FALSE, FALSE, 0);
@@ -988,10 +1117,13 @@ static void refresh_forecast_views(void)
 {
     if (unit_temp_btn)
         gtk_button_set_label(GTK_BUTTON(unit_temp_btn), use_fahrenheit ? "°F" : "°C");
+    update_page_header();
     update_sidebar_labels_in_place();
     rebuild_hourly_strip();
     rebuild_daily_list();
     update_detail_cards();
+    if (!fetch_in_progress)
+        update_status_text();
     if (hero_area) gtk_widget_queue_draw(hero_area);
     if (chart_area) gtk_widget_queue_draw(chart_area);
 }
@@ -1094,7 +1226,11 @@ static void on_add_city_clicked(GtkButton *btn, gpointer user_data)
         "_Cancel", GTK_RESPONSE_CANCEL,
         "_Add Selected", GTK_RESPONSE_ACCEPT,
         NULL);
-    gtk_window_set_default_size(GTK_WINDOW(dlg), 460, 420);
+    gtk_style_context_add_class(gtk_widget_get_style_context(dlg), "wx-add-dialog");
+    gtk_window_set_default_size(GTK_WINDOW(dlg), 500, 460);
+    GtkWidget *accept_btn = gtk_dialog_get_widget_for_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+    if (accept_btn)
+        gtk_style_context_add_class(gtk_widget_get_style_context(accept_btn), "suggested-action");
 
     AddCityDialogData d;
     memset(&d, 0, sizeof(d));
@@ -1102,10 +1238,20 @@ static void on_add_city_clicked(GtkButton *btn, gpointer user_data)
 
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_container_set_border_width(GTK_CONTAINER(vbox), 12);
+    gtk_container_set_border_width(GTK_CONTAINER(vbox), 16);
+
+    GtkWidget *dialog_title = gtk_label_new("Add a location");
+    gtk_style_context_add_class(gtk_widget_get_style_context(dialog_title), "wx-page-title");
+    gtk_label_set_xalign(GTK_LABEL(dialog_title), 0.0);
+    gtk_box_pack_start(GTK_BOX(vbox), dialog_title, FALSE, FALSE, 0);
+    GtkWidget *dialog_sub = gtk_label_new("Search the built-in city list, then add it to your sidebar.");
+    gtk_style_context_add_class(gtk_widget_get_style_context(dialog_sub), "wx-page-sub");
+    gtk_label_set_xalign(GTK_LABEL(dialog_sub), 0.0);
+    gtk_box_pack_start(GTK_BOX(vbox), dialog_sub, FALSE, FALSE, 0);
 
     d.search_entry = gtk_search_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(d.search_entry), "Search city or country (e.g. Tokyo, Vietnam, Paris)...");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(d.search_entry), "City or country, e.g. Tokyo, Vietnam, Paris");
+    gtk_style_context_add_class(gtk_widget_get_style_context(d.search_entry), "wx-search");
     gtk_box_pack_start(GTK_BOX(vbox), d.search_entry, FALSE, FALSE, 0);
 
     GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
@@ -1241,6 +1387,14 @@ static gboolean on_window_key_press(GtkWidget *w, GdkEventKey *ev, gpointer user
         on_refresh_clicked(NULL, NULL);
         return TRUE;
     }
+    if (mods == GDK_CONTROL_MASK && (ev->keyval == GDK_KEY_f || ev->keyval == GDK_KEY_F)) {
+        if (city_filter_entry) gtk_widget_grab_focus(city_filter_entry);
+        return TRUE;
+    }
+    if (mods == GDK_CONTROL_MASK && (ev->keyval == GDK_KEY_n || ev->keyval == GDK_KEY_N)) {
+        on_add_city_clicked(NULL, NULL);
+        return TRUE;
+    }
     if (mods == GDK_CONTROL_MASK && (ev->keyval == GDK_KEY_q || ev->keyval == GDK_KEY_Q)) {
         gtk_widget_destroy(main_win);
         return TRUE;
@@ -1255,20 +1409,20 @@ static GtkWidget *make_detail_card(const char *title, const char *icon_name,
                                    GtkWidget *extra_widget)
 {
     GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-    gtk_style_context_add_class(gtk_widget_get_style_context(card), "weather-detail-card");
+    gtk_style_context_add_class(gtk_widget_get_style_context(card), "wx-detail-card");
     gtk_widget_set_hexpand(card, TRUE);
 
     GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *ic = gtk_image_new_from_icon_name(icon_name, GTK_ICON_SIZE_MENU);
     GtkWidget *tl = gtk_label_new(title);
-    gtk_style_context_add_class(gtk_widget_get_style_context(tl), "detail-card-title");
+    gtk_style_context_add_class(gtk_widget_get_style_context(tl), "wx-detail-title");
     gtk_label_set_xalign(GTK_LABEL(tl), 0.0);
     gtk_box_pack_start(GTK_BOX(top), ic, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(top), tl, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(card), top, FALSE, FALSE, 0);
 
     GtkWidget *vl = gtk_label_new("—");
-    gtk_style_context_add_class(gtk_widget_get_style_context(vl), "detail-card-value");
+    gtk_style_context_add_class(gtk_widget_get_style_context(vl), "wx-detail-value");
     gtk_label_set_xalign(GTK_LABEL(vl), 0.0);
     gtk_box_pack_start(GTK_BOX(card), vl, FALSE, FALSE, 0);
 
@@ -1286,6 +1440,22 @@ static GtkWidget *make_detail_card(const char *title, const char *icon_name,
     return card;
 }
 
+static GtkWidget *make_section_heading(const char *title, const char *subtitle)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    GtkWidget *tl = gtk_label_new(title);
+    gtk_style_context_add_class(gtk_widget_get_style_context(tl), "wx-section-title");
+    gtk_label_set_xalign(GTK_LABEL(tl), 0.0);
+    gtk_box_pack_start(GTK_BOX(box), tl, FALSE, FALSE, 0);
+    if (subtitle && *subtitle) {
+        GtkWidget *sl = gtk_label_new(subtitle);
+        gtk_style_context_add_class(gtk_widget_get_style_context(sl), "wx-section-sub");
+        gtk_label_set_xalign(GTK_LABEL(sl), 0.0);
+        gtk_box_pack_start(GTK_BOX(box), sl, FALSE, FALSE, 0);
+    }
+    return box;
+}
+
 static void apply_weather_css(void)
 {
     if (!app_css) {
@@ -1294,20 +1464,74 @@ static void apply_weather_css(void)
             gdk_screen_get_default(), GTK_STYLE_PROVIDER(app_css),
             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
-    const char *css =
-        ".weather-sidebar { background: alpha(@theme_fg_color, 0.03); border-right: 1px solid alpha(@theme_fg_color, 0.10); }"
-        ".city-row-title { font-weight: 700; font-size: 13.5px; }"
-        ".city-row-temp { font-weight: 700; font-size: 18px; }"
-        ".weather-section-card { background: alpha(@theme_fg_color, 0.04); border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 12px; padding: 14px; }"
-        ".weather-section-title { font-weight: 700; font-size: 14px; opacity: 0.85; }"
-        ".weather-hour-card { background: alpha(@theme_fg_color, 0.04); border: 1px solid alpha(@theme_fg_color, 0.08); border-radius: 10px; padding: 10px 8px; }"
-        ".hour-temp-label { font-weight: 700; font-size: 14px; }"
-        ".rain-pill { color: #3584e4; font-weight: 600; font-size: 11.5px; }"
-        ".weather-day-row { padding: 8px 6px; border-bottom: 1px solid alpha(@theme_fg_color, 0.06); }"
-        ".weather-detail-card { background: alpha(@theme_fg_color, 0.04); border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 12px; padding: 14px; }"
-        ".detail-card-title { font-weight: 600; font-size: 12px; opacity: 0.72; }"
-        ".detail-card-value { font-weight: 700; font-size: 20px; }";
-    gtk_css_provider_load_from_data(app_css, css, -1, NULL);
+
+    HdeThemeInfo ti;
+    hde_theme_info_load(&ti);
+    GdkRGBA accent;
+    if (gdk_rgba_parse(&accent, ti.accent)) {
+        accent_r = accent.red;
+        accent_g = accent.green;
+        accent_b = accent.blue;
+    }
+    set_ui_font_family(ti.font);
+    if (!ti.font || !*ti.font) {
+        char *font_name = NULL;
+        g_object_get(gtk_settings_get_default(), "gtk-font-name", &font_name, NULL);
+        set_ui_font_family(font_name);
+        g_free(font_name);
+    }
+    char *accent_css = hde_theme_accent_css(&ti);
+
+    GString *css = g_string_new(NULL);
+    g_string_append(css,
+        ".wx-sidebar { background-color: shade(@theme_bg_color, 0.96);"
+        " border-right: 1px solid alpha(@theme_fg_color, 0.10); }"
+        ".wx-sidebar viewport, .wx-sidebar scrolledwindow { background: none; border: none; }"
+        ".wx-brand-title { font-size: 17px; font-weight: 700; }"
+        ".wx-brand-sub { font-size: 11px; opacity: 0.62; }"
+        ".wx-page-title { font-size: 24px; font-weight: 700; }"
+        ".wx-page-sub { font-size: 13px; opacity: 0.70; }"
+        ".wx-status { font-size: 11px; opacity: 0.68; }"
+        ".wx-section-title { font-size: 15px; font-weight: 700; }"
+        ".wx-section-sub { font-size: 11px; opacity: 0.62; }"
+        ".wx-card { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.12);"
+        " border-radius: 12px; }"
+        ".wx-city-row { border-radius: 10px; padding: 7px 8px; }"
+        ".wx-city-row:hover { background-color: alpha(@theme_fg_color, 0.06); }"
+        ".wx-city-row:selected { background-image: none; background-color: ");
+    g_string_append(css, ti.accent);
+    g_string_append(css,
+        "; color: #ffffff; }"
+        ".wx-city-row:selected label { color: #ffffff; }"
+        ".wx-city-row:selected .wx-city-sub { color: rgba(255, 255, 255, 0.82); opacity: 1.0; }"
+        ".wx-city-title { font-weight: 600; font-size: 13px; }"
+        ".wx-city-sub { font-size: 11px; opacity: 0.62; }"
+        ".wx-city-temp { font-weight: 700; font-size: 17px; }"
+        ".wx-hour-card { background-color: alpha(@theme_fg_color, 0.035);"
+        " border: 1px solid alpha(@theme_fg_color, 0.08); border-radius: 10px; padding: 9px 6px; }"
+        ".wx-hour-temp { font-weight: 700; font-size: 14px; }"
+        ".wx-rain { font-weight: 600; font-size: 11px; color: ");
+    g_string_append(css, ti.accent);
+    g_string_append(css,
+        "; }"
+        ".wx-day-row { padding: 8px 4px; border-bottom: 1px solid alpha(@theme_fg_color, 0.07); }"
+        ".wx-detail-card { background-color: @theme_base_color;"
+        " border: 1px solid alpha(@theme_fg_color, 0.12); border-radius: 12px; padding: 14px; }"
+        ".wx-detail-title { font-size: 11px; font-weight: 700; opacity: 0.55; }"
+        ".wx-detail-value { font-size: 20px; font-weight: 700; }"
+        ".wx-add { padding: 8px 10px; border-radius: 10px; font-weight: 600; }"
+        ".wx-unit { padding: 5px 10px; border-radius: 8px; font-weight: 600; }"
+        ".wx-search { border-radius: 10px; background-color: alpha(@theme_fg_color, 0.055);"
+        " border: 1px solid alpha(@theme_fg_color, 0.14); color: @theme_fg_color; }"
+        ".wx-search image { color: alpha(@theme_fg_color, 0.58); }"
+        "button { border-radius: 8px; }"
+        "row:selected { background-image: none; }");
+    g_string_append_printf(css, ".wx-search:focus { border-color: %s; }", ti.accent);
+    g_string_append(css, accent_css);
+    gtk_css_provider_load_from_data(app_css, css->str, -1, NULL);
+    g_string_free(css, TRUE);
+    g_free(accent_css);
+    hde_theme_info_clear(&ti);
 }
 
 static void on_theme_changed(gpointer user_data)
@@ -1318,6 +1542,9 @@ static void on_theme_changed(gpointer user_data)
     hde_theme_info_load(&info);
     anim_enabled = info.enable_animations;
     hde_theme_info_clear(&info);
+    apply_weather_css();
+    if (main_win)
+        gtk_widget_queue_draw(main_win);
 }
 
 int main(int argc, char **argv)
@@ -1352,106 +1579,158 @@ int main(int argc, char **argv)
 
     main_win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(main_win), APP_TITLE);
-    gtk_window_set_default_size(GTK_WINDOW(main_win), 1040, 720);
+    gtk_window_set_default_size(GTK_WINDOW(main_win), 1180, 780);
+    gtk_widget_set_size_request(main_win, 1040, 640);
     gtk_window_set_icon_name(GTK_WINDOW(main_win), "weather-clear");
     g_signal_connect(main_win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
     g_signal_connect(main_win, "key-press-event", G_CALLBACK(on_window_key_press), NULL);
 
-    /* HeaderBar */
-    GtkWidget *hbar = gtk_header_bar_new();
-    gtk_header_bar_set_show_close_button(GTK_HEADER_BAR(hbar), TRUE);
-    gtk_header_bar_set_title(GTK_HEADER_BAR(hbar), APP_TITLE);
-    gtk_header_bar_set_subtitle(GTK_HEADER_BAR(hbar), "Forecast & Atmospheric Conditions");
+    GtkWidget *root = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_container_add(GTK_CONTAINER(main_win), root);
 
-    GtkWidget *add_btn = gtk_button_new_with_label("+ Add Location");
-    gtk_widget_set_tooltip_text(add_btn, "Add a city to saved locations");
-    g_signal_connect(add_btn, "clicked", G_CALLBACK(on_add_city_clicked), NULL);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(hbar), add_btn);
+    /* Sidebar: the same fixed 280-ish column and quiet surface as HDE Settings. */
+    GtkWidget *side_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_style_context_add_class(gtk_widget_get_style_context(side_box), "wx-sidebar");
+    gtk_widget_set_size_request(side_box, 286, -1);
+    gtk_container_set_border_width(GTK_CONTAINER(side_box), 12);
 
-    GtkWidget *ref_btn = gtk_button_new_from_icon_name("view-refresh-symbolic", GTK_ICON_SIZE_BUTTON);
-    gtk_widget_set_tooltip_text(ref_btn, "Refresh weather forecast (Ctrl+R / F5)");
-    g_signal_connect(ref_btn, "clicked", G_CALLBACK(on_refresh_clicked), NULL);
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(hbar), ref_btn);
-
-    status_spinner = gtk_spinner_new();
-    gtk_header_bar_pack_start(GTK_HEADER_BAR(hbar), status_spinner);
-
-    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
-    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Weather (F1)");
-    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), NULL);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(hbar), about_btn);
-
-    unit_wind_combo = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "km/h");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "mph");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "m/s");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(unit_wind_combo), wind_unit);
-    g_signal_connect(unit_wind_combo, "changed", G_CALLBACK(on_wind_unit_changed), NULL);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(hbar), unit_wind_combo);
-
-    unit_temp_btn = gtk_button_new_with_label(use_fahrenheit ? "°F" : "°C");
-    gtk_widget_set_tooltip_text(unit_temp_btn, "Toggle Celsius / Fahrenheit");
-    g_signal_connect(unit_temp_btn, "clicked", G_CALLBACK(on_temp_unit_clicked), NULL);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(hbar), unit_temp_btn);
-
-    gtk_window_set_titlebar(GTK_WINDOW(main_win), hbar);
-
-    /* Main Horizontal Paned: Sidebar (Saved Cities) + Right Scrollable Forecast View */
-    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_paned_set_position(GTK_PANED(paned), 265);
-
-    /* Sidebar */
-    GtkWidget *side_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_style_context_add_class(gtk_widget_get_style_context(side_box), "weather-sidebar");
-    gtk_container_set_border_width(GTK_CONTAINER(side_box), 10);
+    GtkWidget *brand = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget *brand_icon = gtk_image_new_from_icon_name("weather-clear", GTK_ICON_SIZE_DND);
+    gtk_image_set_pixel_size(GTK_IMAGE(brand_icon), 34);
+    gtk_widget_set_valign(brand_icon, GTK_ALIGN_CENTER);
+    gtk_box_pack_start(GTK_BOX(brand), brand_icon, FALSE, FALSE, 0);
+    GtkWidget *brand_text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
+    GtkWidget *brand_title = gtk_label_new("Hyggshi Weather");
+    gtk_style_context_add_class(gtk_widget_get_style_context(brand_title), "wx-brand-title");
+    gtk_label_set_xalign(GTK_LABEL(brand_title), 0.0);
+    GtkWidget *brand_sub = gtk_label_new("Forecast & conditions");
+    gtk_style_context_add_class(gtk_widget_get_style_context(brand_sub), "wx-brand-sub");
+    gtk_label_set_xalign(GTK_LABEL(brand_sub), 0.0);
+    gtk_box_pack_start(GTK_BOX(brand_text), brand_title, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(brand_text), brand_sub, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(brand), brand_text, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(side_box), brand, FALSE, FALSE, 2);
 
     city_filter_entry = gtk_search_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(city_filter_entry), "Filter saved locations...");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(city_filter_entry), "Search saved locations");
+    gtk_style_context_add_class(gtk_widget_get_style_context(city_filter_entry), "wx-search");
     g_signal_connect(city_filter_entry, "changed", G_CALLBACK(on_city_filter_changed), NULL);
     gtk_box_pack_start(GTK_BOX(side_box), city_filter_entry, FALSE, FALSE, 0);
 
     GtkWidget *side_sw = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(side_sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(side_sw), GTK_SHADOW_NONE);
     gtk_widget_set_vexpand(side_sw, TRUE);
 
     city_list_box = gtk_list_box_new();
     gtk_list_box_set_selection_mode(GTK_LIST_BOX(city_list_box), GTK_SELECTION_SINGLE);
     gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(city_list_box), FALSE);
     g_signal_connect(city_list_box, "row-selected", G_CALLBACK(on_city_row_selected), NULL);
+    g_signal_connect(city_list_box, "button-press-event", G_CALLBACK(on_city_list_button_press), NULL);
     gtk_container_add(GTK_CONTAINER(side_sw), city_list_box);
     gtk_box_pack_start(GTK_BOX(side_box), side_sw, TRUE, TRUE, 0);
 
-    gtk_paned_pack1(GTK_PANED(paned), side_box, FALSE, FALSE);
+    GtkWidget *add_btn = gtk_button_new();
+    gtk_style_context_add_class(gtk_widget_get_style_context(add_btn), "wx-add");
+    GtkWidget *add_content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 7);
+    gtk_widget_set_halign(add_content, GTK_ALIGN_CENTER);
+    gtk_box_pack_start(GTK_BOX(add_content),
+                       gtk_image_new_from_icon_name("list-add-symbolic", GTK_ICON_SIZE_MENU), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(add_content), gtk_label_new("Add Location"), FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(add_btn), add_content);
+    gtk_widget_set_tooltip_text(add_btn, "Add a city to saved locations (Ctrl+N)");
+    g_signal_connect(add_btn, "clicked", G_CALLBACK(on_add_city_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(side_box), add_btn, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(root), side_box, FALSE, FALSE, 0);
 
-    /* Right Scrollable Forecast Content */
+    /* Main page: page heading + quiet toolbar, scrollable cards, and a status line. */
+    GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_pack_start(GTK_BOX(root), main_box, TRUE, TRUE, 0);
+
+    GtkWidget *header_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+    gtk_widget_set_margin_start(header_row, 24);
+    gtk_widget_set_margin_end(header_row, 24);
+    gtk_widget_set_margin_top(header_row, 20);
+    gtk_widget_set_margin_bottom(header_row, 12);
+
+    GtkWidget *header_text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    page_title = gtk_label_new("Weather");
+    gtk_style_context_add_class(gtk_widget_get_style_context(page_title), "wx-page-title");
+    gtk_label_set_xalign(GTK_LABEL(page_title), 0.0);
+    gtk_label_set_ellipsize(GTK_LABEL(page_title), PANGO_ELLIPSIZE_END);
+    page_subtitle = gtk_label_new("Forecast & atmospheric conditions");
+    gtk_style_context_add_class(gtk_widget_get_style_context(page_subtitle), "wx-page-sub");
+    gtk_label_set_xalign(GTK_LABEL(page_subtitle), 0.0);
+    gtk_label_set_ellipsize(GTK_LABEL(page_subtitle), PANGO_ELLIPSIZE_END);
+    gtk_box_pack_start(GTK_BOX(header_text), page_title, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(header_text), page_subtitle, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(header_row), header_text, TRUE, TRUE, 0);
+
+    GtkWidget *controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_valign(controls, GTK_ALIGN_CENTER);
+
+    unit_temp_btn = gtk_button_new_with_label(use_fahrenheit ? "°F" : "°C");
+    gtk_style_context_add_class(gtk_widget_get_style_context(unit_temp_btn), "wx-unit");
+    gtk_widget_set_tooltip_text(unit_temp_btn, "Toggle Celsius / Fahrenheit");
+    g_signal_connect(unit_temp_btn, "clicked", G_CALLBACK(on_temp_unit_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(controls), unit_temp_btn, FALSE, FALSE, 0);
+
+    unit_wind_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "km/h");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "mph");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(unit_wind_combo), "m/s");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(unit_wind_combo), wind_unit);
+    gtk_style_context_add_class(gtk_widget_get_style_context(unit_wind_combo), "wx-unit");
+    gtk_widget_set_size_request(unit_wind_combo, 82, -1);
+    gtk_widget_set_tooltip_text(unit_wind_combo, "Wind speed unit");
+    g_signal_connect(unit_wind_combo, "changed", G_CALLBACK(on_wind_unit_changed), NULL);
+    gtk_box_pack_start(GTK_BOX(controls), unit_wind_combo, FALSE, FALSE, 0);
+
+    GtkWidget *ref_btn = gtk_button_new_from_icon_name("view-refresh-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(ref_btn, "Refresh weather forecast (Ctrl+R / F5)");
+    g_signal_connect(ref_btn, "clicked", G_CALLBACK(on_refresh_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(controls), ref_btn, FALSE, FALSE, 0);
+
+    GtkWidget *about_btn = gtk_button_new_from_icon_name("help-about-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(about_btn, "About Hyggshi Weather (F1)");
+    g_signal_connect(about_btn, "clicked", G_CALLBACK(on_about_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(controls), about_btn, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(header_row), controls, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(main_box), header_row, FALSE, FALSE, 0);
+
     GtkWidget *main_sw = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(main_sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(main_sw), GTK_SHADOW_NONE);
+    gtk_box_pack_start(GTK_BOX(main_box), main_sw, TRUE, TRUE, 0);
 
-    GtkWidget *content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
-    gtk_container_set_border_width(GTK_CONTAINER(content_box), 18);
+    GtkWidget *content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 18);
+    gtk_widget_set_margin_start(content_box, 24);
+    gtk_widget_set_margin_end(content_box, 24);
+    gtk_widget_set_margin_top(content_box, 2);
+    gtk_widget_set_margin_bottom(content_box, 22);
 
     /* 1. Animated Cairo Hero Banner */
     hero_area = gtk_drawing_area_new();
-    gtk_widget_set_size_request(hero_area, -1, 204);
+    gtk_widget_set_size_request(hero_area, -1, 212);
     g_signal_connect(hero_area, "draw", G_CALLBACK(on_hero_draw), NULL);
     gtk_box_pack_start(GTK_BOX(content_box), hero_area, FALSE, FALSE, 0);
 
     /* 2. 24-Hour Forecast Section (Temperature Chart + Scrollable Cards) */
     GtkWidget *hourly_sec = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_style_context_add_class(gtk_widget_get_style_context(hourly_sec), "weather-section-card");
-
-    GtkWidget *h_title = gtk_label_new("24-Hour Forecast & Temperature Trend");
-    gtk_style_context_add_class(gtk_widget_get_style_context(h_title), "weather-section-title");
-    gtk_label_set_xalign(GTK_LABEL(h_title), 0.0);
-    gtk_box_pack_start(GTK_BOX(hourly_sec), h_title, FALSE, FALSE, 0);
+    gtk_style_context_add_class(gtk_widget_get_style_context(hourly_sec), "wx-card");
+    gtk_container_set_border_width(GTK_CONTAINER(hourly_sec), 16);
+    gtk_box_pack_start(GTK_BOX(hourly_sec),
+        make_section_heading("24-Hour Forecast", "Temperature trend and chance of precipitation"), FALSE, FALSE, 0);
 
     chart_area = gtk_drawing_area_new();
-    gtk_widget_set_size_request(chart_area, -1, 130);
+    gtk_widget_set_size_request(chart_area, -1, 128);
     g_signal_connect(chart_area, "draw", G_CALLBACK(on_chart_draw), NULL);
     gtk_box_pack_start(GTK_BOX(hourly_sec), chart_area, FALSE, FALSE, 0);
 
     GtkWidget *h_sw = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(h_sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+    gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(h_sw), GTK_SHADOW_NONE);
+    gtk_widget_set_size_request(h_sw, -1, 106);
     hourly_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_container_add(GTK_CONTAINER(h_sw), hourly_box);
     gtk_box_pack_start(GTK_BOX(hourly_sec), h_sw, FALSE, FALSE, 0);
@@ -1460,24 +1739,22 @@ int main(int argc, char **argv)
 
     /* 3. 7-Day Forecast Section */
     GtkWidget *daily_sec = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_style_context_add_class(gtk_widget_get_style_context(daily_sec), "weather-section-card");
+    gtk_style_context_add_class(gtk_widget_get_style_context(daily_sec), "wx-card");
+    gtk_container_set_border_width(GTK_CONTAINER(daily_sec), 16);
+    gtk_box_pack_start(GTK_BOX(daily_sec),
+        make_section_heading("7-Day Outlook", "Daily range, conditions and rain chance"), FALSE, FALSE, 0);
 
-    GtkWidget *d_title = gtk_label_new("7-Day Outlook");
-    gtk_style_context_add_class(gtk_widget_get_style_context(d_title), "weather-section-title");
-    gtk_label_set_xalign(GTK_LABEL(d_title), 0.0);
-    gtk_box_pack_start(GTK_BOX(daily_sec), d_title, FALSE, FALSE, 0);
-
-    daily_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    daily_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_pack_start(GTK_BOX(daily_sec), daily_box, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(content_box), daily_sec, FALSE, FALSE, 0);
 
     /* 4. Atmospheric Details Grid (4x2) */
-    GtkWidget *grid_title = gtk_label_new("Atmospheric Conditions & Comfort");
-    gtk_style_context_add_class(gtk_widget_get_style_context(grid_title), "weather-section-title");
-    gtk_label_set_xalign(GTK_LABEL(grid_title), 0.0);
-    gtk_box_pack_start(GTK_BOX(content_box), grid_title, FALSE, FALSE, 0);
+    GtkWidget *grid_section = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_box_pack_start(GTK_BOX(grid_section),
+        make_section_heading("Atmospheric Conditions", "Comfort, visibility and air quality at a glance"), FALSE, FALSE, 0);
 
     GtkWidget *grid = gtk_grid_new();
+    gtk_widget_set_margin_top(grid, 2);
     gtk_grid_set_row_spacing(GTK_GRID(grid), 12);
     gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
     gtk_grid_set_column_homogeneous(GTK_GRID(grid), TRUE);
@@ -1516,14 +1793,38 @@ int main(int argc, char **argv)
         make_detail_card("AIR QUALITY", "weather-few-clouds-symbolic", &lbl_aqi_val, &lbl_aqi_sub, bar_aqi),
         3, 1, 1, 1);
 
-    gtk_box_pack_start(GTK_BOX(content_box), grid, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(grid_section), grid, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content_box), grid_section, FALSE, FALSE, 0);
 
     gtk_container_add(GTK_CONTAINER(main_sw), content_box);
-    gtk_paned_pack2(GTK_PANED(paned), main_sw, TRUE, FALSE);
-    gtk_container_add(GTK_CONTAINER(main_win), paned);
+
+    GtkWidget *status_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_start(status_bar, 26);
+    gtk_widget_set_margin_end(status_bar, 26);
+    gtk_widget_set_margin_top(status_bar, 7);
+    gtk_widget_set_margin_bottom(status_bar, 8);
+
+    status_spinner = gtk_spinner_new();
+    gtk_widget_set_size_request(status_spinner, 16, 16);
+    gtk_widget_set_no_show_all(status_spinner, TRUE);
+    gtk_box_pack_start(GTK_BOX(status_bar), status_spinner, FALSE, FALSE, 0);
+
+    status_label = gtk_label_new("Ready");
+    gtk_style_context_add_class(gtk_widget_get_style_context(status_label), "wx-status");
+    gtk_label_set_xalign(GTK_LABEL(status_label), 0.0);
+    gtk_label_set_ellipsize(GTK_LABEL(status_label), PANGO_ELLIPSIZE_END);
+    gtk_widget_set_hexpand(status_label, TRUE);
+    gtk_box_pack_start(GTK_BOX(status_bar), status_label, TRUE, TRUE, 0);
+
+    meta_label = gtk_label_new("");
+    gtk_style_context_add_class(gtk_widget_get_style_context(meta_label), "wx-status");
+    gtk_label_set_xalign(GTK_LABEL(meta_label), 1.0);
+    gtk_box_pack_end(GTK_BOX(status_bar), meta_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(main_box), status_bar, FALSE, FALSE, 0);
 
     refresh_all_views();
     gtk_widget_show_all(main_win);
+    set_fetch_indicator(FALSE);
 
     anim_timer_id = g_timeout_add(33, on_anim_tick, NULL);
     start_async_fetch_for_city(active_city_idx);
