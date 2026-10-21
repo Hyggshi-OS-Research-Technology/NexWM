@@ -139,8 +139,9 @@ int main(void)
     hde_cmd_vt_reset(vt);
     feed(vt, "keep\033[2;3Hx");
     hde_cmd_vt_resize(vt, 4, 12);
-    CHECK(hde_cmd_vt_rows(vt) == 4 && hde_cmd_vt_columns(vt) == 12 && cell_char(vt, 1, 0) == 'k',
-          "resizing keeps existing screen content and adopts the new dimensions");
+    CHECK(hde_cmd_vt_rows(vt) == 4 && hde_cmd_vt_columns(vt) == 12 && cell_char(vt, 0, 0) == 'k' &&
+          cell_char(vt, 1, 2) == 'x' && hde_cmd_vt_cursor_y(vt) == 1,
+          "resizing keeps the text where it was (at the top of the screen) and adopts the new dimensions");
 
     hde_cmd_vt_reset(vt);
     feed(vt, "\033(0lqk\033(Bbox");

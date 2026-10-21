@@ -24,7 +24,8 @@ The built-in engine creates a PTY, sets `TERM=xterm-256color`, and supports Unic
 scrolling, insert/erase, 16/256/true-colour SGR, bold/italic/underline/inverse, alternate screen, OSC window titles,
 status replies, application cursor keys, mouse reporting, bracketed paste and up to 2,000 lines of scrollback.
 Right-click opens the actions menu (Copy, Paste, new terminal, open a folder in a new terminal, zoom and full screen).
-The header bar has a visible new-terminal button. `Ctrl+Shift+T` opens a new terminal window, `Ctrl+Shift+O` opens a
+The window is a plain terminal: the title bar of the window manager, the text and nothing else — no header bar of its
+own, no status bar. It opens with 80x24 cells. `Ctrl+Shift+T` opens a new terminal window, `Ctrl+Shift+O` opens a
 folder in a new terminal, and `Ctrl+Shift+W` closes the current window. `Ctrl+Shift+C` copies a selection,
 `Ctrl+Shift+V` pastes, `Shift+PageUp/PageDown` scrolls, `Ctrl+Plus/Minus/0` changes font size, and `F11` toggles full
 screen.

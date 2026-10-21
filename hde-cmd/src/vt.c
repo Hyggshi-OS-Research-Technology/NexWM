@@ -169,7 +169,6 @@ static void screen_resize(VtScreen *s, int rows, int columns)
     int old_rows = s->rows;
     int old_columns = s->columns;
     int old_history = s->history;
-    int old_total = old_history + old_rows;
     int old_x = s->x, old_y = s->y;
     int old_saved_x = s->saved_x, old_saved_y = s->saved_y;
     int old_view = s->view_offset;
@@ -189,39 +188,49 @@ static void screen_resize(VtScreen *s, int rows, int columns)
     s->cells = new_cells;
     for (int i = 0; i < new_capacity; i++) clear_line(s, i);
 
-    int copy_count;
-    int source_start;
-    int destination_start;
-    if (old_total > rows) {
-        copy_count = old_total;
-        int max_keep = new_capacity;
-        if (copy_count > max_keep) copy_count = max_keep;
-        source_start = old_total - copy_count;
-        destination_start = 0;
-        s->history = copy_count - rows;
-    } else {
-        copy_count = old_total;
-        source_start = 0;
-        destination_start = rows - old_total;
-        s->history = 0;
-    }
+    /* What stays after the resize: the scrollback that fits and the part of the old screen that stays
+     * visible. A screen that GROWS keeps its text at the TOP (the new lines are empty below it — a terminal
+     * that pushed its content down would print its prompt at the bottom of the window); a screen that SHRINKS
+     * scrolls its first lines into the scrollback (the text keeps its distance from the bottom). */
+    int history_room = new_capacity - rows;
+    int keep_history = old_history < history_room ? old_history : history_room;
+    int visible_old = old_rows < rows ? old_rows : rows;          /* the lines of the old screen that stay */
+    int scrolled_off = old_rows - visible_old;                    /* they move into the scrollback */
+    int new_history = keep_history + scrolled_off;
+    if (new_history > history_room) new_history = history_room;
+    s->history = new_history;
 
     int copy_columns = old_columns < columns ? old_columns : columns;
-    for (int i = 0; i < copy_count; i++) {
-        int source_logical = source_start + i;
+    /* the scrollback: the newest lines of the old one, then the lines that left the screen */
+    for (int i = 0; i < keep_history; i++) {
+        int source_logical = old_history - keep_history + i;
         int source_index = (old_first + source_logical) % old_capacity;
         if (source_index < 0) source_index += old_capacity;
         const HdeCmdVtCell *src = old_cells + (size_t)source_index * (size_t)old_columns;
-        HdeCmdVtCell *dst = physical_line(s, destination_start + i);
+        HdeCmdVtCell *dst = physical_line(s, i);
+        memcpy(dst, src, (size_t)copy_columns * sizeof *dst);
+    }
+    int scrolled_kept = new_history - keep_history;
+    for (int i = 0; i < scrolled_kept; i++) {
+        int source_logical = old_history + i;
+        int source_index = (old_first + source_logical) % old_capacity;
+        if (source_index < 0) source_index += old_capacity;
+        const HdeCmdVtCell *src = old_cells + (size_t)source_index * (size_t)old_columns;
+        HdeCmdVtCell *dst = physical_line(s, keep_history + i);
+        memcpy(dst, src, (size_t)copy_columns * sizeof *dst);
+    }
+    /* the screen itself: the old text at the top of the new one */
+    for (int i = 0; i < visible_old; i++) {
+        int source_logical = old_history + (old_rows - visible_old) + i;
+        int source_index = (old_first + source_logical) % old_capacity;
+        if (source_index < 0) source_index += old_capacity;
+        const HdeCmdVtCell *src = old_cells + (size_t)source_index * (size_t)old_columns;
+        HdeCmdVtCell *dst = physical_line(s, new_history + i);
         memcpy(dst, src, (size_t)copy_columns * sizeof *dst);
     }
 
-    int old_cursor_logical = old_history + old_y;
-    int old_saved_logical = old_history + old_saved_y;
-    int leading_blank = old_total < rows ? rows - old_total : 0;
-    int trimmed = old_total > rows ? old_total - (s->history + rows) : 0;
-    s->y = clamp_int(old_cursor_logical - trimmed - s->history + leading_blank, 0, rows - 1);
-    s->saved_y = clamp_int(old_saved_logical - trimmed - s->history + leading_blank, 0, rows - 1);
+    s->y = clamp_int(old_y - scrolled_off, 0, rows - 1);
+    s->saved_y = clamp_int(old_saved_y - scrolled_off, 0, rows - 1);
     s->x = clamp_int(old_x, 0, columns - 1);
     s->saved_x = clamp_int(old_saved_x, 0, columns - 1);
     s->scroll_top = 0;
