@@ -23,15 +23,14 @@ install_hint() {
     else echo "install $1"; fi
 }
 
-# The display manager's PATH sometimes lacks /usr/local/bin
-case ":$PATH:" in *:/usr/local/bin:*) ;; *) PATH="$PATH:/usr/local/bin" ;; esac
+# Start the programs of this installation, not a stale copy in /usr/local/bin: the display manager's PATH is not
+# always complete, and a source build in /usr/local must not win over an APT package in /usr (or the other way
+# around). The directory of hde-start is the one the login manager actually selected.
+HERE="$(dirname "$(readlink -f "$0")")"
+case ":$PATH:" in *":$HERE:"*) ;; *) PATH="$HERE:$PATH" ;; esac
 export PATH
-
-# Ensure local user library path is available (for gtk-layer-shell etc.)
-if [ -d "$HOME/.local/lib" ]; then
-    case ":${LD_LIBRARY_PATH:-}:" in *:"$HOME/.local/lib":*) ;; *) LD_LIBRARY_PATH="$HOME/.local/lib:$HOME/.local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}" ;; esac
-    export LD_LIBRARY_PATH
-fi
+# Libraries are found through the normal system path (or the rpath with which the programs were linked). Do not mix
+# a user's ~/.local libraries into a packaged session.
 
 # --wm NAME: the window manager this session must use (the "NexWM" entry on the login screen is HDE with
 # `hde-start --wm nexwm`). It is the same as exporting HDE_WM; Settings can still change it while the session runs.

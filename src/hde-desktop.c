@@ -1,7 +1,8 @@
 /* hde-desktop: wallpaper and desktop icons from ~/Desktop
  *
  * Icons: click = select (a visible frame, in the accent color), Ctrl+click = add/remove, drag on the empty
- * desktop = rubber-band selection, double-click / Enter = open. Right-click on an icon opens the icon's own
+ * desktop = rubber-band selection, drag a selected icon = move the whole selection, double-click / Enter = open.
+ * Right-click on an icon opens the icon's own
  * menu (Open, Open With, Open in Terminal, Cut, Copy, Rename, Move to Trash, Properties) for the clicked icon,
  * or for the whole selection when the icon is part of it; right-click on the empty desktop opens the desktop menu.
  * Keys: Delete / Shift+Delete, F2, Enter, Alt+Enter, Ctrl+A / C / X / V, Esc, Menu / Shift+F10.
@@ -14,6 +15,8 @@
 #include "hde-commands.h"
 #include "hde-panel-config.h"
 #include "hde-wl.h"
+#include "hde-widgets.h"
+#include "hde-wallpaper.h"
 #include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -28,7 +31,8 @@ static int panel_top_px, panel_bottom_px = HDE_PANEL_SIZE_DEFAULT;   /* the pane
 
 static GtkWidget *win, *fixed;
 static GdkPixbuf *wallpaper;
-static char *wallpaper_path;
+static char *wallpaper_path;        /* the picture that is shown */
+static char *wallpaper_source;      /* what config.ini / desktop.ini name: a picture, an XML or a *.png pattern */
 static int wallpaper_mode;          /* 0 Fill, 1 Fit, 2 Stretch, 3 Center (Settings > Appearance) */
 static GdkRectangle mon;
 static GdkRGBA accent = { 0.208, 0.518, 0.894, 1.0 };   /* #3584e4; replaced by the accent color of Settings */
@@ -40,14 +44,26 @@ static guint reload_id;
 #define DBG(...) do { if (debug_on) { g_printerr("hde-desktop: "); g_printerr(__VA_ARGS__); g_printerr("\n"); } } while (0)
 
 /* Mouse icon dragging and marquee selection */
+typedef struct {
+    GtkWidget *icon;
+    gint x, y;                  /* position when the drag started */
+} DragItem;
+
 static GtkWidget *drag_icon = NULL;
 static gboolean dragging_icon = FALSE;
 static gdouble drag_start_x = 0, drag_start_y = 0;
 static gint drag_orig_x = 0, drag_orig_y = 0;
 static gint drag_last_x = 0, drag_last_y = 0;
+static GPtrArray *drag_items;             /* the selection that moves together with drag_icon */
+static gboolean drag_collapse_selection;  /* keep the group while dragging, then select only the clicked icon */
 static gboolean selecting = FALSE;
 static gdouble select_start_x = 0, select_start_y = 0;
 static gdouble select_cur_x = 0, select_cur_y = 0;
+
+static void clear_drag_items(void)
+{
+    g_clear_pointer(&drag_items, g_ptr_array_unref);
+}
 
 typedef enum {
     SORT_NAME,
@@ -97,11 +113,21 @@ static void load_wallpaper(const char *path)
     redraw_all();
 }
 
+/* TRUE when file a exists and is newer than b (one-second resolution is enough: two writes in the same second end
+ * with the value written last). */
+static gboolean file_is_newer(const char *a, const char *b)
+{
+    GStatBuf sa, sb;
+    if (g_stat(a, &sa) != 0) return FALSE;
+    if (g_stat(b, &sb) != 0) return TRUE;
+    return sa.st_mtime > sb.st_mtime;
+}
+
 static void load_config(void)
 {
     GKeyFile *kf = g_key_file_new();
     char *cf = config_file();
-    char *wp = NULL;
+    char *wp = NULL;                 /* source value from config.ini (or the old settings.ini) */
     wallpaper_mode = 0;
     show_home_icon = TRUE;
     show_support_icon = TRUE;
@@ -122,10 +148,58 @@ static void load_config(void)
         g_free(sp);
         g_key_file_free(sk);
     }
-    if (wp && *wp) load_wallpaper(wp);
-    else if (win) gtk_widget_queue_draw(win);
-    g_free(wp);
     g_key_file_free(kf);
+
+    /* desktop.ini is the file users and Windows-compatible tools read; config.ini is the desktop's own. They are
+     * kept in step below, and the newer one wins when they name different pictures. The value is kept (not the
+     * picture it resolves to), so gnome-background.xml and *.png patterns follow the theme and the screen size. */
+    char *ini = hde_wallpaper_desktop_ini_path();
+    char *ini_value = hde_wallpaper_desktop_ini_get(ini);
+    gboolean prefer_ini = ini_value && *ini_value;
+    if (prefer_ini && wp && *wp && strcmp(ini_value, wp) && file_is_newer(cf, ini))
+        prefer_ini = FALSE;
+
+    char *source = NULL;
+    char *resolved = NULL;
+    if (prefer_ini && ini_value) {
+        resolved = hde_wallpaper_resolve(ini_value, mon.width, mon.height);
+        if (resolved) source = g_strdup(ini_value);
+    }
+    if (!resolved && wp && *wp) {
+        resolved = hde_wallpaper_resolve(wp, mon.width, mon.height);
+        if (resolved) {
+            source = g_strdup(wp);
+            hde_wallpaper_desktop_ini_write(ini, wp);
+        }
+    }
+    if (!resolved) {
+        /* Nothing chosen yet: the system's active theme (gnome-background.xml), or the first picture in
+         * /usr/share/backgrounds, and a desktop.ini that says so for the next login. */
+        char *system_source = hde_wallpaper_system_source();
+        if (system_source) {
+            resolved = hde_wallpaper_resolve(system_source, mon.width, mon.height);
+            if (resolved) {
+                source = g_strdup(system_source);
+                hde_wallpaper_desktop_ini_write(ini, system_source);
+                DBG("wallpaper from the system theme: %s (source %s)", resolved, system_source);
+            }
+            g_free(system_source);
+        }
+    }
+    if (!resolved && ini_value && *ini_value)
+        g_printerr("hde-desktop: no usable wallpaper in %s (\"%s\")\n", ini, ini_value);
+
+    g_free(wallpaper_source);
+    wallpaper_source = source;       /* NULL: no wallpaper was found anywhere */
+
+    if (resolved) load_wallpaper(resolved);
+    else if (wallpaper_path) load_wallpaper(NULL);
+    else if (win) gtk_widget_queue_draw(win);
+
+    g_free(resolved);
+    g_free(ini_value);
+    g_free(ini);
+    g_free(wp);
     g_free(cf);
 }
 
@@ -134,7 +208,8 @@ static void save_config(void)
     GKeyFile *kf = g_key_file_new();
     char *cf = config_file();
     g_key_file_load_from_file(kf, cf, G_KEY_FILE_NONE, NULL);
-    if (wallpaper_path) g_key_file_set_string(kf, "desktop", "wallpaper", wallpaper_path);
+    if (wallpaper_source) g_key_file_set_string(kf, "desktop", "wallpaper", wallpaper_source);
+    else if (wallpaper_path) g_key_file_set_string(kf, "desktop", "wallpaper", wallpaper_path);
     g_key_file_set_boolean(kf, "desktop", "show_home", show_home_icon);
     g_key_file_set_boolean(kf, "desktop", "show_support", show_support_icon);
     char *dir = g_path_get_dirname(cf);
@@ -397,7 +472,17 @@ static void launch_icon(GtkWidget *ev, guint32 t)
     last_press_icon = NULL;
     drag_icon = NULL;
     dragging_icon = FALSE;
+    drag_collapse_selection = FALSE;
+    clear_drag_items();
     if (path) activate_target(path);
+}
+
+static void drag_item_add(GtkWidget *icon)
+{
+    DragItem *item = g_new0(DragItem, 1);
+    item->icon = icon;
+    gtk_container_child_get(GTK_CONTAINER(fixed), icon, "x", &item->x, "y", &item->y, NULL);
+    g_ptr_array_add(drag_items, item);
 }
 
 static gboolean on_icon_press(GtkWidget *ev, GdkEventButton *e, gpointer data)
@@ -419,10 +504,12 @@ static gboolean on_icon_press(GtkWidget *ev, GdkEventButton *e, gpointer data)
         last_press_icon = NULL;
         return TRUE;
     }
-    select_icon(ev);
+    gboolean was_selected = icon_is_selected(ev);
+    if (!was_selected) select_icon(ev);
 
     if (e->type == GDK_2BUTTON_PRESS) {
         /* Already opened by the self-detection branch on the 2nd press: ignore. */
+        select_icon(ev);
         if (e->time != last_activate_time && e->time - last_activate_time > 50)
             launch_icon(ev, e->time);
         return TRUE;
@@ -432,6 +519,7 @@ static gboolean on_icon_press(GtkWidget *ev, GdkEventButton *e, gpointer data)
     g_object_get(gtk_settings_get_default(), "gtk-double-click-time", &dbl_time, NULL);
     if (last_press_icon == ev && (e->time - last_press_time) <= dbl_time &&
         fabs(e->x_root - last_press_x) <= 16 && fabs(e->y_root - last_press_y) <= 16) {
+        select_icon(ev);
         launch_icon(ev, e->time);
         return TRUE;
     }
@@ -439,6 +527,18 @@ static gboolean on_icon_press(GtkWidget *ev, GdkEventButton *e, gpointer data)
     last_press_time = e->time;
     last_press_x = e->x_root;
     last_press_y = e->y_root;
+
+    /* A click on an icon that is already selected keeps the selection for a possible group drag. A plain click
+     * still ends with only that icon selected (see on_icon_release) unless the mouse actually moved. */
+    GList *selection = selected_icons();
+    drag_collapse_selection = was_selected && selection && selection->next;
+    clear_drag_items();
+    drag_items = g_ptr_array_new_with_free_func(g_free);
+    for (GList *l = selection; l; l = l->next)
+        drag_item_add(l->data);
+    g_list_free(selection);
+    if (!drag_items->len) drag_item_add(ev);
+
     drag_icon = ev;
     dragging_icon = FALSE;
     drag_start_x = e->x_root;
@@ -486,6 +586,63 @@ static gboolean icon_cell_occupied(gint x, gint y, GtkWidget *ignore)
 
     g_list_free(children);
     return occupied;
+}
+
+static gboolean drag_contains_icon(GtkWidget *icon)
+{
+    if (!drag_items) return FALSE;
+    for (guint i = 0; i < drag_items->len; i++) {
+        DragItem *item = g_ptr_array_index(drag_items, i);
+        if (item->icon == icon) return TRUE;
+    }
+    return FALSE;
+}
+
+/* Keep every icon of the dragged selection on the desktop, not just the one under the pointer. */
+static void clamp_drag_delta(gint *dx, gint *dy)
+{
+    if (!drag_items || !drag_items->len) return;
+
+    gint left = G_MAXINT, top = G_MAXINT, right = G_MININT, bottom = G_MININT;
+    for (guint i = 0; i < drag_items->len; i++) {
+        DragItem *item = g_ptr_array_index(drag_items, i);
+        left = MIN(left, item->x);
+        top = MIN(top, item->y);
+        right = MAX(right, item->x);
+        bottom = MAX(bottom, item->y);
+    }
+
+    gint max_x = MAX(MARGIN, gtk_widget_get_allocated_width(fixed) - CELL_W);
+    gint max_y = MAX(TOP0, gtk_widget_get_allocated_height(fixed) - panel_bottom_px - CELL_H);
+    gint min_dx = MARGIN - left, max_dx = max_x - right;
+    gint min_dy = TOP0 - top, max_dy = max_y - bottom;
+    if (min_dx <= max_dx) *dx = CLAMP(*dx, min_dx, max_dx);
+    if (min_dy <= max_dy) *dy = CLAMP(*dy, min_dy, max_dy);
+}
+
+/* The whole selection moves together: ignore the selected icons themselves, but never land on another icon. */
+static gboolean drag_group_can_move(gint dx, gint dy)
+{
+    if (!fixed || !drag_items || !drag_items->len) return FALSE;
+
+    GList *children = gtk_container_get_children(GTK_CONTAINER(fixed));
+    gboolean free = TRUE;
+    for (GList *l = children; l && free; l = l->next) {
+        GtkWidget *child = GTK_WIDGET(l->data);
+        if (drag_contains_icon(child)) continue;
+
+        gint cx = 0, cy = 0;
+        gtk_container_child_get(GTK_CONTAINER(fixed), child, "x", &cx, "y", &cy, NULL);
+        for (guint i = 0; i < drag_items->len; i++) {
+            DragItem *item = g_ptr_array_index(drag_items, i);
+            if (item->x + dx == cx && item->y + dy == cy) {
+                free = FALSE;
+                break;
+            }
+        }
+    }
+    g_list_free(children);
+    return free;
 }
 
 /* Find the nearest free grid cell.  This is used when an old config contains
@@ -546,13 +703,19 @@ static gboolean on_icon_motion(GtkWidget *ev, GdkEventMotion *e, gpointer data)
     ny = MAX(TOP0, MIN(ny, gtk_widget_get_allocated_height(fixed) - panel_bottom_px - CELL_H));
     snap_icon_position(&nx, &ny);
 
-    /* Never place two icons in the same grid cell.  While dragging, an
-     * occupied target is simply rejected and the icon stays at its last
-     * valid position instead of being painted over another icon. */
-    if (!icon_cell_occupied(nx, ny, ev)) {
-        gtk_fixed_move(GTK_FIXED(fixed), ev, nx, ny);
-        drag_last_x = nx;
-        drag_last_y = ny;
+    /* Move the whole selection by the same grid delta.  While dragging, an
+     * occupied target is simply rejected and the selection stays at its last
+     * valid position instead of being painted over other icons. */
+    gint ddx = nx - drag_orig_x;
+    gint ddy = ny - drag_orig_y;
+    clamp_drag_delta(&ddx, &ddy);
+    if (drag_group_can_move(ddx, ddy)) {
+        for (guint i = 0; i < drag_items->len; i++) {
+            DragItem *item = g_ptr_array_index(drag_items, i);
+            gtk_fixed_move(GTK_FIXED(fixed), item->icon, item->x + ddx, item->y + ddy);
+        }
+        drag_last_x = drag_orig_x + ddx;
+        drag_last_y = drag_orig_y + ddy;
     }
     return TRUE;
 }
@@ -564,17 +727,29 @@ static gboolean on_icon_release(GtkWidget *ev, GdkEventButton *e, gpointer data)
     if (dragging_icon) {
         keep_arranged = FALSE;
 
-        /* Final safety check: a stale/old config or resize must never leave
-         * the icon stacked on another icon. */
-        gint x = drag_last_x, y = drag_last_y;
-        if (icon_cell_occupied(x, y, ev)) {
-            if (find_free_cell(x, y, ev, &x, &y))
-                gtk_fixed_move(GTK_FIXED(fixed), ev, x, y);
+        /* Final safety check for a single icon: a stale/old config or resize must never leave it stacked on
+         * another icon. A group cannot reach such a cell because every move is checked as a whole. */
+        if (drag_items && drag_items->len == 1) {
+            gint x = drag_last_x, y = drag_last_y;
+            if (icon_cell_occupied(x, y, ev)) {
+                if (find_free_cell(x, y, ev, &x, &y))
+                    gtk_fixed_move(GTK_FIXED(fixed), ev, x, y);
+            }
         }
-        save_icon_position(ev);
+        if (drag_items) {
+            for (guint i = 0; i < drag_items->len; i++) {
+                DragItem *item = g_ptr_array_index(drag_items, i);
+                save_icon_position(item->icon);
+            }
+        }
+    } else if (drag_collapse_selection) {
+        /* Clicking one icon of a selection without dragging selects just that icon, as before. */
+        select_icon(ev);
     }
     drag_icon = NULL;
     dragging_icon = FALSE;
+    drag_collapse_selection = FALSE;
+    clear_drag_items();
     return TRUE;
 }
 
@@ -612,7 +787,11 @@ static GtkWidget *make_icon(const char *name, GIcon *icon, const char *path)
     return ev;
 }
 
-static void destroy_child(GtkWidget *w, gpointer d) { gtk_widget_destroy(w); }
+static void destroy_child(GtkWidget *w, gpointer d) {
+    (void)d;
+    if (g_object_get_data(G_OBJECT(w), "is-widget")) return;
+    gtk_widget_destroy(w);
+}
 
 static gboolean restore_icon_position(GtkWidget *w, const char *path)
 {
@@ -673,6 +852,8 @@ static void reload_icons(void)
     if (reload_id) { g_source_remove(reload_id); reload_id = 0; }
     drag_icon = NULL;
     dragging_icon = FALSE;
+    drag_collapse_selection = FALSE;
+    clear_drag_items();
     last_press_icon = NULL;
     gtk_container_foreach(GTK_CONTAINER(fixed), destroy_child, NULL);
 
@@ -776,6 +957,7 @@ static void reload_icons(void)
     }
     #undef PLACE
     g_hash_table_unref(keep);
+    hde_widgets_reload_all();
     gtk_widget_show_all(fixed);
 }
 
@@ -822,14 +1004,9 @@ static void launch_hyggshi_settings(GtkMenuItem *item, gpointer data)
     (void)data;
 
     GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
-    const char *path_env = g_getenv("PATH");
-    (void)path_env;
 
-    /* 1. Normal installed binary. */
-    char *found = g_find_program_in_path("hde-settings");
-    if (found) g_ptr_array_add(paths, found);
-
-    /* 2. Sibling of the running hde-desktop binary.
+    /* 1. Sibling of the running hde-desktop binary, so an APT install in /usr/bin uses /usr/bin/hde-settings even
+     *    when an old hand-installed copy sits earlier in PATH (typically /usr/local/bin).
      *    e.g. /home/me/nexDE/build/hde-desktop -> hde-settings */
     char *self = g_file_read_link("/proc/self/exe", NULL);
     if (self) {
@@ -840,9 +1017,13 @@ static void launch_hyggshi_settings(GtkMenuItem *item, gpointer data)
         g_free(self);
     }
 
-    /* 3. Common installation locations, useful when PATH is incomplete. */
-    g_ptr_array_add(paths, g_strdup("/usr/local/bin/hde-settings"));
+    /* 2. Normal installed binary from PATH. */
+    char *found = g_find_program_in_path("hde-settings");
+    if (found) g_ptr_array_add(paths, found);
+
+    /* 3. Common installation locations, useful when PATH is incomplete (package first). */
     g_ptr_array_add(paths, g_strdup("/usr/bin/hde-settings"));
+    g_ptr_array_add(paths, g_strdup("/usr/local/bin/hde-settings"));
 
     gboolean started = FALSE;
     const char *started_path = NULL;
@@ -872,8 +1053,8 @@ static void launch_hyggshi_settings(GtkMenuItem *item, gpointer data)
         gtk_message_dialog_format_secondary_text(
             GTK_MESSAGE_DIALOG(dialog),
             "hde-settings was not found or could not be started.\n\n"
-            "Build it with `make` or install NexDE with `sudo make install`.\n"
-            "Expected: ./build/hde-settings or /usr/local/bin/hde-settings");
+            "Build it with `make` or install HDE with `sudo make install`.\n"
+            "Expected: ./build/hde-settings or /usr/bin/hde-settings");
         gtk_dialog_run(GTK_DIALOG(dialog));
         gtk_widget_destroy(dialog);
     } else {
@@ -915,6 +1096,11 @@ static void m_wallpaper(GtkMenuItem *i, gpointer d)
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char *f = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
         load_wallpaper(f);
+        g_free(wallpaper_source);
+        wallpaper_source = g_strdup(f);
+        char *ini = hde_wallpaper_desktop_ini_path();
+        hde_wallpaper_desktop_ini_write(ini, f);
+        g_free(ini);
         save_config();
         g_free(f);
     }
@@ -2104,6 +2290,16 @@ static void redraw_all(void)
     for (guint i = 0; extra_bg && i < extra_bg->len; i++) gtk_widget_queue_draw(extra_bg->pdata[i]);
 }
 
+/* A screen changed size / orientation: gnome-background.xml may offer another variant for it. */
+static void reload_wallpaper_for_screen(void)
+{
+    if (!wallpaper_source) return;
+    char *resolved = hde_wallpaper_resolve(wallpaper_source, mon.width, mon.height);
+    if (resolved && (!wallpaper_path || strcmp(resolved, wallpaper_path)))
+        load_wallpaper(resolved);
+    g_free(resolved);
+}
+
 static gboolean desktop_place(gpointer d)
 {
     (void)d;
@@ -2116,6 +2312,7 @@ static gboolean desktop_place(gpointer d)
         hde_wl_layer_monitor(GTK_WINDOW(win), m);
         gtk_widget_set_size_request(win, mon.width, mon.height);
         update_extra_wallpapers(m);
+        reload_wallpaper_for_screen();
         reload_icons();
         redraw_all();
         fprintf(stderr, "hde-desktop: screens changed: desktop %dx%d (Wayland layer shell, %d screen(s))\n", mon.width,
@@ -2128,6 +2325,7 @@ static gboolean desktop_place(gpointer d)
     if (m) gdk_monitor_get_geometry(m, &mon);
     GdkScreen *scr = gdk_display_get_default_screen(dpy);
     int sw = gdk_screen_get_width(scr), sh = gdk_screen_get_height(scr);
+    reload_wallpaper_for_screen();
     gtk_widget_set_size_request(win, sw, sh);
     gtk_window_resize(GTK_WINDOW(win), sw, sh);
     gtk_window_move(GTK_WINDOW(win), 0, 0);
@@ -2215,6 +2413,11 @@ static void popup_desktop_menu(const GdkEvent *e)
     item = gtk_menu_item_new_with_label("Change Background…");
     g_signal_connect(item, "activate", G_CALLBACK(m_wallpaper), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    GtkWidget *widgets_item = gtk_menu_item_new_with_label("Desktop Widgets");
+    GtkWidget *widgets_submenu = hde_widgets_create_menu();
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(widgets_item), widgets_submenu);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), widgets_item);
 
     item = gtk_menu_item_new_with_label("Desktop Icons Settings");
     g_signal_connect(item, "activate", G_CALLBACK(m_settings), NULL);
@@ -2425,6 +2628,7 @@ static void on_theme_changed(gpointer d)
 {
     (void)d;
     load_accent();
+    hde_widgets_reload_css();
     int t = 0, b = 0;                     /* Settings > Panel: moved to the other edge, or another height */
     hde_panel_reserved(&t, &b);
     if (t != panel_top_px || b != panel_bottom_px) {
@@ -2523,6 +2727,7 @@ int main(int argc, char **argv)
 
     load_config();
     reload_icons();
+    hde_widgets_init(fixed, win);
     {
         char *cf = config_file();
         char *dir = g_path_get_dirname(cf);
@@ -2533,6 +2738,14 @@ int main(int argc, char **argv)
         g_object_unref(f);
         g_free(dir);
         g_free(cf);
+
+        /* desktop.ini (the [background-desktop] file) is watched too: edit it and the wallpaper changes at once. */
+        char *di = hde_wallpaper_desktop_ini_path();
+        GFile *df = g_file_new_for_path(di);
+        GFileMonitor *dm = g_file_monitor_file(df, G_FILE_MONITOR_NONE, NULL, NULL);
+        if (dm) g_signal_connect(dm, "changed", G_CALLBACK(on_config_changed), NULL);
+        g_object_unref(df);
+        g_free(di);
     }
 
     const char *ddir = g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP);

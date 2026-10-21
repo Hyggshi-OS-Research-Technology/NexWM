@@ -1,6 +1,6 @@
 CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -Wpedantic -std=c11
-CPPFLAGS += -Ihde-core/include -Isrc
+CPPFLAGS += -Ihde-core/include -Isrc -Iapps/widgets -Iapps/calc -Iapps/calendar -Iapps/weather -Iapps/logs
 BUILD ?= build
 .DEFAULT_GOAL := all
 comma := ,
@@ -11,6 +11,9 @@ CORE_OBJ=$(CORE_SRC:.c=.o) $(BACKEND_SRC:.c=.o)
 
 GTK_CFLAGS:=$(shell pkg-config --cflags gtk+-3.0 2>/dev/null)
 GTK_LIBS:=$(shell pkg-config --libs gtk+-3.0 2>/dev/null)
+# GLib on its own: src/hde-wallpaper.c and its unit test need no widget toolkit.
+GLIB_CFLAGS:=$(shell pkg-config --cflags glib-2.0 2>/dev/null)
+GLIB_LIBS:=$(shell pkg-config --libs glib-2.0 2>/dev/null)
 # HDE Cmd's optional VTE backend: hde-cmd/src/vt.c is still the default; --vte opts into this adapter only when VTE
 # development files were available while building.
 CMD_VTE_PC:=$(shell pkg-config --exists vte-2.91 2>/dev/null && echo vte-2.91)
@@ -24,10 +27,11 @@ GLIBX_LIBS:=$(shell pkg-config --libs glib-2.0 x11 2>/dev/null || echo "-lglib-2
 # and to udisks2 through it. Without it none of the three is built (the rest of HDE does not need it).
 GIO_CFLAGS:=$(shell pkg-config --cflags gio-2.0 2>/dev/null)
 GIO_LIBS:=$(shell pkg-config --libs gio-2.0 2>/dev/null)
-# XScreenSaver and DPMS (libxext-dev, pulled in by libgtk-3-dev): how long nobody has touched the computer
-# (hde-idle, on the "HDE" X11 session) and turning the screen off. Without it hde-idle measures nothing there.
-XSS_CFLAGS:=$(shell pkg-config --exists xext 2>/dev/null && echo "-DHAVE_XSS `pkg-config --cflags xext`")
-XSS_LIBS:=$(shell pkg-config --libs xext x11 2>/dev/null)
+# XScreenSaver and DPMS: how long nobody has touched the computer and turning the screen off (hde-idle, on the
+# "HDE" X11 session). XScreenSaverQueryInfo is in libXss (libxss-dev / libXScrnSaver-devel / libxss), while DPMS is
+# in libXext: both are needed, and linking only -lXext leaves hde-idle with undefined XScreenSaver* symbols.
+XSS_CFLAGS:=$(shell pkg-config --exists xscrnsaver 2>/dev/null && echo "-DHAVE_XSS `pkg-config --cflags xscrnsaver xext x11`")
+XSS_LIBS:=$(shell pkg-config --exists xscrnsaver 2>/dev/null && pkg-config --libs xscrnsaver xext x11)
 # XInput2 (libxi-dev, pulled in by libgtk-3-dev): needed for the Super key to open the Start menu and for the touchpad /
 # mouse settings (natural scrolling, tap to click). Without it everything still builds, just without those.
 XI_CFLAGS:=$(shell pkg-config --exists xi 2>/dev/null && echo "-DHAVE_XI2 `pkg-config --cflags xi`")
@@ -61,8 +65,12 @@ NEXWM_WAYLAND_CLIENT_CFLAGS=$(shell pkg-config --cflags wayland-client)
 NEXWM_WAYLAND_CLIENT_LIBS=$(shell pkg-config --libs wayland-client)
 endif
 LAYER_LIBDIR:=$(shell pkg-config --variable=libdir gtk-layer-shell-0 2>/dev/null)
+# An rpath is only needed for a layer-shell installed outside the dynamic loader's normal directories (a local
+# ~/.local build).  Never put /usr/lib or /usr/local/lib into a package's RUNPATH: lintian rejects it, and the
+# loader finds those directories by itself.
+LAYER_RPATH:=$(if $(filter-out /usr/lib% /lib% /usr/local/lib%,$(LAYER_LIBDIR)),$(if $(LAYER_LIBDIR), -Wl$(comma)-rpath$(comma)$(LAYER_LIBDIR)))
 LAYER_CFLAGS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && echo "-DHAVE_GTK_LAYER_SHELL `pkg-config --cflags gtk-layer-shell-0`")
-LAYER_LIBS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && pkg-config --libs gtk-layer-shell-0)$(if $(LAYER_LIBDIR), -Wl$(comma)-rpath$(comma)$(LAYER_LIBDIR))
+LAYER_LIBS:=$(shell pkg-config --exists gtk-layer-shell-0 2>/dev/null && pkg-config --libs gtk-layer-shell-0)$(LAYER_RPATH)
 # wayland-scanner is used both for the panel's Wayland taskbar and for the xdg-shell header wlroots asks compositor
 # consumers to generate. The latter comes from wayland-protocols (Debian: wayland-protocols; Fedora: wayland-protocols-devel).
 WAYLAND_SCANNER:=$(shell pkg-config --variable=wayland_scanner wayland-scanner 2>/dev/null || command -v wayland-scanner 2>/dev/null)
@@ -125,9 +133,15 @@ IDLE_WL_SRC=$(BUILD)/$(IDLEXML)-protocol.c
 IDLE_WL_DEPS=$(BUILD)/$(IDLEXML)-client-protocol.h $(BUILD)/$(IDLEXML)-protocol.c
 endif
 
+# The Wayland session is installed only when all of the pieces it needs at run time were built: layer-shell for
+# the panel and desktop, wayland-client + wayland-scanner for their taskbar/idle protocols, and xkbcommon for the
+# lock screen. A build without them stays a complete X11 desktop and does not advertise a Wayland session.
+WAYLAND_SESSION:=$(shell [ -n "$(LAYER_CFLAGS)" ] && [ "$(WLTASK)" = yes ] && [ "$(IDLE_WL)" = yes ] && \
+                         [ "$(LOCK_WL)" = yes ] && echo yes)
+
 # Flags for the GTK programs in src/
 GUI_CFLAGS ?= -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-GUI_CPPFLAGS = -Isrc -DWNCK_I_KNOW_THIS_IS_UNSTABLE -DHDE_DATADIR=\"$(PREFIX)/share/hde\"
+GUI_CPPFLAGS = -Isrc -Iapps/widgets -Iapps/calc -Iapps/calendar -Iapps/weather -Iapps/logs -DWNCK_I_KNOW_THIS_IS_UNSTABLE -DHDE_DATADIR=\"$(PREFIX)/share/hde\"
 
 HDE_HEADERS=$(wildcard src/*.h)
 # src/hde-x11taskbar.c: the taskbar on X11 — one button per window (or per application) built from libwnck's list,
@@ -142,14 +156,14 @@ PANEL_SRC=src/hde-panel.c src/hde-tray.c src/hde-status.c src/hde-osd.c src/hde-
           src/hde-wl.c src/hde-run.c src/hde-flyout.c src/hde-control.c src/hde-battery.c src/hde-power.c \
           src/hde-profiles.c src/hde-powersave.c src/hde-measure.c src/hde-x11taskbar.c src/hde-peek.c \
           src/hde-peek-core.c src/hde-switch.c src/hde-switch-core.c $(WLTASK_SRC)
-DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c src/hde-panel-config.c src/hde-wl.c
+DESKTOP_SRC=src/hde-desktop.c src/hde-theme.c src/hde-panel-config.c src/hde-wl.c src/hde-wallpaper.c apps/widgets/hde-widgets.c
 SETTINGS_SRC=src/hde-settings.c src/hde-settings-network.c src/hde-settings-bluetooth.c \
              src/hde-settings-appearance.c src/hde-settings-windows.c src/hde-settings-keyboard.c \
              src/hde-settings-sound.c src/hde-settings-touchpad.c src/hde-settings-display.c src/hde-settings-about.c \
              src/hde-theme.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-sysinfo.c \
              src/hde-settings-panel.c src/hde-panel-config.c src/hde-osinfo.c src/hde-svgpath.c src/hde-wl.c \
              src/hde-settings-wayland.c src/hde-settings-power.c src/hde-power.c src/hde-profiles.c src/hde-run.c \
-             src/hde-settings-peripherals.c src/hde-measure.c src/hde-idle-core.c src/hde-choose.c
+             src/hde-settings-peripherals.c src/hde-measure.c src/hde-idle-core.c src/hde-choose.c src/hde-wallpaper.c
 # Hyggshi Files, the file manager (its own folder: hde-files/, which also has a Makefile to build it alone).
 # src/hde-udisks.c + src/hde-disks.c are the "Drives" list in its sidebar: the USB sticks, the cards and the
 # discs, read from udisks2 instead of through a GVfs volume monitor.
@@ -171,17 +185,12 @@ NEXWM_HEADERS=$(wildcard nexwm/src/*.h)
 
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media \
          hde-choose hde-cmd hde-clock hde-camera hde-calc hde-editor hde-resources hde-partition hde-weather \
-         hde-calendar hde-logs nexwm hde-lock hde-idle hde-automount hde-keyring
+         hde-calendar hde-logs hde-widgets nexwm hde-lock hde-idle hde-automount hde-keyring
+# A complete HDE install needs every one of these. The optional dependencies may make `make all` skip one; install
+# and the distribution package must not do that silently.
+REQUIRED_PROGRAMS=$(PROGRAMS)
 
 all: $(BUILD)/hde-core-demo $(BUILD)/hde-session components
-
-# The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
-# (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
-components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
-            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd \
-            $(BUILD)/hde-clock $(BUILD)/hde-camera $(BUILD)/hde-calc $(BUILD)/hde-editor $(BUILD)/hde-resources \
-            $(BUILD)/hde-partition $(BUILD)/hde-weather $(BUILD)/hde-calendar $(BUILD)/hde-logs $(BUILD)/nexwm \
-            $(HDE_LOCK_TARGET) $(IDLE_TARGET) $(AUTOMOUNT_TARGET) $(KEYRING_TARGET)
 
 # hde-idle: turns the screen off, locks the session and puts the computer to sleep when the user is away
 # (src/hde-idle.c; the rules are in src/hde-idle-core.c and are tested by build/idle-test). Needs GIO for the two
@@ -207,6 +216,16 @@ KEYRING_TARGET:=$(shell [ -n "$(GIO_LIBS)" ] && echo $(BUILD)/hde-keyring)
 $(BUILD)/hde-keyring: src/hde-keyring.c src/hde-keyring-core.c src/hde-keyring-core.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) -std=c11 $(GIO_CFLAGS) -o $@ \
 	    src/hde-keyring.c src/hde-keyring-core.c $(GIO_LIBS)
+
+# The real desktop / panel / settings (GTK3) live in src/. They are built into build/ so that hde-session
+# (which looks next to itself first) runs the new copies instead of falling back to old ones in /usr/local/bin.
+# This rule comes after the optional-target variables: prerequisites are expanded when make reads the line, so naming
+# $(IDLE_TARGET) before it was defined silently left hde-idle, hde-automount and hde-keyring out of `make all`.
+components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUILD)/hde-hotkeys $(BUILD)/hde-xsettings \
+            $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd \
+            $(BUILD)/hde-clock $(BUILD)/hde-camera $(BUILD)/hde-calc $(BUILD)/hde-editor $(BUILD)/hde-resources \
+            $(BUILD)/hde-partition $(BUILD)/hde-weather $(BUILD)/hde-calendar $(BUILD)/hde-logs $(BUILD)/hde-widgets $(BUILD)/nexwm \
+            $(HDE_LOCK_TARGET) $(IDLE_TARGET) $(AUTOMOUNT_TARGET) $(KEYRING_TARGET)
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) $(GTK_CFLAGS) $(LAYER_CFLAGS) -o $@ $(filter %.c,$^) $(LAYER_LIBS) $(GTK_LIBS) -lm
@@ -260,45 +279,48 @@ $(BUILD)/hde-files: $(FILES_SRC) hde-files/src/files.h src/hde-theme.h | $(BUILD
 $(BUILD)/hde-media: $(MEDIA_SRC) hde-media/src/media.h hde-media/src/viewer.h hde-media/src/player.h hde-media/src/playlist.h \
                     hde-media/src/engine.h hde-media/src/mpris.h src/hde-theme.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) -Ihde-media/src -Isrc -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Clock (src/hde-clock.c): World Clock, Alarms, Stopwatch, and Timer
-$(BUILD)/hde-clock: src/hde-clock.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Clock (apps/clock/hde-clock.c): World Clock, Alarms, Stopwatch, and Timer
+$(BUILD)/hde-clock: apps/clock/hde-clock.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Camera (src/hde-camera.c): Webcam photo & video capture with live filters and timer
-$(BUILD)/hde-camera: src/hde-camera.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Camera (apps/camera/hde-camera.c): Webcam photo & video capture with live filters and timer
+$(BUILD)/hde-camera: apps/camera/hde-camera.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Calculator (src/hde-calc.c + src/hde-calc-core.c): Scientific, Standard, Programmer & Unit Converter
-$(BUILD)/hde-calc: src/hde-calc.c src/hde-calc-core.c src/hde-calc-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Calculator (apps/calc/): Scientific, Standard, Programmer & Unit Converter
+$(BUILD)/hde-calc: apps/calc/hde-calc.c apps/calc/hde-calc-core.c apps/calc/hde-calc-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Text Editor (src/hde-editor.c): Simple, beginner-friendly text editor
-$(BUILD)/hde-editor: src/hde-editor.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Text Editor (apps/editor/hde-editor.c): Simple, beginner-friendly text editor
+$(BUILD)/hde-editor: apps/editor/hde-editor.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Resources (src/hde-resources.c): System resource monitor & process/application controller
-$(BUILD)/hde-resources: src/hde-resources.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Resources (apps/resources/hde-resources.c): System resource monitor & process/application controller
+$(BUILD)/hde-resources: apps/resources/hde-resources.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) $(GLIBX_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) $(X11_LIBS) -lm
-# Hyggshi Partition Manager (src/hde-partition.c): Disk & partition management utility
-$(BUILD)/hde-partition: src/hde-partition.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Partition Manager (apps/partition/hde-partition.c): Disk & partition management utility
+$(BUILD)/hde-partition: apps/partition/hde-partition.c src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Weather (src/hde-weather.c + src/hde-weather-core.c): Weather forecast & atmospheric monitor
-$(BUILD)/hde-weather: src/hde-weather.c src/hde-weather-core.c src/hde-weather-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Weather (apps/weather/): Weather forecast & atmospheric monitor
+$(BUILD)/hde-weather: apps/weather/hde-weather.c apps/weather/hde-weather-core.c apps/weather/hde-weather-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Calendar (src/hde-calendar.c + src/hde-calendar-core.c): Desktop calendar, holidays & event planner
-$(BUILD)/hde-calendar: src/hde-calendar.c src/hde-calendar-core.c src/hde-calendar-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Calendar (apps/calendar/): Desktop calendar, holidays & event planner
+$(BUILD)/hde-calendar: apps/calendar/hde-calendar.c apps/calendar/hde-calendar-core.c apps/calendar/hde-calendar-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
-# Hyggshi Logs (src/hde-logs.c + src/hde-logs-core.c): System, kernel & session log viewer
-$(BUILD)/hde-logs: src/hde-logs.c src/hde-logs-core.c src/hde-logs-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+# Hyggshi Logs (apps/logs/): System, kernel & session log viewer
+$(BUILD)/hde-logs: apps/logs/hde-logs.c apps/logs/hde-logs-core.c apps/logs/hde-logs-core.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# Hyggshi Desktop Widgets Manager (apps/widgets/)
+$(BUILD)/hde-widgets: apps/widgets/main.c apps/widgets/hde-widgets.c apps/widgets/hde-widgets.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # Calculator engine unit tests (tests/calc-test.c)
-$(BUILD)/calc-test: tests/calc-test.c src/hde-calc-core.c src/hde-calc-core.h | $(BUILD)
-	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+$(BUILD)/calc-test: tests/calc-test.c apps/calc/hde-calc-core.c apps/calc/hde-calc-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -Iapps/calc -o $@ $(filter %.c,$^) -lm
 # Weather engine unit tests (tests/weather-test.c)
-$(BUILD)/weather-test: tests/weather-test.c src/hde-weather-core.c src/hde-weather-core.h | $(BUILD)
-	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+$(BUILD)/weather-test: tests/weather-test.c apps/weather/hde-weather-core.c apps/weather/hde-weather-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -Iapps/weather -o $@ $(filter %.c,$^) -lm
 # Calendar engine unit tests (tests/calendar-test.c)
-$(BUILD)/calendar-test: tests/calendar-test.c src/hde-calendar-core.c src/hde-calendar-core.h | $(BUILD)
-	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^) -lm
+$(BUILD)/calendar-test: tests/calendar-test.c apps/calendar/hde-calendar-core.c apps/calendar/hde-calendar-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -Iapps/calendar -o $@ $(filter %.c,$^) -lm
 # Logs engine unit tests (tests/logs-test.c)
-$(BUILD)/logs-test: tests/logs-test.c src/hde-logs-core.c src/hde-logs-core.h | $(BUILD)
-	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^)
+$(BUILD)/logs-test: tests/logs-test.c apps/logs/hde-logs-core.c apps/logs/hde-logs-core.h | $(BUILD)
+	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -Iapps/logs -o $@ $(filter %.c,$^)
 # XSETTINGS (live theme / Dark mode) + touchpad and mouse settings (login, live, hotplug, changes by other programs)
 $(BUILD)/hde-xsettings: src/hde-xsettings.c src/hde-input.c src/hde-randr.c src/hde-brightness.c src/hde-input.h \
                         src/hde-randr.h src/hde-brightness.h src/hde-build.h $(VERSION_H) | $(BUILD)
@@ -340,6 +362,10 @@ $(BUILD)/hde-choose-stub: src/hde-choose.c src/hde-choose.h tests/choose-stub/gt
 # the deduplication (x-terminal-emulator is a symlink to one of the others) and the answers in settings.ini — plain C
 $(BUILD)/choose-test: tests/choose-test.c src/hde-choose.c src/hde-choose.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -o $@ $(filter %.c,$^)
+# Picking the wallpaper (src/hde-wallpaper.c): the active theme's gnome-background.xml (best size for the screen),
+# globs such as /usr/share/backgrounds/*.png, and the [background-desktop] desktop.ini. No display needed
+$(BUILD)/wallpaper-test: tests/wallpaper-test.c src/hde-wallpaper.c src/hde-wallpaper.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc $(GLIB_CFLAGS) -o $@ tests/wallpaper-test.c src/hde-wallpaper.c $(GLIB_LIBS)
 # Measuring the screen and the panel (src/hde-measure.c): the checks without an X server (tests/measure-test.c), run by
 # `make check`
 $(BUILD)/measure-test: tests/measure-test.c src/hde-measure.c src/hde-measure.h | $(BUILD)
@@ -428,6 +454,7 @@ UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(
             $(BUILD)/idle-test $(BUILD)/disks-test $(BUILD)/keyring-test $(BUILD)/peek-test $(BUILD)/switch-test \
             $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test \
             $(BUILD)/cmd-vt-test $(BUILD)/calc-test $(BUILD)/weather-test $(BUILD)/calendar-test $(BUILD)/logs-test \
+            $(BUILD)/wallpaper-test \
             tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh tests/arch-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
@@ -486,7 +513,8 @@ check-tree:
 
 clean:
 	rm -rf $(BUILD) $(CORE_OBJ)
-PREFIX ?= /usr/local
+# /usr is the path of a distribution package (APT, pacman, RPM); /usr/local only for an explicit local install.
+PREFIX ?= /usr
 SDDM_THEMES ?= /usr/share/sddm/themes
 SDDM_THEME ?= hde
 XSESSIONS ?= /usr/share/xsessions
@@ -494,37 +522,98 @@ WLSESSIONS ?= /usr/share/wayland-sessions
 PORTALS_DIR ?= /usr/share/xdg-desktop-portal
 APPS_DIR ?= /usr/share/applications
 
+# `make all` may skip a component when an optional build dependency is missing. Installing such a partial desktop
+# silently is not allowed: this target is the one place that says what is missing.
+check-components: all
+	@missing=""; \
+	for b in $(REQUIRED_PROGRAMS); do \
+	  [ -x "$(BUILD)/$$b" ] || missing="$$missing $$b"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+	  echo "ERROR: HDE is incomplete: missing required program(s):$$missing" >&2; \
+	  echo "       Install the build dependencies (see README.md, or run: make check-full for details)." >&2; \
+	  exit 1; \
+	fi; \
+	echo "check-components: all $(words $(REQUIRED_PROGRAMS)) required programs were built"
+
+# Stricter check for a .deb / .rpm / distribution build that advertises both sessions.
+check-wayland:
+	@if [ "$(WAYLAND_SESSION)" != "yes" ]; then \
+	  echo "ERROR: the Wayland session is incomplete: need libgtk-layer-shell-dev, libwayland-dev (wayland-scanner and wayland-client) and libxkbcommon-dev" >&2; \
+	  exit 1; \
+	fi
+	@echo "check-wayland: layer-shell, Wayland taskbar, idle and lock components are built"
+
+check-full: check-components check-wayland
+	@missing=""; \
+	[ -n "$(XSS_CFLAGS)" ]    || missing="$$missing libxss-dev"; \
+	[ -n "$(WNCK_CFLAGS)" ]   || missing="$$missing libwnck-3-dev"; \
+	[ -n "$(XI_CFLAGS)" ]     || missing="$$missing libxi-dev"; \
+	[ -n "$(XRANDR_CFLAGS)" ] || missing="$$missing libxrandr-dev"; \
+	[ -n "$(XFIXES_CFLAGS)" ] || missing="$$missing libxfixes-dev"; \
+	[ -n "$(XCB_CFLAGS)" ]    || missing="$$missing libxcb1-dev"; \
+	if [ -n "$$missing" ]; then \
+	  echo "ERROR: missing build feature package(s):$$missing" >&2; \
+	  exit 1; \
+	fi
+	@out=`$(BUILD)/hde-lock --version`; \
+	for feature in "X11 session (XCB): yes" "Wayland session (ext-session-lock-v1): yes" "Password check (PAM): yes"; do \
+	  echo "$$out" | grep -qF "$$feature" || { echo "ERROR: hde-lock was built without: $$feature" >&2; exit 1; }; \
+	done
+	@echo "check-full: X11, Wayland, PAM and the X feature libraries are complete"
+
+# Verify a staged `make install` (used by debian/rules and by hand with PREFIX=/usr DESTDIR=...).
+check-install:
+	@missing=""; \
+	for b in $(REQUIRED_PROGRAMS) hde-start hde-start-wayland; do \
+	  [ -x "$(DESTDIR)$(PREFIX)/bin/$$b" ] || missing="$$missing $$b"; \
+	done; \
+	if [ -n "$$missing" ]; then echo "ERROR: missing installed program(s):$$missing" >&2; exit 1; fi
+	@test -f "$(DESTDIR)$(XSESSIONS)/hde.desktop" || { echo "ERROR: $(XSESSIONS)/hde.desktop is missing" >&2; exit 1; }
+	@test -f "$(DESTDIR)$(XSESSIONS)/nexwm.desktop" || { echo "ERROR: $(XSESSIONS)/nexwm.desktop is missing" >&2; exit 1; }
+	@test -f "$(DESTDIR)$(PORTALS_DIR)/hde-portals.conf" || { echo "ERROR: $(PORTALS_DIR)/hde-portals.conf is missing" >&2; exit 1; }
+	@if [ "$(WAYLAND_SESSION)" = "yes" ]; then \
+	  test -f "$(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop" || { echo "ERROR: $(WLSESSIONS)/hde-wayland.desktop is missing" >&2; exit 1; }; \
+	 else \
+	  test ! -e "$(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop" || { echo "ERROR: a Wayland session was installed by an X11-only build" >&2; exit 1; }; \
+	fi
+	@if [ -n "$(WLR_PC)" ] && [ "$(WAYLAND_SESSION)" = "yes" ]; then \
+	  test -f "$(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop" || { echo "ERROR: $(WLSESSIONS)/nexwm-wayland.desktop is missing" >&2; exit 1; }; \
+	else \
+	  test ! -e "$(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop" || { echo "ERROR: the NexWM Wayland session was installed without a wlroots compositor" >&2; exit 1; }; \
+	fi
+	@bad=`grep -RIn '/usr/local' "$(DESTDIR)$(XSESSIONS)" "$(DESTDIR)$(WLSESSIONS)" "$(DESTDIR)$(APPS_DIR)" 2>/dev/null || true`; \
+	if [ -n "$$bad" ]; then echo "ERROR: installed session/application metadata points at /usr/local:" >&2; echo "$$bad" >&2; exit 1; fi
+	@echo "check-install: $(PREFIX) contains every required program; session metadata matches the built features"
+
 install: all
+	@$(MAKE) --no-print-directory check-components
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(XSESSIONS) $(DESTDIR)$(APPS_DIR)
-	install -m755 $(BUILD)/hde-session $(DESTDIR)$(PREFIX)/bin/hde-session
-	for b in hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd \
-	         hde-clock hde-camera hde-calc hde-editor hde-resources hde-partition hde-weather hde-calendar hde-logs; do \
-	  if [ -x $(BUILD)/$$b ]; then install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; \
-	  else echo "WARNING: $(BUILD)/$$b missing (libgtk-3-dev / libwnck-3-dev / libxi-dev not installed?)"; fi; done
+	for b in $(REQUIRED_PROGRAMS); do install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
 	install -m755 data/hde-start-wayland $(DESTDIR)$(PREFIX)/bin/hde-start-wayland
-	@if [ -x $(BUILD)/hde-lock ]; then install -m755 $(BUILD)/hde-lock $(DESTDIR)$(PREFIX)/bin/hde-lock; \
-	 else echo "NOTE: hde-lock was not built (needs pkg-config cairo and libxcb1-dev, or wayland-client + xkbcommon, and libpam0g-dev for the password check)"; fi
-	@if [ -x $(BUILD)/hde-idle ]; then install -m755 $(BUILD)/hde-idle $(DESTDIR)$(PREFIX)/bin/hde-idle; \
-	 else echo "NOTE: hde-idle was not built (needs libglib2.0-dev for GIO, and either libxext-dev or wayland-client): the screen, the lock and the sleep after a while are left to a power manager of another desktop"; fi
-	@if [ -x $(BUILD)/hde-automount ]; then install -m755 $(BUILD)/hde-automount $(DESTDIR)$(PREFIX)/bin/hde-automount; \
-	 else echo "NOTE: hde-automount was not built (needs libglib2.0-dev for GIO): USB sticks are not mounted automatically"; fi
-	@if [ -x $(BUILD)/hde-keyring ]; then install -m755 $(BUILD)/hde-keyring $(DESTDIR)$(PREFIX)/bin/hde-keyring; \
-	 else echo "NOTE: hde-keyring was not built (needs libglib2.0-dev for GIO)"; fi
 	install -d $(DESTDIR)$(PREFIX)/share/hde/pam
 	install -m644 packaging/pam/hde-keyring $(DESTDIR)$(PREFIX)/share/hde/pam/hde-keyring
 	@echo "NOTE: to have the login password open the keyring as well, add $(PREFIX)/share/hde/pam/hde-keyring to the PAM file of the display manager (/etc/pam.d/sddm)"
-	install -m755 $(BUILD)/nexwm $(DESTDIR)$(PREFIX)/bin/nexwm
-	install -d $(DESTDIR)$(PREFIX)/share/hde/logos $(DESTDIR)$(WLSESSIONS) $(DESTDIR)$(PORTALS_DIR)
+	install -d $(DESTDIR)$(PREFIX)/share/hde/logos $(DESTDIR)$(PORTALS_DIR)
 	install -m644 data/logos/*.svg data/logos/LICENSES.md $(DESTDIR)$(PREFIX)/share/hde/logos/
-	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop
-	# "NexWM (Wayland)": HDE on HDE's own compositor; hde-session starts labwc instead on the machines where this
-	# nexwm has no compositor yet, so the entry works everywhere (labwc stays the compositor of "HDE (Wayland)")
-	sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
-	chmod 644 $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop
+	@if [ "$(WAYLAND_SESSION)" = "yes" ]; then \
+	  install -d $(DESTDIR)$(WLSESSIONS); \
+	  sed 's|@PREFIX@|$(PREFIX)|g' data/hde-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop; \
+	  if [ -n "$(WLR_PC)" ]; then \
+	    sed 's|@PREFIX@|$(PREFIX)|g' data/nexwm-wayland.desktop > $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop; \
+	  else \
+	    rm -f $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop; \
+	  fi; \
+	  chmod 644 $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop; \
+	  [ ! -e $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop ] || chmod 644 $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop; \
+	else \
+	  echo "NOTE: no complete Wayland session was built (needs libgtk-layer-shell-dev, libwayland-dev and libxkbcommon-dev): installing the X11 desktop only"; \
+	  rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop; \
+	fi
 	rm -f $(DESTDIR)$(XSESSIONS)/hde-wayland.desktop 2>/dev/null || true
 	install -m644 data/hde-portals.conf $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-	@if [ -z "$(DESTDIR)" ] && [ "$$(id -u)" = 0 ] && ! command -v labwc >/dev/null 2>&1; then \
+	@if [ -z "$(DESTDIR)" ] && [ "$$(id -u)" = 0 ] && [ "$(WAYLAND_SESSION)" = "yes" ] && ! command -v labwc >/dev/null 2>&1; then \
 	  echo "Installing labwc Wayland compositor for HDE (Wayland)..."; \
 	  if command -v apt-get >/dev/null 2>&1; then \
 	    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends labwc xwayland || \
@@ -549,6 +638,7 @@ install: all
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-weather.desktop > $(DESTDIR)$(APPS_DIR)/hde-weather.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-calendar.desktop > $(DESTDIR)$(APPS_DIR)/hde-calendar.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-logs.desktop > $(DESTDIR)$(APPS_DIR)/hde-logs.desktop
+	sed 's|@PREFIX@|$(PREFIX)|g' data/hde-widgets.desktop > $(DESTDIR)$(APPS_DIR)/hde-widgets.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-files/hde-files.desktop > $(DESTDIR)$(APPS_DIR)/hde-files.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-media/hde-media.desktop > $(DESTDIR)$(APPS_DIR)/hde-media.desktop
 	sed 's|@PREFIX@|$(PREFIX)|g' hde-media/hde-video.desktop > $(DESTDIR)$(APPS_DIR)/hde-video.desktop
@@ -559,6 +649,7 @@ install: all
 	    $(DESTDIR)$(APPS_DIR)/hde-clock.desktop $(DESTDIR)$(APPS_DIR)/hde-camera.desktop $(DESTDIR)$(APPS_DIR)/hde-calc.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hde-editor.desktop $(DESTDIR)$(APPS_DIR)/hde-resources.desktop $(DESTDIR)$(APPS_DIR)/hde-partition.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hde-weather.desktop $(DESTDIR)$(APPS_DIR)/hde-calendar.desktop $(DESTDIR)$(APPS_DIR)/hde-logs.desktop \
+	    $(DESTDIR)$(APPS_DIR)/hde-widgets.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-video.desktop \
 	    $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop
 	-update-desktop-database $(DESTDIR)$(APPS_DIR) 2>/dev/null
@@ -601,7 +692,8 @@ uninstall:
 	      $(DESTDIR)$(APPS_DIR)/hyggshi-settings.desktop $(DESTDIR)$(APPS_DIR)/hde-support.desktop $(DESTDIR)$(APPS_DIR)/hde-screenshot.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-clock.desktop $(DESTDIR)$(APPS_DIR)/hde-camera.desktop $(DESTDIR)$(APPS_DIR)/hde-calc.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-editor.desktop $(DESTDIR)$(APPS_DIR)/hde-resources.desktop $(DESTDIR)$(APPS_DIR)/hde-partition.desktop \
-	      $(DESTDIR)$(APPS_DIR)/hde-weather.desktop $(DESTDIR)$(APPS_DIR)/hde-calendar.desktop $(DESTDIR)$(APPS_DIR)/hde-logs.desktop
+	      $(DESTDIR)$(APPS_DIR)/hde-weather.desktop $(DESTDIR)$(APPS_DIR)/hde-calendar.desktop $(DESTDIR)$(APPS_DIR)/hde-logs.desktop \
+	      $(DESTDIR)$(APPS_DIR)/hde-widgets.desktop
 	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-video.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
@@ -609,4 +701,5 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login
 	rm -f $(DESTDIR)$(WLSESSIONS)/hde-wayland.desktop $(DESTDIR)$(WLSESSIONS)/nexwm-wayland.desktop \
 	    $(DESTDIR)$(PORTALS_DIR)/hde-portals.conf
-.PHONY: all clean install uninstall components dev reload check check-unit check-login check-arch check-media check-nexwm FORCE
+.PHONY: all clean install uninstall components dev reload check check-unit check-login check-arch check-media check-nexwm \
+        check-components check-wayland check-full check-install FORCE

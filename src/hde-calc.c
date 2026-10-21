@@ -51,19 +51,80 @@ static void load_css(void)
     hde_theme_info_load(&ti);
     char *accent = hde_theme_accent_css(&ti);
     const char *ac = ti.accent ? ti.accent : "#3584e4";
+    gboolean dark = hde_theme_shell_dark();
+
+    const char *card_bg = dark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.04)";
+    const char *card_border = dark ? "rgba(255, 255, 255, 0.10)" : "rgba(0, 0, 0, 0.08)";
+    const char *num_btn_bg = dark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.05)";
+    const char *op_btn_bg = dark ? "rgba(255, 255, 255, 0.04)" : "rgba(0, 0, 0, 0.03)";
+
     char *css = g_strdup_printf(
-        ".calc-display { background-color: alpha(@theme_fg_color, 0.05); border: 1px solid alpha(@theme_fg_color, 0.12);"
-        "  border-radius: 12px; padding: 12px 16px; }"
-        ".calc-result { font-family: monospace; font-size: 32px; font-weight: 700; }"
-        ".calc-sub-expr { font-family: monospace; font-size: 13px; opacity: 0.72; }"
-        ".calc-btn { min-height: 40px; min-width: 52px; font-size: 15px; font-weight: 600; border-radius: 8px; }"
-        ".calc-btn-op { color: %s; font-weight: 700; }"
-        ".calc-btn-eq { background-color: %s; color: #ffffff; font-weight: 700; }"
-        ".calc-prog-val { font-family: monospace; font-size: 15px; font-weight: 600; }"
-        ".calc-hist-expr { font-size: 12px; opacity: 0.72; }"
-        ".calc-hist-res { font-family: monospace; font-size: 16px; font-weight: 700; color: %s; }"
+        ".calc-display {"
+        "  background-color: %s;"
+        "  border: 1px solid %s;"
+        "  border-radius: 14px;"
+        "  padding: 14px 18px;"
+        "}"
+        ".calc-result {"
+        "  font-family: monospace, sans-serif;"
+        "  font-size: 36px;"
+        "  font-weight: 800;"
+        "  letter-spacing: 0.5px;"
+        "}"
+        ".calc-sub-expr {"
+        "  font-family: monospace, sans-serif;"
+        "  font-size: 13px;"
+        "  opacity: 0.72;"
+        "}"
+        ".calc-btn {"
+        "  min-height: 42px;"
+        "  min-width: 52px;"
+        "  font-size: 15px;"
+        "  font-weight: 600;"
+        "  border-radius: 10px;"
+        "  background-color: %s;"
+        "  border: 1px solid %s;"
+        "}"
+        ".calc-btn-op {"
+        "  background-color: %s;"
+        "  color: %s;"
+        "  font-weight: 700;"
+        "}"
+        ".calc-btn-eq {"
+        "  background-color: %s;"
+        "  color: #ffffff;"
+        "  font-weight: 800;"
+        "  border-color: %s;"
+        "}"
+        ".calc-btn-clear {"
+        "  background-color: rgba(224, 27, 36, 0.15);"
+        "  color: #e01b24;"
+        "  font-weight: 700;"
+        "}"
+        ".calc-prog-val {"
+        "  font-family: monospace, sans-serif;"
+        "  font-size: 16px;"
+        "  font-weight: 700;"
+        "  color: %s;"
+        "}"
+        ".calc-hist-expr {"
+        "  font-size: 12px;"
+        "  opacity: 0.70;"
+        "}"
+        ".calc-hist-res {"
+        "  font-family: monospace, sans-serif;"
+        "  font-size: 16px;"
+        "  font-weight: 700;"
+        "  color: %s;"
+        "}"
         "%s",
-        ac, ac, ac, accent);
+        card_bg, card_border,
+        num_btn_bg, card_border,
+        op_btn_bg, ac,
+        ac, ac,
+        ac,
+        ac,
+        accent);
     if (!app_css) {
         app_css = gtk_css_provider_new();
         GdkScreen *scr = gdk_screen_get_default();
@@ -396,7 +457,7 @@ static GtkWidget *build_calc_page(gboolean scientific_by_default)
     gtk_widget_set_vexpand(std_grid, TRUE);
 
     static const struct { const char *lbl; const char *tok; const char *cls; } std_keys[5][5] = {
-        { { "C", "C", "destructive-action" }, { "(", "(", NULL }, { ")", ")", NULL }, { "⌫", "BS", NULL }, { "÷", "/", "calc-btn-op" } },
+        { { "C", "C", "calc-btn-clear" }, { "(", "(", NULL }, { ")", ")", NULL }, { "⌫", "BS", NULL }, { "÷", "/", "calc-btn-op" } },
         { { "7", "7", NULL }, { "8", "8", NULL }, { "9", "9", NULL }, { "1/x", "INV", NULL }, { "×", "*", "calc-btn-op" } },
         { { "4", "4", NULL }, { "5", "5", NULL }, { "6", "6", NULL }, { "|x|", "abs(", NULL }, { "−", "-", "calc-btn-op" } },
         { { "1", "1", NULL }, { "2", "2", NULL }, { "3", "3", NULL }, { "mod", " mod ", NULL }, { "+", "+", "calc-btn-op" } },

@@ -189,7 +189,7 @@ static void spawn_sh(const char *cmd)
 static int find_bin(const char *name, char *out, size_t len)
 {
     const char *path = getenv("PATH");
-    if (!path) path = "/usr/local/bin:/usr/bin:/bin";
+    if (!path) path = "/usr/bin:/usr/local/bin:/bin";
     char *copy = strdup(path);
     if (!copy) return 0;
     int found = 0;

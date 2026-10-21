@@ -29,7 +29,7 @@ char *hde_media_find_program(const char *name)
     }
 
     const char *path = getenv("PATH");
-    if (!path || !*path) path = "/usr/local/bin:/usr/bin:/bin";
+    if (!path || !*path) path = "/usr/bin:/usr/local/bin:/bin";
 
     const char *p = path;
     while (1) {

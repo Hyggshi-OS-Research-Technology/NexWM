@@ -7,14 +7,19 @@ tested in CI in a fresh `archlinux` container on every push.
 ## Build and install
 
 ```sh
-# the same list the CI uses, through pacman (-S --needed --noconfirm)
+# the same list the CI uses, through pacman (-S --needed --noconfirm); runtime-minimal is what the complete
+# desktop needs (window manager, D-Bus, icons, udisks2 + keyring, labwc + Xwayland)
 sh packaging/arch/deps.sh install build runtime-minimal
-# what HDE's features use when they are there (Wi-Fi, sound, power, the Wayland session, screenshots, SDDM)
+# what HDE's optional features use when they are there (Wi-Fi, sound, power, Wayland screenshots, SDDM)
 sh packaging/arch/deps.sh install runtime-full
 
 make -j"$(nproc)"
-sudo make install            # PREFIX=/usr/local by default: use PREFIX=/usr to be a distribution package
+make check-full              # optional: verifies every required program and the X11/Wayland/PAM features
+sudo make install            # PREFIX=/usr by default; PREFIX=/usr/local only for a local install
 ```
+
+`make install` refuses to install a partial desktop (it names the missing programs).  It installs under `/usr` unless
+`PREFIX=/usr/local` is given explicitly, so a package and a by-hand install do not shadow one another.
 
 In a fresh container (no sync database yet), `deps.sh install` runs `pacman -Syu` first, syncing the repositories and updating
 base packages before it installs HDE's dependencies. Installed systems with sync databases are left alone.
@@ -37,6 +42,7 @@ disappears from every name. Otherwise the same list.
 | `build-essential`            | `base-devel`                |
 | `pkg-config`                 | `pkgconf`                   |
 | `libgtk-3-dev`               | `gtk3`                      |
+| `libglib2.0-dev`             | `glib2`                     |
 | `libwnck-3-dev`              | `libwnck3`                  |
 | `libgtk-layer-shell-dev`     | `gtk-layer-shell`           |
 | `wayland-protocols`          | `wayland-protocols`         |
@@ -51,10 +57,12 @@ disappears from every name. Otherwise the same list.
 | `libinput-dev`               | `libinput`                  |
 | `libpixman-1-dev`            | `pixman`                    |
 | `libcairo2-dev`              | `cairo`                     |
+| `libxss-dev`                 | `libxss`                    |
+| `libxext-dev`                | `libxext`                   |
 | `libpam0g-dev`               | `pam` (PAM is in `base`)    |
 | `libpam0g` (run time)        | `pam` — already installed: `login`, `su` and `sudo` use it |
 | `libxcb1-dev`                | `libxcb`                    |
-| `libwlroots-dev`             | `wlroots0.20` (Arch keeps only numbered flavours; see below) |
+| `libwlroots-dev`             | `wlroots0.21` (Arch keeps only numbered flavours; see below) |
 | `libvte-2.91-dev` (optional) | `vte3`                      |
 | `metacity` / `openbox`       | `metacity` / `openbox`      |
 | `x11-xserver-utils`          | `xorg-xset xorg-xsetroot xorg-xrandr` |
@@ -75,8 +83,8 @@ Arch is rolling, so it carries the newest wlroots (0.19, 0.20, 0.21 …). `nexwm
 compositor against Arch's current wlroots, so a wlroots release that breaks the source is found there first — and if
 Arch ever lands a release the source cannot support, a `wlroots0.1x` from the AUR keeps the compositor buildable.
 
-**Arch no longer has a package called `wlroots`.** It keeps a handful of numbered flavours — `wlroots0.18`,
-`wlroots0.19`, `wlroots0.20` at the time of writing — and retires the oldest of them as a new series comes out; the
+**Arch no longer has a package called `wlroots`.** It keeps a handful of numbered flavours — `wlroots0.19`,
+`wlroots0.20`, `wlroots0.21` at the time of writing — and retires the oldest of them as a new series comes out; the
 plain name was dropped in 2025. `packaging/arch/deps.sh` therefore lists the numbered names newest first and, when
 none of them is in the databases any more, asks pacman which ones it does have (`pacman -Ssq '^wlroots[0-9]'`) and
 takes the newest instead of failing on a name written down here months ago. `sh packaging/arch/deps.sh missing build`

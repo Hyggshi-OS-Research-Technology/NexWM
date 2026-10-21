@@ -1,0 +1,67 @@
+Source: hde
+Section: x11
+Priority: optional
+Maintainer: HyggshiOSDeveloper <hyggshidev@gmail.com>
+Homepage: https://github.com/Hyggshi-OS-Research-Technology/NexWM
+Build-Depends: debhelper-compat (= 13),
+               build-essential,
+               pkg-config,
+               libgtk-3-dev,
+               libglib2.0-dev,
+               libwnck-3-dev,
+               libxi-dev,
+               libxrandr-dev,
+               libx11-dev,
+               libxfixes-dev,
+               libgtk-layer-shell-dev,
+               libwayland-dev,
+               wayland-protocols,
+               libxkbcommon-dev,
+               libxcb1-dev,
+               libcairo2-dev,
+               libpam0g-dev,
+               libxss-dev,
+               libxext-dev,
+               libwlroots-dev | libwlroots-0.21-dev | libwlroots-0.20-dev | libwlroots-0.19-dev | libwlroots-0.18-dev | libwlroots-0.17-dev
+Rules-Requires-Root: no
+Standards-Version: 4.7.0
+
+Package: hde
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         dbus-daemon,
+         x11-xserver-utils,
+         udisks2,
+         gnome-keyring,
+         adwaita-icon-theme,
+         librsvg2-common,
+         labwc,
+         xwayland
+Recommends: metacity | xfwm4 | openbox,
+            network-manager,
+            bluez,
+            pipewire-pulse | pulseaudio,
+            power-profiles-daemon,
+            upower,
+            playerctl,
+            ddcutil,
+            policykit-1-gnome | lxpolkit | mate-polkit,
+            xdg-desktop-portal,
+            xdg-desktop-portal-gtk,
+            xdg-desktop-portal-wlr,
+            grim,
+            slurp,
+            xdg-user-dirs,
+            x11-utils
+Suggests: sddm
+Description: Hyggshi Desktop Environment
+ HDE is a lightweight GTK3 desktop for X11 and Wayland.  It provides the
+ panel, desktop icons and wallpaper, file manager, settings, terminal,
+ screenshot tool, widgets, notifications, its own window manager (NexWM),
+ lock screen, idle handling, automatic mounting of removable drives and
+ keyring integration.
+ .
+ The package installs the HDE (X11) and nexwm sessions.  When the Wayland
+ layer-shell components are built, the HDE (Wayland) session is installed
+ too; an X11-only build never advertises a Wayland session.

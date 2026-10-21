@@ -75,7 +75,7 @@ static int self_dir(char *out, size_t n, const char *argv0)
     return 0;
 }
 
-/* Find a program: next to hde-session (the fresh build) -> PATH -> /usr/local/bin, /usr/bin. Result is malloc'd. */
+/* Find a program: next to hde-session (the fresh build) -> PATH -> /usr/bin, /usr/local/bin. Result is malloc'd. */
 static char *resolve_component(const char *name, const char *bindir)
 {
     char path[4096];
@@ -96,7 +96,7 @@ static char *resolve_component(const char *name, const char *bindir)
         }
         free(copy);
     }
-    const char *fallbacks[] = { "/usr/local/bin", "/usr/bin", NULL };
+    const char *fallbacks[] = { "/usr/bin", "/usr/local/bin", NULL };
     for (int i = 0; fallbacks[i]; ++i) {
         snprintf(path, sizeof(path), "%s/%s", fallbacks[i], name);
         if (executable(path)) return strdup(path);

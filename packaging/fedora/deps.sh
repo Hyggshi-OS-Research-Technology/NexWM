@@ -9,10 +9,11 @@
 #
 # Groups:
 #   build            to compile HDE (GTK 3, libwnck, X11, layer-shell, Wayland, XCB, wlroots, cairo, xkbcommon)
-#   runtime-minimal  what the session needs to start (a window manager, D-Bus, X tools, icons)
-#   runtime-full     what HDE's features use when present (Wi-Fi, sound, power, Wayland session, screenshots)
+#   runtime-minimal  what the complete session needs: a window manager, D-Bus, X tools, icons, udisks2 + keyring
+#                    (hde-automount and hde-keyring), and labwc + Xwayland for the installed Wayland session
+#   runtime-full     what HDE's optional features use when present (Wi-Fi, sound, power, screenshots)
 #   test             the test suite (Xvfb, xdotool, ImageMagick, dbusmock, ...)
-#   wayland-session  the "HDE (Wayland)" session: labwc, grim, slurp (also in runtime-full)
+#   wayland-session  the "HDE (Wayland)" session: labwc, grim, slurp
 #
 # An entry "a|b|c" means: the first of these Fedora has. Fedora renames packages between releases (wlroots, the X tools
 # that used to be xorg-x11-server-utils, ...), so the alternatives are what makes the same list work on Fedora 41, 42
@@ -25,6 +26,7 @@ gcc
 make
 pkgconf-pkg-config
 gtk3-devel
+glib2-devel
 libwnck3-devel
 libXi-devel
 libXrandr-devel
@@ -41,6 +43,7 @@ libinput-devel
 pixman-devel
 cairo-devel
 pam-devel
+libXScrnSaver-devel
 libXext-devel
 libxcb-devel
 xcb-util-wm-devel
@@ -59,6 +62,10 @@ xrandr|xorg-x11-server-utils
 adwaita-icon-theme
 librsvg2
 glib2
+udisks2
+gnome-keyring
+labwc
+xorg-x11-server-Xwayland
 "
 
 RUNTIME_FULL="
@@ -75,13 +82,9 @@ libnotify
 playerctl
 ddcutil
 xdg-desktop-portal-gtk
-xorg-x11-server-Xwayland
-labwc
 grim
 slurp
 sddm
-udisks2
-gnome-keyring
 "
 
 TEST="

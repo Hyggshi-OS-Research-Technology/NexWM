@@ -137,7 +137,7 @@ static int which_path(const char *program, char *full, size_t len)
         return 0;
     }
     const char *path = getenv("PATH");
-    if (!path || !*path) path = "/usr/local/bin:/usr/bin:/bin";
+    if (!path || !*path) path = "/usr/bin:/usr/local/bin:/bin";
     for (const char *p = path; *p; ) {
         const char *end = strchr(p, ':');
         size_t n = end ? (size_t)(end - p) : strlen(p);

@@ -822,10 +822,16 @@ static gboolean refresh_all(gpointer d)
     if (cpu_summary_lbl) {
         double l1 = 0, l5 = 0, l15 = 0;
         FILE *lf = fopen("/proc/loadavg", "r");
-        if (lf) { fscanf(lf, "%lf %lf %lf", &l1, &l5, &l15); fclose(lf); }
+        if (lf) {
+            if (fscanf(lf, "%lf %lf %lf", &l1, &l5, &l15) != 3) { l1 = l5 = l15 = 0; }
+            fclose(lf);
+        }
         double up_sec = 0;
         FILE *uf = fopen("/proc/uptime", "r");
-        if (uf) { fscanf(uf, "%lf", &up_sec); fclose(uf); }
+        if (uf) {
+            if (fscanf(uf, "%lf", &up_sec) != 1) { up_sec = 0; }
+            fclose(uf);
+        }
         int up_h = (int)(up_sec / 3600);
         int up_m = ((int)up_sec % 3600) / 60;
 

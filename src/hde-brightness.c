@@ -141,7 +141,7 @@ static int find_backlight(HdeBrightness *b)
 static int in_path(const char *name)
 {
     const char *path = getenv("PATH");
-    if (!path || !*path) path = "/usr/local/bin:/usr/bin:/bin";
+    if (!path || !*path) path = "/usr/bin:/usr/local/bin:/bin";
     char *copy = strdup(path);
     if (!copy) return 0;
     int found = 0;

@@ -1,0 +1,25 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	# HDE has no configure script; the Makefile discovers its dependencies with pkg-config.
+
+override_dh_auto_build:
+	$(MAKE) all
+	# A distribution package must contain the complete desktop, including the X11 idle/lock path and the
+	# layer-shell Wayland session.  This also verifies that hde-lock has XCB, Wayland and PAM support.
+	$(MAKE) check-full
+
+override_dh_auto_test:
+	# The full test suite needs an X server and extra test-only tools.  The package build verifies every
+	# required binary and the feature set above; CI runs the graphical tests.
+	$(MAKE) check-components
+
+override_dh_auto_install:
+	$(MAKE) PREFIX=/usr DESTDIR=$(CURDIR)/debian/hde install
+	$(MAKE) PREFIX=/usr DESTDIR=$(CURDIR)/debian/hde check-install
+
+override_dh_auto_clean:
+	$(MAKE) clean

@@ -13,6 +13,7 @@
 #include "hde-settings.h"
 #include "hde-distro.h"
 #include "hde-theme.h"
+#include "hde-wallpaper.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <stdlib.h>
@@ -440,7 +441,8 @@ static void on_font(GtkFontButton *b, gpointer d)
     g_free(font);
 }
 
-/* hde-desktop reads the wallpaper from ~/.config/hde/config.ini [desktop] and reloads it when the file changes. */
+/* hde-desktop reads the wallpaper from ~/.config/hde/desktop.ini [background-desktop] (then config.ini [desktop])
+ * and reloads it when either file changes. */
 static char *desktop_config_path(void)
 {
     return g_build_filename(g_get_user_config_dir(), "hde", "config.ini", NULL);
@@ -457,29 +459,96 @@ static void desktop_config_set(const char *key, const char *str, int num)
     else g_key_file_set_integer(kf, "desktop", key, num);
     g_key_file_save_to_file(kf, path, NULL);
     g_key_file_free(kf);
+    /* The [background-desktop] file stays in step with the desktop's own config.ini. */
+    if (str && !strcmp(key, "wallpaper")) {
+        char *ini = hde_wallpaper_desktop_ini_path();
+        hde_wallpaper_desktop_ini_write(ini, str);
+        g_free(ini);
+    }
     g_free(dir);
     g_free(path);
 }
 
+static void wallpaper_screen_size(int *width, int *height)
+{
+    *width = *height = 0;
+    GdkDisplay *display = gdk_display_get_default();
+    if (!display) return;
+    GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
+    if (!monitor) monitor = gdk_display_get_monitor(display, 0);
+    if (!monitor) return;
+    GdkRectangle geometry;
+    gdk_monitor_get_geometry(monitor, &geometry);
+    *width = geometry.width;
+    *height = geometry.height;
+}
+
+/* The newer of desktop.ini and config.ini wins when they name different pictures (hde-desktop uses the same rule). */
+static gboolean wallpaper_file_newer(const char *a, const char *b)
+{
+    GStatBuf sa, sb;
+    if (g_stat(a, &sa) != 0) return FALSE;
+    if (g_stat(b, &sb) != 0) return TRUE;
+    return sa.st_mtime > sb.st_mtime;
+}
+
+/* The picture Settings should show as selected:
+ *   1. ~/.config/hde/desktop.ini [background-desktop] wallpaper=  (may be a picture, a *.png pattern or GNOME's XML)
+ *   2. ~/.config/hde/config.ini  [desktop] wallpaper=
+ *   3. the old settings.ini value
+ *   4. the system's active theme; desktop.ini is then written for it, like hde-desktop does at login.
+ * A GNOME gnome-background.xml is resolved to the variant that fits this screen. */
 static char *wallpaper_current_path(void)
 {
-    char *path = desktop_config_path();
+    int width, height;
+    wallpaper_screen_size(&width, &height);
+
+    char *ini = hde_wallpaper_desktop_ini_path();
+    char *ini_value = hde_wallpaper_desktop_ini_get(ini);
+
+    char *config_path = desktop_config_path();
     GKeyFile *kf = g_key_file_new();
-    char *wallpaper = NULL;
-    if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL))
-        wallpaper = g_key_file_get_string(kf, "desktop", "wallpaper", NULL);
+    char *config_value = NULL;
+    if (g_key_file_load_from_file(kf, config_path, G_KEY_FILE_NONE, NULL))
+        config_value = g_key_file_get_string(kf, "desktop", "wallpaper", NULL);
     g_key_file_free(kf);
-    g_free(path);
-    if (!wallpaper || !*wallpaper) {
-        g_free(wallpaper);
-        wallpaper = cfg_get_string("wallpaper", "");
+
+    gboolean prefer_ini = ini_value && *ini_value;
+    if (prefer_ini && config_value && *config_value && strcmp(ini_value, config_value) &&
+        wallpaper_file_newer(config_path, ini))
+        prefer_ini = FALSE;
+
+    char *wallpaper = NULL;
+    if (prefer_ini && ini_value)
+        wallpaper = hde_wallpaper_resolve(ini_value, width, height);
+    if (!wallpaper && config_value && *config_value)
+        wallpaper = hde_wallpaper_resolve(config_value, width, height);
+
+    if (!wallpaper) {
+        char *legacy = cfg_get_string("wallpaper", "");
+        if (legacy && *legacy) wallpaper = hde_wallpaper_resolve(legacy, width, height);
+        g_free(legacy);
     }
+    if (!wallpaper) {
+        char *source = hde_wallpaper_system_source();
+        if (source) {
+            wallpaper = hde_wallpaper_resolve(source, width, height);
+            if (wallpaper) hde_wallpaper_desktop_ini_write(ini, source);
+            g_free(source);
+        }
+    }
+
+    g_free(ini_value);
+    g_free(config_value);
+    g_free(config_path);
+    g_free(ini);
     return wallpaper;
 }
 
 static gboolean wallpaper_is_image(const char *name)
 {
-    static const char *const extensions[] = { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", NULL };
+    static const char *const extensions[] = { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".svg",
+                                              NULL };
     for (guint i = 0; extensions[i]; i++)
         if (g_str_has_suffix(name, extensions[i]) ||
             (strlen(name) > strlen(extensions[i]) &&
@@ -576,6 +645,7 @@ static void wallpaper_gallery_refresh(void)
     char *user_backgrounds = g_build_filename(g_get_user_data_dir(), "backgrounds", NULL);
     char *user_wallpapers = g_build_filename(g_get_user_data_dir(), "wallpapers", NULL);
     const char *dirs[] = { user_backgrounds, user_wallpapers, pictures,
+                           "/usr/share/desktop-base/active-theme/wallpaper/contents/images",
                            "/usr/share/backgrounds", "/usr/share/wallpapers", "/usr/share/xfce4/backdrops", NULL };
     for (guint i = 0; dirs[i] && files->len < WALLPAPER_GALLERY_LIMIT; i++)
         wallpaper_collect_dir(dirs[i], i < 2 ? 0 : 1, files, seen);
@@ -654,14 +724,17 @@ static void on_desktop_config_changed(GFileMonitor *monitor, GFile *file, GFile 
     (void)event;
     (void)data;
     char *expected = desktop_config_path();
+    char *ini = hde_wallpaper_desktop_ini_path();
     char *path = file ? g_file_get_path(file) : NULL;
     char *other_path = other_file ? g_file_get_path(other_file) : NULL;
-    gboolean relevant = !g_strcmp0(path, expected) || !g_strcmp0(other_path, expected);
+    gboolean relevant = !g_strcmp0(path, expected) || !g_strcmp0(other_path, expected) ||
+                        !g_strcmp0(path, ini) || !g_strcmp0(other_path, ini);
     if (relevant && !wallpaper_sync_source)
         wallpaper_sync_source = g_idle_add(wallpaper_gallery_sync_idle, NULL);
     g_free(path);
     g_free(other_path);
     g_free(expected);
+    g_free(ini);
 }
 
 static void desktop_config_watch(void)

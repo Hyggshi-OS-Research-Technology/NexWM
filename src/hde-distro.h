@@ -178,6 +178,7 @@ static inline const char *hde_distro_pkg(const char *pkg)
     static const struct { const char *deb, *rpm, *arch, *suse; } alias[] = {
         /* library / build packages */
         { "libgtk-3-dev",            "gtk3-devel",              "gtk3",                 "gtk3-devel" },
+        { "libglib2.0-dev",          "glib2-devel",             "glib2",                "glib2-devel" },
         { "libwnck-3-dev",           "libwnck3-devel",          "libwnck3",             "libwnck3-devel" },
         { "libgtk-layer-shell-dev",  "gtk-layer-shell-devel",   "gtk-layer-shell",      "gtk-layer-shell-devel" },
         { "libxi-dev",               "libXi-devel",             "libxi",                "libXi-devel" },
@@ -195,8 +196,11 @@ static inline const char *hde_distro_pkg(const char *pkg)
         { "libvte-2.91-dev",         "vte291-devel",            "vte3",                 "vte-devel" },
         { "libwlroots-dev",          "wlroots-devel",           "wlroots",              "wlroots-devel" },
         { "libxcb1-dev",             "libxcb-devel",            "libxcb",               "libxcb-devel" },
-        /* XScreenSaver + DPMS: how long nobody has touched the computer, and turning the screen off (hde-idle) */
-        { "libxext-dev",             "libXext-devel",           "libxext",              "libXext-devel" },
+        { "wayland-protocols",       "wayland-protocols-devel", "wayland-protocols",    "wayland-protocols-devel" },
+        /* libxss: XScreenSaverQueryInfo, the idle time on the X11 session.
+           libxext: DPMS, turning the screen off (hde-idle).  They are two libraries, not one. */
+        { "libxss-dev",              "libXScrnSaver-devel",      "libxss",               "libXss-devel" },
+        { "libxext-dev",             "libXext-devel",            "libxext",              "libXext-devel" },
         { "libpam0g-dev",            "pam-devel",               "pam",                  "pam-devel" },
         { "qtbase5-dev",             "qt5-qtbase-devel",        "qt5-base",             "qt5-base-devel" },
         { "qtdeclarative5-dev",      "qt5-qtdeclarative-devel", "qt5-declarative",      "qt5-declarative-devel" },
@@ -268,9 +272,11 @@ static inline char *hde_install_hint(const char *pkg)
  * recommended programs) or "test" (the test suite). */
 static inline char *hde_deps_hint(const char *what)
 {
-    static const char *const build_deb[] = { "build-essential", "pkg-config", "libgtk-3-dev", "libwnck-3-dev",
-                                             "libxi-dev", "libxrandr-dev", "libx11-dev", "libgtk-layer-shell-dev",
-                                             "libwayland-dev", "libxcb1-dev", "libpam0g-dev", "libxext-dev", NULL };
+    static const char *const build_deb[] = { "build-essential", "pkg-config", "libgtk-3-dev", "libglib2.0-dev",
+                                             "libwnck-3-dev", "libxi-dev", "libxrandr-dev", "libx11-dev",
+                                             "libxfixes-dev", "libgtk-layer-shell-dev", "libwayland-dev",
+                                             "libxkbcommon-dev", "wayland-protocols", "libxcb1-dev", "libcairo2-dev",
+                                             "libpam0g-dev", "libxss-dev", "libxext-dev", NULL };
     static const char *const runtime_deb[] = { "metacity", "network-manager", "bluez", "pulseaudio-utils",
                                                "policykit-1-gnome", "gnome-themes-extra", "adwaita-icon-theme",
                                                "libnotify-bin", "playerctl",

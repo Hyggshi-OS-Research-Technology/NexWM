@@ -9,8 +9,9 @@
 #
 # Groups:
 #   build            to compile HDE (GTK 3, libwnck, X11, layer-shell, Wayland, XCB, wlroots, cairo, xkbcommon, PAM)
-#   runtime-minimal  what the session needs to start (a window manager, D-Bus, X tools, icons)
-#   runtime-full     what HDE's features use when present (Wi-Fi, sound, power, Wayland session, screenshots, SDDM)
+#   runtime-minimal  what the complete session needs: a window manager, D-Bus, X tools, icons, udisks2 + keyring
+#                    (hde-automount and hde-keyring), and labwc + Xwayland for the installed Wayland session
+#   runtime-full     what HDE's optional features use when present (Wi-Fi, sound, power, screenshots, SDDM)
 #   test             the test suite (Xvfb, xdotool, ImageMagick, dbusmock, ...)
 #   wayland-session  the "HDE (Wayland)" session: labwc, grim, slurp, wtype, Xwayland
 #
@@ -30,6 +31,7 @@ BUILD="
 base-devel
 pkgconf
 gtk3
+glib2
 libwnck3
 libxi
 libxrandr
@@ -46,6 +48,7 @@ libinput
 pixman
 cairo
 pam
+libxss
 libxext
 libxcb
 xcb-util-wm
@@ -63,6 +66,10 @@ xorg-xrandr
 adwaita-icon-theme
 librsvg
 glib2
+udisks2
+gnome-keyring
+labwc
+xorg-xwayland
 "
 
 RUNTIME_FULL="
@@ -79,13 +86,9 @@ libnotify
 playerctl
 ddcutil
 xdg-desktop-portal-gtk
-xorg-xwayland
-labwc
 grim
 slurp
 sddm
-udisks2
-gnome-keyring
 "
 
 TEST="

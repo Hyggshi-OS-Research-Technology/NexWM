@@ -12,10 +12,10 @@
 #   DEBUG_MODE=true  set -x
 # and a few new ones:
 #   NEXWM_LOCAL_SRC=DIR     build this checkout instead of cloning (CI)
-#   HDE_RUNTIME=minimal     only what HDE needs to start (window manager, D-Bus, icons); default "full" adds what its
-#                           features use when present: NetworkManager (Wi-Fi), PulseAudio/PipeWire tools (volume),
-#                           power-profiles-daemon (power mode), labwc + grim + slurp (Wayland session), polkit agent,
-#                           ddcutil (brightness of desktop monitors)
+#   HDE_RUNTIME=minimal     only what the complete desktop needs (window manager, D-Bus, icons, udisks2 + keyring,
+#                           labwc + Xwayland); default "full" adds what its optional features use when present:
+#                           NetworkManager (Wi-Fi), PulseAudio/PipeWire tools (volume), power-profiles-daemon,
+#                           grim + slurp (Wayland screenshots), a polkit agent, ddcutil (desktop monitor brightness)
 #   HDE_DEFAULT_SESSION=true   make HDE the default session of LightDM / SDDM
 #   KEEP_BUILD_DEPS=true    keep the compiler and the -dev packages (smaller ISOs remove them: the default)
 #
@@ -39,13 +39,16 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run it as root (inside the chroot of the ISO)"
 command -v apt-get >/dev/null 2>&1 || die "apt-get not found: this script is for Debian-based systems"
 
-BUILD_DEPS="git ca-certificates build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libx11-dev
-            libgtk-layer-shell-dev libwayland-dev wayland-protocols libxcb1-dev libpam0g-dev"
-# what HDE needs to start: a GTK window manager (title bars follow the theme and Dark mode), D-Bus, X tools used by the
-# session (xset: screen blanking, xsetroot: the pointer), icons and SVG support
-RUNTIME_MIN="metacity dbus dbus-x11 x11-xserver-utils adwaita-icon-theme librsvg2-common libglib2.0-bin"
-# what its features use when present
-RUNTIME_FULL="network-manager pulseaudio-utils power-profiles-daemon labwc xwayland grim slurp xdg-desktop-portal-gtk
+BUILD_DEPS="git ca-certificates build-essential pkg-config libgtk-3-dev libglib2.0-dev libwnck-3-dev libxi-dev
+            libxrandr-dev libx11-dev libxfixes-dev libgtk-layer-shell-dev libwayland-dev wayland-protocols
+            libxkbcommon-dev libxcb1-dev libcairo2-dev libpam0g-dev libxss-dev libxext-dev"
+# what the complete desktop needs: a GTK window manager (title bars follow the theme and Dark mode), D-Bus, X tools used
+# by the session (xset: screen blanking, xsetroot: the pointer), icons and SVG support, udisks2/gnome-keyring for
+# hde-automount/hde-keyring, and labwc + Xwayland for the installed Wayland session.
+RUNTIME_MIN="metacity dbus dbus-x11 x11-xserver-utils adwaita-icon-theme librsvg2-common libglib2.0-bin
+             udisks2 gnome-keyring labwc xwayland"
+# what its optional features use when present
+RUNTIME_FULL="network-manager pulseaudio-utils power-profiles-daemon grim slurp xdg-desktop-portal-gtk
               upower ddcutil libnotify-bin"
 # one polkit authentication agent (the password window of "Install updates", disks, ...): the first one there is
 POLKIT_AGENTS="polkit-gnome policykit-1-gnome lxpolkit mate-polkit"
@@ -94,15 +97,21 @@ else
 fi
 
 say "make"
-make -C "$SRC" -j"$(nproc)" all
-PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media hde-choose hde-cmd nexwm hde-lock"
+make -C "$SRC" -j"$(nproc)" PREFIX="$PREFIX" all
+# The build must contain the complete desktop, not just the programs whose optional dependencies happened to be
+# installed.  check-full also verifies the X11 (XScreenSaver/DPMS), Wayland, PAM and X feature support.
+make -C "$SRC" PREFIX="$PREFIX" check-full
+PROGRAMS="hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media
+          hde-choose hde-cmd hde-clock hde-camera hde-calc hde-editor hde-resources hde-partition hde-weather
+          hde-calendar hde-logs hde-widgets nexwm hde-lock hde-idle hde-automount hde-keyring"
 for p in $PROGRAMS; do
     [ -x "$SRC/build/$p" ] || die "build/$p was not built (see the make output above)"
 done
 
 say "make install PREFIX=$PREFIX"
 make -C "$SRC" install PREFIX="$PREFIX"
-for p in $PROGRAMS hde-start; do
+make -C "$SRC" check-install PREFIX="$PREFIX"
+for p in $PROGRAMS hde-start hde-start-wayland; do
     [ -x "$PREFIX/bin/$p" ] || die "$PREFIX/bin/$p is missing after make install"
 done
 for f in /usr/share/xsessions/hde.desktop /usr/share/xsessions/nexwm.desktop \
@@ -167,6 +176,13 @@ $missing"
 "$PREFIX/bin/hde-settings" --version
 "$PREFIX/bin/hde-cmd" --version
 "$PREFIX/bin/hde-choose" --version
+"$PREFIX/bin/hde-idle" --version
+"$PREFIX/bin/hde-automount" --version
+"$PREFIX/bin/hde-keyring" --version
+lock=$("$PREFIX/bin/hde-lock" --version)
+for feature in "X11 session (XCB): yes" "Wayland session (ext-session-lock-v1): yes" "Password check (PAM): yes"; do
+    printf '%s\n' "$lock" | grep -qF "$feature" || die "hde-lock was installed without: $feature"
+done
 echo "OK: HDE is installed in $PREFIX/bin; sessions: /usr/share/xsessions/hde.desktop (HDE)," \
      "/usr/share/xsessions/nexwm.desktop (HDE with NexWM, its own window manager)," \
      "/usr/share/wayland-sessions/hde-wayland.desktop (HDE (Wayland), with labwc)"

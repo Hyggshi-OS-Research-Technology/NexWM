@@ -25,15 +25,20 @@ Run as root inside the chroot:
 | `PREFIX` | `/usr` | install prefix |
 | `DEBUG_MODE` | | `true`: `set -x` |
 | `NEXWM_LOCAL_SRC` | | build this checkout instead of cloning |
-| `HDE_RUNTIME` | `full` | `minimal`: only what HDE needs to start (Metacity, D-Bus, icons); `full` also installs what its features use (NetworkManager, PulseAudio tools, power-profiles-daemon, labwc + grim + slurp for the Wayland session, a polkit agent, UPower, ddcutil) |
+| `HDE_RUNTIME` | `full` | `minimal`: everything the complete desktop needs (a GTK window manager, D-Bus, X tools, icons and SVG, udisks2 + gnome-keyring for automount/keyring, labwc + Xwayland for HDE (Wayland)); `full` also installs what the optional features use (NetworkManager, PulseAudio/PipeWire tools, power-profiles-daemon, grim + slurp for Wayland screenshots, a polkit agent, UPower, ddcutil) |
 | `HDE_DEFAULT_SESSION` | | `true`: HDE is the default session of LightDM / SDDM |
 | `KEEP_BUILD_DEPS` | | `true`: keep the compiler and the `-dev` packages |
 
-What it does: installs the build dependencies and the runtime packages, builds (`make`), checks that the programs it expects
-were built (the session, the panel, Settings, Files, Media, Cmd, NexWM and hde-lock, HDE's own lock screen), `make install PREFIX=/usr` (programs, `hde-start`, `/usr/share/xsessions/hde.desktop`,
-`/usr/share/wayland-sessions/hde-wayland.desktop`, logos, the portal configuration), removes the `nexwm.desktop` /
-`start-nexde` of the old script, marks every library the programs use as manually installed and then removes only the
-build tools it installed itself, and finally checks that no library is missing.
+What it does: installs the build dependencies and the runtime packages, builds all 26 programs (`make all`), and runs
+`make check-full`: every required program must exist, and the build must contain the X11 idle/DPMS path, the Wayland
+layer-shell taskbar, idle and lock support, and PAM. It then runs `make install PREFIX=/usr` (programs, `hde-start`,
+`hde-start-wayland`, `/usr/share/xsessions/hde.desktop`, `/usr/share/xsessions/nexwm.desktop`,
+`/usr/share/wayland-sessions/hde-wayland.desktop`, the PAM keyring file, logos and the portal configuration) and
+`make check-install`, which verifies that every required file is there, that the session metadata matches the built
+features, and that none of it points at `/usr/local`. NexWM's own Wayland session (`nexwm-wayland.desktop`) is
+installed only when wlroots was available at build time. Finally the script removes the `nexwm.desktop` / `start-nexde`
+of the old script, marks every library the programs use as manually installed, removes only the build tools it
+installed itself, and checks that no library is missing.
 
 The CI of this repository runs it in a `debian:trixie` container (job *Hyggshi OS install script*) and starts the
 installed session in Xvfb.

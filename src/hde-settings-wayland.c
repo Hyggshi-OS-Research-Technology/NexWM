@@ -291,7 +291,7 @@ int wayland_config_cli(int argc, char **argv)
     char exe[4096];
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
     if (n > 0) { exe[n] = '\0'; bindir = g_path_get_dirname(exe); }
-    else bindir = g_strdup("/usr/local/bin");
+    else bindir = g_strdup("/usr/bin");
     read_labwc_version();
     char *dir = dir_arg ? g_strdup(dir_arg) : g_build_filename(g_get_user_config_dir(), "hde", "labwc", NULL);
     g_mkdir_with_parents(dir, 0755);

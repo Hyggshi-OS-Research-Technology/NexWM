@@ -23,7 +23,7 @@ manager), a session manager and a system-hotkeys daemon.
 | **Screenshots** | Built-in `hde-screenshot` (no scrot or other tool needed): whole screen, drag an area, or the active window; saved to `~/Pictures/Screenshots`, copied to the clipboard, announced with a notification (Open / Show in Folder). Hold `Ctrl` to only copy to the clipboard. **Start menu → Screenshot** opens the *Screenshot* window: choose whole screen / window / area, a delay and whether the **mouse pointer** is in the picture, then Copy, Save As, Open or Show in Folder |
 | **About** | *Settings → About* and the **About HDE** window (desktop menu): the **logo of your system** from `/etc/os-release` (`ID=` hyggshios, ubuntu, debian, linuxmint, … — the logo the system installs, else HDE's own copy of 27 distribution logos, else a badge), its name and version, **"Based on Debian 13 (trixie)" / "Ubuntu 24.04 LTS"** with that logo too, its links; HDE version and build, the computer (model, processor, RAM, graphics, storage, screens), and **how much RAM HDE uses right now** (per program, measured live); *Copy system info* for bug reports. `hde-settings --about` prints the same |
 | **Wayland** | The **HDE (Wayland)** session on the login screen (needs `labwc`): the labwc compositor with HDE's panel, desktop, Start menu, notifications and OSD as layer-shell surfaces, a Wayland taskbar, the same keys (Super, F1–F4, F6–F8, PrtSc with `grim`, …) as labwc key bindings, title bars in HDE's colours; Settings for keyboard, touchpad and appearance apply there too |
-| **Desktop** | Wallpaper + icons from `~/Desktop` with a clear selection frame (accent color) and hover highlight; **right-click an icon for its own menu** — Open, Open With, Open in Terminal, Cut, Copy, Rename, Move to Trash, Properties; rubber-band and Ctrl+click selection; Paste, Delete, F2 and the usual keyboard shortcuts |
+| **Desktop** | Wallpaper + icons from `~/Desktop` with a clear selection frame (accent color) and hover highlight; **right-click an icon for its own menu** — Open, Open With, Open in Terminal, Cut, Copy, Rename, Move to Trash, Properties; rubber-band and Ctrl+click selection, **drag one selected icon to move the whole selection together**; Paste, Delete, F2 and the usual keyboard shortcuts |
 | **Files** | **Hyggshi Files** (`hde-files`, in its own folder `hde-files/`), the file manager — and the one HDE uses: folders on the desktop, `Super+E`, *Show in Folder* of browsers and of the Screenshot tool open in it. Icons with **thumbnails** (pictures, and videos / PDF when a thumbnailer is installed) or a **list** (Name, Size, Type, Modified — click a column to sort), **tabs**, the places sidebar (bookmarks, drives, Trash, Recent), a path bar (`Ctrl+L` to type a path or an `sftp://` address, with completion), **search in the subfolders** (`Ctrl+F`), hidden files (`Ctrl+H`), zoom (`Ctrl` + wheel keys or the slider). **Copy, move, paste with progress and Cancel** — Replace / Skip / Keep Both / Merge when a name is taken, "name (copy)" in the same folder —, **drag and drop** (Ctrl copies, Shift moves), **the Trash** (restore where it was, delete, empty; no GVfs needed), **Undo** (`Ctrl+Z`), rename (the extension kept; `F2` once HDE's F1–F3 sound keys are off in *Settings → Keyboard & Shortcuts*, else from the menu), new folder / document (from `~/Templates`), Properties (size of folders, permissions, the app that opens the type), Open With, Run executables, compress / extract, open a terminal there; type the start of a name to jump to it; its Cut / Copy / Paste works with the desktop and the other file managers; it watches folders, so changes made elsewhere show at once; Light / Dark and the accent of HDE |
 | **Network** | Real Wi-Fi list (NetworkManager): scan, signal, security, connect with password, disconnect, forget, hidden networks; wired/VPN devices |
 | **Bluetooth** | Device list straight from BlueZ: paired + nearby devices, scan, pair (PIN/passkey/confirmation agent), connect, disconnect, remove |
@@ -37,22 +37,49 @@ manager), a session manager and a system-hotkeys daemon.
 ## Install
 
 ```sh
-# build dependencies (libgtk-layer-shell-dev: for the Wayland session; libxcb1-dev: NexWM, HDE's own window manager;
-# libpam0g-dev: the password check of HDE's own lock screen, hde-lock, build-time only — at run time hde-lock needs
-# nothing but libpam0g, which every system has because login, su and sudo use it; libxext-dev: how long you have been
-# away and turning the screen off, hde-idle)
-sudo apt install build-essential pkg-config libgtk-3-dev libwnck-3-dev libxi-dev libxrandr-dev libgtk-layer-shell-dev \
-                 libxcb1-dev libpam0g-dev libxext-dev
+# build dependencies (libgtk-layer-shell-dev + libwayland-dev + libxkbcommon-dev: the Wayland session;
+# libglib2.0-dev: the D-Bus side of hde-idle/hde-automount/hde-keyring; libxcb1-dev + libcairo2-dev: NexWM and
+# hde-lock; libpam0g-dev: the password check of hde-lock, build-time only — at run time hde-lock needs nothing but
+# libpam0g, which every system has because login, su and sudo use it; libxss-dev: XScreenSaverQueryInfo, how long you
+# have been away; libxext-dev: DPMS, turning the screen off — those are two libraries, not one)
+sudo apt install build-essential pkg-config libgtk-3-dev libglib2.0-dev libwnck-3-dev libxi-dev libxrandr-dev \
+                 libx11-dev libxfixes-dev libgtk-layer-shell-dev libwayland-dev wayland-protocols libxkbcommon-dev \
+                 libxcb1-dev libcairo2-dev libpam0g-dev libxss-dev libxext-dev
+# optional: NexWM's own Wayland compositor. wlroots' package name follows the release — libwlroots-dev on
+# Ubuntu 24.04 and Debian 12, libwlroots-0.18-dev on Debian 13, libwlroots-0.19-dev on Ubuntu 26.04.
+sudo apt install libwlroots-dev
 # recommended runtime packages (udisks2: mounting a USB stick when you plug it in; gnome-keyring: the one place the
-# session keeps the passwords of Wi-Fi, the browser and Git)
+# session keeps the passwords of Wi-Fi, the browser and Git; labwc + Xwayland: the HDE (Wayland) session)
 sudo apt install metacity network-manager bluez pipewire-pulse policykit-1-gnome \
-                 gnome-themes-extra libnotify-bin playerctl udisks2 gnome-keyring
-# for the HDE (Wayland) session: the compositor and screenshots (the screen lock is HDE's own hde-lock; a swaylock or
-# gtklock is only the fallback for a build without PAM or on a compositor without ext-session-lock-v1)
-sudo apt install labwc grim slurp
+                 gnome-themes-extra adwaita-icon-theme librsvg2-common libnotify-bin playerctl \
+                 udisks2 gnome-keyring labwc xwayland
+# for HDE (Wayland) screenshots (the screen lock is HDE's own hde-lock; a swaylock or gtklock is only the fallback for
+# a build without PAM or on a compositor without ext-session-lock-v1)
+sudo apt install grim slurp
 make
-sudo make install          # PREFIX=/usr/local by default
+make check-full             # optional: fails if a required program or X11/Wayland feature was not built
+sudo make install           # installs under /usr by default, like a distribution package
 ```
+
+`make install` refuses to install a partial desktop: it stops with the list of programs that were not built instead of
+silently leaving out, for example, the idle service, automatic mounting or a Wayland component.  `PREFIX=/usr/local`
+still works for a local install, but an APT/pacman/RPM package always uses `/usr`.
+
+### Debian / Ubuntu package
+
+The `debian/` directory builds a native `hde` package from this tree.  It declares all build and runtime dependencies
+above and installs under `/usr` (`/usr/bin`, `/usr/share`), never `/usr/local`:
+
+```sh
+sudo apt install debhelper
+sudo apt build-dep .        # or install the build dependencies listed above
+dpkg-buildpackage -b -us -uc
+sudo apt install ../hde_0.1.0_amd64.deb
+```
+
+The package build runs `make check-full`, installs into a staging directory, and runs `make check-install`: the build
+fails unless every required binary and the session metadata that matches the built features are present.  The Wayland
+session entries are only installed when layer-shell, the Wayland taskbar, idle and lock support were all built.
 
 To have the keyring opened by the password you type at the login screen (instead of once more by the first program that
 needs it), add the two lines of `packaging/pam/hde-keyring` — which `make install` puts in
@@ -65,7 +92,8 @@ Updating an older copy (or one unpacked from a ZIP that still had prebuilt progr
 `make clean && make && sudo make install`, so that every program is rebuilt from the current sources.
 **After updating HDE, log out and back in once** — `make dev` restarts the desktop, panel and hotkeys, but the order in
 which the session starts things (hotkeys before the window manager, see below) only applies to a new login.
-Without a display manager: `echo 'exec /usr/local/bin/hde-start' > ~/.xinitrc && startx`.
+Without a display manager: `echo 'exec /usr/bin/hde-start' > ~/.xinitrc && startx` (use `/usr/local/bin/hde-start`
+for a `PREFIX=/usr/local` install).
 
 Try it in a window without logging out: `scripts/test-nexde` (a whole HDE session from `./build` in Xephyr, on its own
 D-Bus, with a throw-away copy of your settings; `--fresh` = a new user, `--wm openbox`, `1920x1080 :3`, `--help`).
@@ -188,8 +216,13 @@ the window; on Wayland the icon and the title instead — no program can read wh
 program hde-choose uses for each of them (a program name, or `ask` to ask every time; written by the question itself
 and by `hde-choose --set`, forgotten by `--reset`).
 All documented in `src/hde-panel-config.h`.
-Desktop wallpaper and icon positions: `~/.config/hde/config.ini`. The Wayland session's labwc configuration is
-written to `~/.config/hde/labwc/` from these settings (rewritten when they change).
+Desktop wallpaper and icon positions: `~/.config/hde/config.ini`. The wallpaper is also kept in
+`~/.config/hde/desktop.ini` as `[background-desktop]` / `wallpaper=`: a picture, a pattern such as
+`/usr/share/backgrounds/*.png`, or GNOME's own `/usr/share/desktop-base/active-theme/wallpaper/gnome-background.xml`
+(HDE picks the size that fits the screen, and follows the theme when it changes). When no wallpaper has been chosen
+yet, HDE applies the system's active theme and writes that `desktop.ini` itself; editing the file applies at once. The
+Wayland session's labwc configuration is written to `~/.config/hde/labwc/` from these settings (rewritten when they
+change).
 
 ## Tests
 

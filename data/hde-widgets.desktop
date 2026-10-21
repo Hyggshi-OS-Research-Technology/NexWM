@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Desktop Widgets
+GenericName=Desktop Widgets Manager
+Comment=Manage and customize widgets on your NexDE desktop
+Exec=@PREFIX@/bin/hde-widgets
+Icon=preferences-desktop-wallpaper
+Terminal=false
+Categories=Settings;DesktopSettings;GTK;
+Keywords=widgets;clock;weather;system;monitor;notes;desktop;
+StartupWMClass=hde-widgets

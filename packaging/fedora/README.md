@@ -9,14 +9,19 @@ the RPM family too. Nothing here is Debian-only any more: HDE tells the user the
 ## Build and install
 
 ```sh
-# what compiles HDE, plus what the session needs to start
+# what compiles HDE, plus what the complete desktop needs (window manager, D-Bus, icons, udisks2 + keyring,
+# labwc + Xwayland)
 sh packaging/fedora/deps.sh install build runtime-minimal
-# the programs HDE's features use when they are there (Wi-Fi, sound, power, the Wayland session, screenshots)
+# what HDE's optional features use when they are there (Wi-Fi, sound, power, Wayland screenshots, ...)
 sh packaging/fedora/deps.sh install runtime-full
 
 make -j"$(nproc)"
-sudo make install            # PREFIX=/usr/local by default: use PREFIX=/usr to be a distribution package
+make check-full              # optional: verifies every required program and the X11/Wayland/PAM features
+sudo make install            # PREFIX=/usr by default; PREFIX=/usr/local only for a local install
 ```
+
+`make install` refuses to install a partial desktop (it names the missing programs).  It installs under `/usr` unless
+`PREFIX=/usr/local` is given explicitly, so a package and a by-hand install do not shadow one another.
 
 Then log out and choose **HDE** (X11) or **HDE (Wayland)** on the login screen. Logs: `~/.cache/hde/session.log`.
 `packaging/fedora/deps.sh` with no arguments prints its groups; `list GROUP` prints the package names of one group
@@ -34,6 +39,7 @@ The names in the README of this repository are Debian's. On Fedora they are:
 | `build-essential`            | `gcc gcc-c++ make`                      |
 | `pkg-config`                 | `pkgconf-pkg-config`                    |
 | `libgtk-3-dev`               | `gtk3-devel`                            |
+| `libglib2.0-dev`             | `glib2-devel`                           |
 | `libwnck-3-dev`              | `libwnck3-devel`                        |
 | `libgtk-layer-shell-dev`     | `gtk-layer-shell-devel` + `wayland-devel` |
 | `wayland-protocols`          | `wayland-protocols-devel`                |
@@ -45,7 +51,9 @@ The names in the README of this repository are Debian's. On Fedora they are:
 | `libinput-dev`               | `libinput-devel`                        |
 | `libpixman-1-dev`            | `pixman-devel`                          |
 | `libcairo2-dev`              | `cairo-devel`                           |
-| `libwlroots-dev`             | `wlroots-devel`, `wlroots0.19-devel`, `wlroots0.18-devel`… (the name follows the release) |
+| `libxss-dev`                 | `libXScrnSaver-devel`                   |
+| `libxext-dev`                | `libXext-devel`                         |
+| `libwlroots-dev` (`libwlroots-0.19-dev` on Ubuntu 26.04, `libwlroots-0.18-dev` on Debian 13) | `wlroots-devel`, `wlroots0.19-devel`, `wlroots0.18-devel`… (the name follows the release) |
 | `libvte-2.91-dev` (optional) | `vte291-devel`                          |
 | `metacity` / `openbox`       | `metacity` / `openbox`                  |
 | `network-manager`            | `NetworkManager`                        |
@@ -71,8 +79,8 @@ The names in the README of this repository are Debian's. On Fedora they are:
   `sh login/sddm/install.sh` installs it and can make HDE the session SDDM starts.
 * **The Wayland session** uses labwc (`dnf install labwc`), like on Debian; NexWM's own compositor (`nexwm/`) is built
   when `wlroots-devel` is there and appears as a session of its own.
-* **SELinux**: `make install` copies files into `/usr/local/...` (or `/usr` with `PREFIX=/usr`); if a policy complains,
-  `sudo restorecon -Rv /usr/local/bin /usr/local/share/hde` fixes the labels (files installed by a `.rpm` get them
+* **SELinux**: `make install` copies files into `/usr` by default (`PREFIX=/usr/local` for a local install); if a policy
+  complains, `sudo restorecon -Rv /usr/bin /usr/share/hde` fixes the labels (files installed by a `.rpm` get them
   from the package policy).
 
 ## Tests
