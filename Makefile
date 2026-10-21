@@ -48,12 +48,20 @@ XFIXES_LIBS:=$(shell pkg-config --libs xfixes 2>/dev/null)
 # libX11, no toolkit in between. Without it there is no `nexwm --x11` (the program says what to install).
 XCB_CFLAGS:=$(shell pkg-config --exists xcb 2>/dev/null && echo "-DNEXWM_HAVE_XCB `pkg-config --cflags xcb`")
 XCB_LIBS:=$(shell pkg-config --libs xcb 2>/dev/null)
-# wlroots (libwlroots-dev): NexWM's Wayland compositor. 0.17 is the oldest API this source supports; the unversioned
-# pkg-config name is tried last and its version is checked, so an older `wlroots.pc` cannot accidentally enable it.
-WLR_PC:=$(shell for n in wlroots-0.21 wlroots-0.20 wlroots-0.19 wlroots-0.18 wlroots-0.17 wlroots; do \
+# wlroots (libwlroots-dev): NexWM's Wayland compositor. 0.18 is the oldest API this source supports: the
+# xdg-shell moved its new_toplevel/new_popup into the event struct and the output layout took a display in
+# 0.18, and the source follows that API. The unversioned pkg-config name is tried last and its version is
+# checked, so an older `wlroots.pc` cannot accidentally enable it. With an older wlroots on the system the
+# Wayland part of NexWM is left out (the X11 window manager is built as before) and the build says so.
+WLR_PC:=$(shell for n in wlroots-0.21 wlroots-0.20 wlroots-0.19 wlroots-0.18 wlroots; do \
                     pkg-config --exists $$n 2>/dev/null || continue; \
                     v=`pkg-config --modversion $$n`; major=`echo $$v | cut -d. -f1`; minor=`echo $$v | cut -d. -f2`; \
-                    [ "$$major" = 0 ] && [ "$$minor" -ge 17 ] && { echo $$n; break; }; done)
+                    [ "$$major" = 0 ] && [ "$$minor" -ge 18 ] && { echo $$n; break; }; done)
+# an wlroots that is there but too old for the compositor: the build says what is missing
+WLR_TOO_OLD:=$(shell for n in wlroots-0.17 wlroots; do \
+                    pkg-config --exists $$n 2>/dev/null || continue; \
+                    v=`pkg-config --modversion $$n`; major=`echo $$v | cut -d. -f1`; minor=`echo $$v | cut -d. -f2`; \
+                    [ "$$major" = 0 ] && [ "$$minor" -lt 18 ] && { echo "$$n $$v"; break; }; done)
 WLR_MINOR:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --modversion $(WLR_PC) | cut -d. -f2)
 WLR_CFLAGS:=$(shell [ -n "$(WLR_PC)" ] && echo "-DNEXWM_HAVE_WLROOTS -DWLR_USE_UNSTABLE -DNEXWM_WLROOTS_MINOR=$(WLR_MINOR) `pkg-config --cflags $(WLR_PC)`")
 WLR_LIBS:=$(shell [ -n "$(WLR_PC)" ] && pkg-config --libs $(WLR_PC) wayland-server xkbcommon)
@@ -414,7 +422,11 @@ $(BUILD)/keyring-test: tests/keyring-test.c src/hde-keyring-core.c src/hde-keyri
 # configuration and key binding tests without any display; tests/nexwm-test.sh drives the X11 side in Xvfb.
 $(BUILD)/nexwm: $(NEXWM_SRC) $(NEXWM_HEADERS) $(VERSION_H) $(NEXWM_WLR_PROTOCOL_HEADER) | $(BUILD)
 	@[ -n "$(XCB_CFLAGS)" ] || echo "NOTE: libxcb1-dev (pkg-config xcb) not found: this nexwm has no X11 window manager"
-	@[ -n "$(WLR_PC)" ] || echo "NOTE: libwlroots-dev (pkg-config wlroots) not found: this nexwm has no Wayland compositor"
+	@[ -n "$(WLR_PC)" ] || { if [ -n "$(WLR_TOO_OLD)" ]; then \
+	    echo "NOTE: the wlroots on this system ($(WLR_TOO_OLD)) is older than 0.18, whose API the Wayland compositor needs: this nexwm has no Wayland compositor (install wlroots 0.18 or newer for it)"; \
+	  else \
+	    echo "NOTE: libwlroots-dev (pkg-config wlroots) not found: this nexwm has no Wayland compositor"; \
+	  fi; }
 	$(CC) $(GUI_CFLAGS) -std=c11 $(XCB_CFLAGS) $(WLR_CFLAGS) -Inexwm/src -Isrc -I$(BUILD) -o $@ $(filter %.c,$^) \
 	    $(XCB_LIBS) $(WLR_LIBS) -lm
 # NexWM's configuration file (nexwm/src/config.c) and the arithmetic of its frames (nexwm/src/frame.c: the title bar,

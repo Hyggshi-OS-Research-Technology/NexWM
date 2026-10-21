@@ -56,6 +56,18 @@ jobs:
         echo "compiler warnings: $n"
         grep "warning:" build.log | sort -u | head -n 10 | sed 's/^/::warning::/' || true
 
+    - name: NexWM's Wayland compositor (wlroots 0.18 or newer)
+      if: always()
+      run: |
+        for m in wlroots-0.21 wlroots-0.20 wlroots-0.19 wlroots-0.18 wlroots-0.17 wlroots; do
+          if pkg-config --exists "$m" 2>/dev/null; then echo "wlroots on this system: $m $(pkg-config --modversion "$m")"; fi
+        done
+        if grep -q "NEXWM_HAVE_WLROOTS" build.log; then
+          echo "NexWM's Wayland compositor is part of this build"
+        else
+          echo "::notice::this system has no wlroots 0.18 or newer, whose API NexWM's Wayland compositor uses: NexWM is built as the X11 window manager only (the Wayland compositor is built and tested by the Debian and Arch jobs)"
+        fi
+
     - name: Complete desktop (required programs, X11/Wayland/PAM features)
       run: make check-full
 
