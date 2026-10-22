@@ -227,7 +227,19 @@ ${SESSION_LINE}EOF"
             sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/hde-wayland.desktop" > /usr/share/wayland-sessions/hde-wayland.desktop
             rm -f /usr/share/xsessions/hde-wayland.desktop 2>/dev/null || true
             [ -f "$DATA_DIR/nexwm.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm.desktop" > /usr/share/xsessions/nexwm.desktop
-            [ -f "$DATA_DIR/nexwm-wayland.desktop" ] && sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm-wayland.desktop" > /usr/share/wayland-sessions/nexwm-wayland.desktop
+            # "NexWM (Wayland)" is nexwm's own wlroots compositor session. It may only be
+            # offered when the installed nexwm binary actually has that half built in
+            # (the Makefile requires wlroots >= 0.18); otherwise make install has just
+            # removed the entry and this script must not resurrect it, or a checkout
+            # like make check-install flags the mismatch (and the login screen would
+            # offer a session that cannot start).
+            if [ -f "$DATA_DIR/nexwm-wayland.desktop" ]; then
+                if [ -x "$PREF/bin/nexwm" ] && "$PREF/bin/nexwm" --version 2>/dev/null | grep -q "^Wayland compositor (wlroots): yes"; then
+                    sed "s|@PREFIX@|$PREF|g" "$DATA_DIR/nexwm-wayland.desktop" > /usr/share/wayland-sessions/nexwm-wayland.desktop
+                else
+                    rm -f /usr/share/wayland-sessions/nexwm-wayland.desktop 2>/dev/null || true
+                fi
+            fi
             chmod 644 /usr/share/xsessions/hde.desktop /usr/share/wayland-sessions/hde-wayland.desktop 2>/dev/null || true
             say "  sessions:   installed HDE (X11) and HDE (Wayland) into /usr/share/{xsessions,wayland-sessions}"
         fi
