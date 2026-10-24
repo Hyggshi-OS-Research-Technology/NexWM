@@ -285,8 +285,7 @@ static gint64 idle_ms(void)
 #endif
 #ifdef HAVE_XSS
     return x11_idle_ms();
-#endif
-#if !defined(HAVE_XSS) && !defined(HAVE_WAYLAND_IDLE)
+#else
     return -1;
 #endif
 }

@@ -185,6 +185,17 @@ static void apply_vte_theme(CmdWindow *app)
     vte_terminal_set_colors(app->vte, &fg, &bg, NULL, 0);
     vte_terminal_set_color_cursor(app->vte, &cur);
 }
+
+static void cmd_vte_copy_clipboard(VteTerminal *vte)
+{
+#if VTE_CHECK_VERSION(0, 50, 0)
+    vte_terminal_copy_clipboard_format(vte, VTE_FORMAT_TEXT);
+#else
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    vte_terminal_copy_clipboard(vte);
+    G_GNUC_END_IGNORE_DEPRECATIONS
+#endif
+}
 #else
 static void apply_vte_theme(CmdWindow *app) { (void)app; }
 #endif
@@ -851,7 +862,7 @@ static gboolean app_key_press(GtkWidget *widget, GdkEventKey *event, gpointer us
 
 #ifdef HDE_CMD_HAVE_VTE
     if (app->options.use_vte) {
-        if (ctrl && shift && (key == GDK_KEY_c || key == GDK_KEY_C)) { vte_terminal_copy_clipboard(app->vte); return TRUE; }
+        if (ctrl && shift && (key == GDK_KEY_c || key == GDK_KEY_C)) { cmd_vte_copy_clipboard(app->vte); return TRUE; }
         if (ctrl && shift && (key == GDK_KEY_v || key == GDK_KEY_V)) { clipboard_paste(app); return TRUE; }
         if (ctrl && (key == GDK_KEY_plus || key == GDK_KEY_equal || key == GDK_KEY_KP_Add)) {
             update_font(app, app->font_size + 1); return TRUE;
@@ -1189,7 +1200,7 @@ static void menu_copy(GtkMenuItem *item, gpointer userdata)
     CmdWindow *app = userdata;
     (void)item;
 #ifdef HDE_CMD_HAVE_VTE
-    if (app->options.use_vte) vte_terminal_copy_clipboard(app->vte);
+    if (app->options.use_vte) cmd_vte_copy_clipboard(app->vte);
     else
 #endif
         clipboard_copy(app);
@@ -1630,7 +1641,9 @@ static void vte_child_exited(VteTerminal *terminal, gint status, gpointer userda
 static void vte_title_changed(VteTerminal *terminal, gpointer userdata)
 {
     CmdWindow *app = userdata;
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
     const char *title = vte_terminal_get_window_title(terminal);
+    G_GNUC_END_IGNORE_DEPRECATIONS
     if (title && *title) set_title(app, title);
 }
 

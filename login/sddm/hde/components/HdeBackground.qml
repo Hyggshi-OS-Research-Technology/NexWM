@@ -16,7 +16,7 @@ Item {
         id: picture
         anchors.fill: parent
         visible: !root.isColour
-        source: root.source.indexOf("://") > 0 || root.source.charAt(0) === "/"
+        source: root.source.indexOf(":/") > 0 || root.source.charAt(0) === "/"
                   ? root.source : Qt.resolvedUrl("../" + root.source)
         fillMode: Image.PreserveAspectCrop
         asynchronous: true

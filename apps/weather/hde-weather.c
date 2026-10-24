@@ -1179,9 +1179,9 @@ static void populate_add_city_results(AddCityDialogData *d, const char *query)
         GtkWidget *hb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
         gtk_container_set_border_width(GTK_CONTAINER(hb), 8);
 
-        char label[160];
-        snprintf(label, sizeof(label), "%s, %s", d->results[i].name, d->results[i].country);
+        char *label = g_strdup_printf("%s, %s", d->results[i].name, d->results[i].country);
         GtkWidget *nl = gtk_label_new(label);
+        g_free(label);
         gtk_label_set_xalign(GTK_LABEL(nl), 0.0);
         gtk_box_pack_start(GTK_BOX(hb), nl, TRUE, TRUE, 0);
 

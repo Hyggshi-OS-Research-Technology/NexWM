@@ -163,10 +163,8 @@ for f in "$THEME"/Main.qml "$THEME"/components/*.qml; do
     elif python3 - "$f" <<'PY'
 import re, sys
 src = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)
-src = re.sub(r"//[^\n]*", " ", src)
-src = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
-src = re.sub(r"'(?:\\.|[^'\\])*'", "''", src)
+pattern = r'(/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')'
+src = re.sub(pattern, lambda m: ' ' if m.group(0).startswith('/') else '""', src, flags=re.S)
 stack, pairs = [], {")": "(", "]": "[", "}": "{"}
 for i, ch in enumerate(src):
     if ch in "([{":
