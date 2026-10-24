@@ -1,15 +1,16 @@
 // Main.qml — the HDE login screen for SDDM (login/sddm/hde/).
 //
-// Written to run in both greeters SDDM can start: the Qt 5 one (sddm-greeter) and the Qt 6 one (sddm-greeter-qt6),
-// which is what Fedora ships. It uses nothing but the core QtQuick types — no QtGraphicalEffects (gone in Qt 6), no
-// QtQuick.Controls and not even SDDM's own component module: every widget of the screen is drawn in components/, so
-// the login screen looks the same everywhere. The only picture it needs is the background.
+// Written to run in both greeters SDDM can start: the Qt 5 one (sddm-greeter) and the Qt 6 one (sddm-greeter-qt6).
+// It uses nothing but the core QtQuick types — no QtGraphicalEffects (gone in Qt 6), no QtQuick.Controls and not even
+// SDDM's own component module: every widget of the screen is drawn in components/, so the login screen looks the same
+// everywhere.
 //
 // Everything it shows can be set in theme.conf ([General]): the background, the accent colour, the clock, the user
 // list or a plain user name field, the session and the keyboard layout choosers, the power buttons, the greeting.
 //
 // The context objects come from the greeter: sddm (the proxy: login(...), powerOff(), ...), userModel, sessionModel,
-// screenModel (multi-monitor geometry and primary screen), keyboard (SDDM >= 0.19; guarded below) and config (theme.conf).
+// screenModel (multi-monitor geometry and primary screen), keyboard (SDDM >= 0.19; guarded below) and config
+// (theme.conf).
 import QtQuick 2.0
 import "components"
 
@@ -19,6 +20,7 @@ Rectangle {
     id: root
     width: 1280
     height: 800
+    color: "#0a0f1a"
 
     // ------------------------------------------------------------------ reading theme.conf (group [General])
     // The values arrive as QSettings gives them (a bool for "true"/"false", a string for the rest, nothing at all for
@@ -46,8 +48,8 @@ Rectangle {
 
     // ------------------------------------------------------------------ configuration (theme.conf, group [General])
     readonly property string accent:     cfgString("accent", "#3584e4")
-    readonly property string background: cfgString("background", "assets/background.png")
-    readonly property real   dim:        cfgNumber("dim", 0.30)
+    readonly property string background: cfgString("background", "")
+    readonly property real   dim:        cfgNumber("dim", 0.35)
     readonly property string greeting:   cfgString("greeting", "")
     readonly property string fontFamily: cfgString("fontFamily", "")
     readonly property bool   showLogo:   cfgBool("showLogo", true)
@@ -66,9 +68,9 @@ Rectangle {
     readonly property string loginHint:  cfgString("loginHint", "")
     readonly property string capsLockMessage: cfgString("capsLockMessage", "Caps Lock is on")
     readonly property string footer:     cfgString("footer", "HDE · Hyggshi OS")
-    readonly property int    cardWidth:  cfgNumber("cardWidth", 400)
+    readonly property int    cardWidth:  cfgNumber("cardWidth", 420)
     readonly property string buttonStyle: cfgString("buttonStyle", "wide") === "compact" ? "compact" : "wide"
-    readonly property int    margin:     Math.round(Math.min(width, height) * 0.045)
+    readonly property int    margin:     Math.round(Math.min(width, height) * 0.055)
 
     // the user the password will be checked for, the session to start, and what the greeter told us
     property string userName: ""
@@ -104,20 +106,6 @@ Rectangle {
     // would stay grey for ever and nobody could log in at all.
     readonly property bool haveUserTiles: showUserList && userMode === "user" && users.count > 0
     readonly property bool showNameField: userMode === "username" || !haveUserTiles
-
-    color: "#0b0f18"
-
-    // Fallback background when screenModel is not provided by the host (e.g. standalone qmlscene preview)
-    HdeBackground {
-        visible: !root.haveScreenModel || screenRepeater.count === 0
-        x: 0
-        y: 0
-        width: root.width
-        height: root.height
-        source: root.background
-        dim: root.dim
-        accent: root.accent
-    }
 
     // ------------------------------------------------------------------ the screens (multi-monitor via screenModel)
     Repeater {
@@ -167,6 +155,8 @@ Rectangle {
                 showDate: root.clockDate
                 host: root.showHost && sddm ? sddm.hostName : ""
                 fontFamily: root.fontFamily
+                clockSize: 30
+                dateSize: 12
                 y: root.margin
                 x: root.clockPosition === "top-left" ? root.margin
                  : root.clockPosition === "top-center" ? Math.round((parent.width - width) / 2)
@@ -203,6 +193,8 @@ Rectangle {
             showDate: root.clockDate
             host: root.showHost && sddm ? sddm.hostName : ""
             fontFamily: root.fontFamily
+            clockSize: 34
+            dateSize: 13
             y: root.margin
             x: root.clockPosition === "top-left" ? root.margin
              : root.clockPosition === "top-center" ? Math.round((screen.width - width) / 2)
@@ -213,18 +205,17 @@ Rectangle {
         Rectangle {
             id: card
             width: Math.min(root.cardWidth, screen.width - 2 * root.margin)
-            height: cardColumn.implicitHeight + 56
+            height: cardColumn.implicitHeight + 60
             // on a small screen the card shrinks instead of running off the edges
             scale: Math.min(1, (screen.height - 2 * root.margin) / Math.max(1, height))
             x: Math.round((screen.width - width) / 2)
-            y: Math.round((screen.height - height) / 2) - Math.round(screen.height * 0.02)
-            radius: 18
+            y: Math.round((screen.height - height) / 2) - Math.round(screen.height * 0.03)
+            radius: 20
             color: "#141b29"
             border.width: 1
             border.color: "#26334a"
 
-            // a click on the card itself closes an open list and puts the keyboard back in a field of the card (the
-            // cursor in the wrong place is what "typing does nothing" is made of)
+            // a click on the card itself closes an open list and puts the keyboard back in a field of the card
             MouseArea {
                 anchors.fill: parent
                 z: -1
@@ -248,12 +239,12 @@ Rectangle {
                 width: parent.width - 48
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 14
+                spacing: 16
 
                 HdeLogo {
                     visible: root.showLogo
-                    width: 62
-                    height: 62
+                    width: 56
+                    height: 56
                     accent: root.accent
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
@@ -262,7 +253,7 @@ Rectangle {
                     width: parent.width
                     text: root.title
                     color: "#f2f5fa"
-                    font.pixelSize: 19
+                    font.pixelSize: 20
                     font.bold: true
                     font.family: root.fontFamily
                     horizontalAlignment: Text.AlignHCenter
@@ -359,7 +350,7 @@ Rectangle {
                 // the button that logs in
                 HdeButton {
                     id: loginButton
-                    width: root.buttonStyle === "wide" ? parent.width : Math.min(170, parent.width)
+                    width: root.buttonStyle === "wide" ? parent.width : Math.min(200, parent.width)
                     text: root.busy ? "Signing in…"
                         : (sessions.visible && sessions.currentProtocol !== ""
                            ? ("Sign in (" + sessions.currentProtocol + ")")
@@ -380,7 +371,7 @@ Rectangle {
             visible: root.showPower
             accent: root.accent
             fontFamily: root.fontFamily
-            x: screen.width - width - 20
+            x: screen.width - width - 24
             y: screen.height - height - 24
         }
 

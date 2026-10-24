@@ -19,7 +19,7 @@ Item {
                                            ? tileRepeater.itemAt(currentIndex).userName : ""
     signal selected(string name)
 
-    implicitHeight: count > 0 ? Math.min(2, Math.ceil(count / 4)) * 90 + 6 : 0
+    implicitHeight: count > 0 ? 110 : 0
     height: implicitHeight
 
     function choose(index) {
@@ -29,12 +29,12 @@ Item {
         if (tile) root.selected(tile.userName);
     }
 
-    Grid {
-        id: grid
+    Flow {
+        id: flow
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
-        columns: Math.min(4, Math.max(1, root.count))
-        spacing: 6
+        spacing: 12
+        width: parent.width
 
         Repeater {
             id: tileRepeater
@@ -42,24 +42,26 @@ Item {
 
             delegate: Item {
                 id: tile
-                width: Math.max(84, grid.width / grid.columns - grid.spacing)
-                height: 84
+                width: 90
+                height: 100
                 readonly property string userName: model.name
                 readonly property bool chosen: index === root.currentIndex
 
                 Rectangle {
                     anchors.fill: parent
-                    radius: 12
-                    color: tile.chosen ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.16) : "transparent"
-                    border.width: tile.chosen ? 1 : 0
-                    border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.55)
+                    radius: 14
+                    color: tile.chosen ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.18) : "transparent"
+                    border.width: tile.chosen ? 2 : 0
+                    border.color: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.60)
+                    Behavior on color { ColorAnimation { duration: 150 } }
+                    Behavior on border.color { ColorAnimation { duration: 150 } }
                 }
 
                 // the avatar (the picture of the user), or a drawn placeholder
                 Rectangle {
                     id: avatarFrame
-                    width: 46
-                    height: 46
+                    width: 48
+                    height: 48
                     radius: width / 2
                     anchors.horizontalCenter: parent.horizontalCenter
                     y: 6
@@ -80,7 +82,7 @@ Item {
                         visible: !avatar.visible
                         name: "user"
                         color: "#8fa2bd"
-                        width: parent.width * 0.62
+                        width: parent.width * 0.55
                         height: width
                         anchors.centerIn: parent
                     }
@@ -91,16 +93,16 @@ Item {
                     name: "check"
                     color: "#ffffff"
                     weight: 2
-                    width: 14
-                    height: 14
-                    x: avatarFrame.x + avatarFrame.width - 13
-                    y: avatarFrame.y + avatarFrame.height - 12
+                    width: 16
+                    height: 16
+                    x: avatarFrame.x + avatarFrame.width - 14
+                    y: avatarFrame.y + avatarFrame.height - 14
                 }
 
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.top: avatarFrame.bottom
-                    anchors.topMargin: 4
+                    anchors.topMargin: 5
                     width: parent.width - 8
                     text: (model.realName && model.realName !== "") ? model.realName : model.name
                     color: tile.chosen ? "#f4f8ff" : "#c3d0e2"
@@ -114,6 +116,8 @@ Item {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.choose(index)
+                    onEntered: { if (!tile.chosen) { tile.border.color = root.accent; tile.color = Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.08); } }
+                    onExited: { if (!tile.chosen) { tile.color = "transparent"; tile.border.color = "transparent"; } }
                 }
             }
         }

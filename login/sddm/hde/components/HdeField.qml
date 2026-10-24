@@ -11,7 +11,7 @@ Column {
     property string fontFamily: ""
     property string icon: "user"
     signal accepted()
-    spacing: 5
+    spacing: 6
 
     // forceActiveFocus, not focus = true: the greeter shows its window after the theme has loaded and takes the
     // keyboard for itself on the way, which leaves a field that only asked politely without it. This puts the
@@ -21,20 +21,23 @@ Column {
     Text {
         visible: root.label !== ""
         text: root.label
-        color: "#9fb0c8"
+        color: input.activeFocus ? root.accent : "#9fb0c8"
         font.pixelSize: 12
+        font.bold: input.activeFocus
         font.family: root.fontFamily
+        Behavior on color { ColorAnimation { duration: 120 } }
     }
 
     Rectangle {
         id: box
         width: parent.width
-        height: 40
-        radius: 9
+        height: 44
+        radius: 11
         color: "#0f1622"
         border.width: 1
         border.color: input.activeFocus ? root.accent : "#26334a"
-        Behavior on border.color { ColorAnimation { duration: 120 } }
+        Behavior on border.color { ColorAnimation { duration: 130 } }
+        Behavior on border.width { NumberAnimation { duration: 130 } }
 
         HdeIcons {
             id: sign
@@ -44,16 +47,16 @@ Column {
             width: 18
             height: 18
             anchors.left: parent.left
-            anchors.leftMargin: 11
+            anchors.leftMargin: 12
             anchors.verticalCenter: parent.verticalCenter
         }
 
         TextInput {
             id: input
             anchors.left: sign.visible ? sign.right : parent.left
-            anchors.leftMargin: sign.visible ? 9 : 12
+            anchors.leftMargin: sign.visible ? 10 : 14
             anchors.right: parent.right
-            anchors.rightMargin: 12
+            anchors.rightMargin: 14
             anchors.verticalCenter: parent.verticalCenter
             color: "#eef3fa"
             font.pixelSize: 15

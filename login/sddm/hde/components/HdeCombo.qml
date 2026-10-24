@@ -54,7 +54,7 @@ Item {
         anchors.topMargin: root.label !== "" ? 5 : 0
         width: parent.width
         height: 36
-        radius: 9
+        radius: 10
         color: "#0f1622"
         border.width: root.open || focus ? 2 : 1
         border.color: root.open || focus ? root.accent : "#26334a"
@@ -136,7 +136,7 @@ Item {
         width: field.width
         height: root.open ? Math.min(210, list.implicitHeight + 8) : 0
         visible: height > 0
-        radius: 9
+        radius: 10
         color: "#141b29"
         border.width: 1
         border.color: "#26334a"
@@ -158,7 +158,7 @@ Item {
                         readonly property string rowBadge: (index >= 0 && index < root.badges.length && root.badges[index])
                                                            ? String(root.badges[index]) : ""
                         width: list.width
-                        height: 32
+                        height: 34
                         radius: 6
                         color: index === root.index ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.25)
                              : rowMouse.containsMouse ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.14)
@@ -212,7 +212,6 @@ Item {
                 }
             }
         }
-
     }
 
     // the list closes when the field loses the cursor (the login screen gives it to the password field when the user

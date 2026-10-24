@@ -8,14 +8,14 @@ Item {
     property color accent: "#3584e4"
     property string fontFamily: ""
     signal clicked()
-    width: 44
-    height: 44
+    width: 46
+    height: 46
 
     Rectangle {
         id: circle
         anchors.fill: parent
         radius: width / 2
-        color: mouse.containsMouse ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.22) : "#1a2435"
+        color: mouse.containsMouse ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.18) : "#1a2435"
         border.width: 1
         border.color: mouse.containsMouse ? root.accent : "#2b3648"
         Behavior on color { ColorAnimation { duration: 110 } }

@@ -6,7 +6,7 @@ Row {
     id: root
     property color accent: "#3584e4"
     property string fontFamily: ""
-    spacing: 10
+    spacing: 12
 
     HdeIconButton {
         visible: sddm && sddm.canSuspend

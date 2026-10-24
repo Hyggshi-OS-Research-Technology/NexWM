@@ -25,7 +25,7 @@ Column {
     readonly property bool hasWayland: protocols.indexOf("Wayland") >= 0
     signal picked(int index)
     function closeCombo() { combo.open = false; }
-    spacing: 5
+    spacing: 6
 
     function detectProtocol(nameStr, execStr, fileStr) {
         var n = String(nameStr || "").toLowerCase();
@@ -103,7 +103,6 @@ Column {
         }
 
         // Fall back between HDE (X11) and HDE (Wayland) if only one HDE entry is in sessionModel
-        // (never fall back to index 0 when index 0 is a non-HDE session such as gnome-greeter or Ubuntu).
         if (hdeX11Idx < 0 && hdeWlIdx >= 0) hdeX11Idx = hdeWlIdx;
         if (hdeWlIdx < 0 && hdeX11Idx >= 0) hdeWlIdx = hdeX11Idx;
 

@@ -10,10 +10,12 @@ Column {
     property string host: ""
     property string fontFamily: ""
     property color textColor: "#eef3fa"
-    property color subColor: "#a9b8cd"
+    property color subColor: "#9fb0c8"
     property string time: timeText()
     property string date: dateText()
-    spacing: 2
+    property real clockSize: 34
+    property real dateSize: 13
+    spacing: 3
 
     function timeText() {
         var d = new Date();
@@ -32,7 +34,6 @@ Column {
         return root.showSeconds ? out + ":" + s : out;
     }
     function dateText() {
-        // "Tuesday, 7 October 2025": the words come from the locale of the computer, the order from this format
         return new Date().toLocaleDateString(Qt.locale(), "dddd, d MMMM yyyy");
     }
 
@@ -46,7 +47,7 @@ Column {
     Text {
         text: root.time
         color: root.textColor
-        font.pixelSize: 34
+        font.pixelSize: root.clockSize
         font.bold: true
         font.family: root.fontFamily
     }
@@ -54,14 +55,14 @@ Column {
         visible: root.showDate
         text: root.date
         color: root.subColor
-        font.pixelSize: 14
+        font.pixelSize: root.dateSize
         font.family: root.fontFamily
     }
     Text {
         visible: root.host !== ""
         text: root.host
         color: root.subColor
-        font.pixelSize: 13
+        font.pixelSize: 12
         font.family: root.fontFamily
     }
 }
