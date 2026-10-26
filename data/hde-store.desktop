@@ -1,14 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Cửa hàng Hyggshi
-Name[en]=Hyggshi Store
-GenericName=Kho ứng dụng và phần mềm
-GenericName[en]=Software & App Store
-Comment=Xem, cài, cập nhật và gỡ phần mềm của Hyggshi OS
-Comment[en]=Find, install, update and remove the software of Hyggshi OS
+Name=Hyggshi Store
+GenericName=Software & App Store
+Comment=Find, install, update and remove software on Hyggshi OS
 Exec=@PREFIX@/bin/hde-store
 Icon=system-software-install
 Terminal=false
 Categories=GTK;System;PackageManager;
-Keywords=store;software;applications;install;remove;update;packages;deb;flatpak;cửa hàng;ứng dụng;cài;gỡ;
+Keywords=store;software;applications;install;remove;update;packages;deb;flatpak;flathub;
 StartupNotify=true

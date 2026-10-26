@@ -67,7 +67,7 @@ typedef struct {
 
 /* `dpkg-query -W -f=…` format that hde_store_parse_dpkg_line() reads: the tabs and the order matter. */
 #define HDE_STORE_DPKG_FORMAT \
-    "${binary:Package}\t${Version}\t${Status}\t${Section}\t${Installed-Size}\t${binary:Summary}\t${Homepage}\t${Architecture}"
+    "${binary:Package}\t${Version}\t${Status}\t${Section}\t${Installed-Size}\t${binary:Summary}\t${Homepage}\t${Architecture}\n"
 
 /* ---- versions (dpkg's rules: epoch, upstream version, revision; '~' sorts before nothing) ---- */
 /* -1 when a is older than b, 0 when they are the same version, 1 when a is newer. */

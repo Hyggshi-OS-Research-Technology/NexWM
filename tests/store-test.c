@@ -425,6 +425,8 @@ int main(void)
     check_str(HDE_STORE_CMD_INSTALL[1], "apt-get", "the package tool is apt-get");
     check(strstr(HDE_STORE_CMD_DPKG_QUERY[2], "${binary:Package}") != NULL,
           "the dpkg-query format asks for the package name");
+    check(HDE_STORE_CMD_DPKG_QUERY[2][strlen(HDE_STORE_CMD_DPKG_QUERY[2]) - 1] == '\n',
+          "dpkg-query separates installed packages with newlines");
     char **argv = hde_store_argv_append(HDE_STORE_CMD_INSTALL, "gnome-weather", NULL);
     check(argv != NULL, "argv is built");
     if (argv) {

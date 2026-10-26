@@ -102,6 +102,8 @@ static const StoreCategory categories[] = {
 
 /* ------------------------------------------------------------------ forward declarations */
 
+static gboolean flathub_connected(void);
+static gboolean parse_flatpak_search_line(const char *, HdeStorePackage *);
 static void rebuild_installed(void);
 static void rebuild_updates(void);
 static void rebuild_sources(void);
@@ -134,19 +136,8 @@ static HdeStoreVerify verify_for_source(const HdeStoreSourceEntry *s);
 
 static gboolean ui_is_vietnamese(void)
 {
-    static int cached = -1;
-    if (cached >= 0) return cached;
-    /* LANGUAGE is a preference list ("vi:en"); the first entry decides.  LC_ALL, LC_MESSAGES and LANG are the
-     * single locale of the session, in the order glibc gives them.  hde_store_speak_vietnamese() has the rule
-     * itself (and its tests): Vietnamese unless English is asked for by name. */
-    const char *lang = g_getenv("LANGUAGE");
-    if (!lang || !*lang) {
-        lang = g_getenv("LC_ALL");
-        if (!lang || !*lang) lang = g_getenv("LC_MESSAGES");
-        if (!lang || !*lang) lang = g_getenv("LANG");
-    }
-    cached = hde_store_speak_vietnamese(lang, g_getenv("HDE_STORE_LANG"));
-    return cached;
+    /* Hyggshi Store now has one consistent interface language. */
+    return FALSE;
 }
 
 /* The Store speaks Vietnamese unless the session asks for English (or HDE_STORE_LANG says otherwise).
@@ -420,6 +411,25 @@ static void load_updates(void)
     }
     g_strfreev(lines);
     g_free(out);
+
+    if (g_find_program_in_path("flatpak") && flathub_connected()) {
+        const char *argv[] = { "flatpak", "remote-ls", "--user", "--updates", "--app",
+                               "--columns=application,name,description,version,branch,origin", NULL };
+        out = run_capture(argv, NULL);
+        lines = g_strsplit(out ? out : "", "\n", -1);
+        for (guint i = 0; lines[i]; i++) {
+            HdeStorePackage tmp;
+            if (!parse_flatpak_search_line(lines[i], &tmp)) continue;
+            tmp.installed = 1;
+            tmp.upgradable = 1;
+            tmp.state = HDE_STORE_STATE_UPGRADABLE;
+            HdeStorePackage *copy = g_new0(HdeStorePackage, 1);
+            *copy = tmp;
+            g_ptr_array_add(pkgs_updates, copy);
+        }
+        g_strfreev(lines);
+        g_free(out);
+    }
     g_ptr_array_sort(pkgs_updates, cmp_by_name);
 }
 
@@ -440,6 +450,37 @@ static void load_flatpak(void)
     }
     g_strfreev(lines);
     g_free(out);
+}
+
+/* `flatpak search --columns=application,name,description,version,branch,remotes` */
+static gboolean parse_flatpak_search_line(const char *line, HdeStorePackage *p)
+{
+    if (!line || !*line || !p) return FALSE;
+    char **v = g_strsplit(line, "\t", 6);
+    if (!v[0] || !strchr(v[0], '.') || !v[1]) { g_strfreev(v); return FALSE; }
+    memset(p, 0, sizeof *p);
+    g_strlcpy(p->name, v[0], sizeof p->name);
+    g_strlcpy(p->app_id, v[0], sizeof p->app_id);
+    g_strlcpy(p->summary, v[1][0] ? v[1] : v[0], sizeof p->summary);
+    if (v[2]) g_strlcpy(p->description, v[2], sizeof p->description);
+    if (v[3]) g_strlcpy(p->version, v[3], sizeof p->version);
+    if (v[4]) g_strlcpy(p->branch, v[4], sizeof p->branch);
+    g_snprintf(p->origin, sizeof p->origin, "flatpak: %s", v[5] && v[5][0] ? v[5] : "flathub");
+    g_strlcpy(p->section, "flatpak", sizeof p->section);
+    p->source = HDE_STORE_SOURCE_FLATPAK;
+    p->verify = HDE_STORE_VERIFY_THIRD_PARTY;
+    p->state = HDE_STORE_STATE_NOT_INSTALLED;
+    for (guint i = 0; pkgs_flatpak && i < pkgs_flatpak->len; i++) {
+        HdeStorePackage *installed = g_ptr_array_index(pkgs_flatpak, i);
+        if (!strcmp(installed->name, p->name)) {
+            p->installed = 1;
+            p->state = HDE_STORE_STATE_INSTALLED;
+            if (!p->version[0]) g_strlcpy(p->version, installed->version, sizeof p->version);
+            break;
+        }
+    }
+    g_strfreev(v);
+    return TRUE;
 }
 
 static void load_featured(void)
@@ -1437,13 +1478,7 @@ static void rebuild_detail(void)
 
     GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_widget_set_valign(actions, GTK_ALIGN_START);
-    if (p->source == HDE_STORE_SOURCE_FLATPAK) {
-        GtkWidget *b = gtk_button_new_with_label(tr("Read-only (Flatpak)", "Chỉ đọc (Flatpak)"));
-        gtk_widget_set_sensitive(b, FALSE);
-        gtk_widget_set_tooltip_text(b, tr("Flatpak support is being researched; this version only lists them.",
-                                          "Flatpak đang được nghiên cứu; bản này chỉ liệt kê."));
-        gtk_box_pack_start(GTK_BOX(actions), b, FALSE, FALSE, 0);
-    } else if (p->installed || p->residual) {
+    if (p->installed || p->residual) {
         if (p->upgradable) {
             GtkWidget *up = gtk_button_new_with_label(tr("Update", "Cập nhật"));
             gtk_style_context_add_class(gtk_widget_get_style_context(up), "suggested-action");
@@ -1611,7 +1646,14 @@ static void open_detail(const HdeStorePackage *src)
 static void detail_sync_from_database(void)
 {
     if (!detail) return;
-    HdeStorePackage *now = g_hash_table_lookup(by_name, detail->name);
+    HdeStorePackage *now = detail->source == HDE_STORE_SOURCE_FLATPAK ? NULL
+                                                                    : g_hash_table_lookup(by_name, detail->name);
+    if (detail->source == HDE_STORE_SOURCE_FLATPAK) {
+        for (guint i = 0; pkgs_flatpak && i < pkgs_flatpak->len; i++) {
+            HdeStorePackage *candidate = g_ptr_array_index(pkgs_flatpak, i);
+            if (!strcmp(candidate->name, detail->name)) { now = candidate; break; }
+        }
+    }
     if (now) {
         char description[sizeof detail->description];
         char homepage[sizeof detail->homepage];
@@ -1641,6 +1683,7 @@ static void detail_sync_from_database(void)
 static void after_change(void)
 {
     load_installed();
+    load_flatpak();
     load_updates();
     load_featured();
     rebuild_installed();
@@ -1654,7 +1697,7 @@ static void on_install_clicked(GtkButton *b, gpointer data)
 {
     (void)b;
     HdeStorePackage *p = data;
-    if (!p || p->source == HDE_STORE_SOURCE_FLATPAK) return;
+    if (!p) return;
 
     if (p->from_file && file_check_done && file_check_count(NEXSDK_PKG_ERROR) > 0) {
         /* not a refusal: the user may have built it themselves and know why.  But the Store does not install
@@ -1682,7 +1725,12 @@ static void on_install_clicked(GtkButton *b, gpointer data)
     set_status(tr("Installing %s…", "Đang cài %s…"), p->name);
 
     gboolean ok = FALSE;
-    if (p->from_file && p->origin[0]) {
+    if (p->source == HDE_STORE_SOURCE_FLATPAK) {
+        const char *argv[] = { "flatpak", "install", "--user", "-y", "flathub", p->name, NULL };
+        char *headline = g_strdup_printf("Installing %s from Flathub…", p->name);
+        ok = store_job_run("Install Flatpak", headline, argv);
+        g_free(headline);
+    } else if (p->from_file && p->origin[0]) {
         char **argv = hde_store_argv_append(HDE_STORE_CMD_INSTALL_FILE, p->origin, NULL);
         ok = argv && store_job_run(tr("Install a .deb file", "Cài tệp .deb"),
                                    tr("Installing the package file…", "Đang cài tệp gói…"),
@@ -1742,6 +1790,16 @@ static void remove_dialog(HdeStorePackage *p)
     if (r != 1 && r != 2) return;
 
     set_busy(TRUE);
+    if (p->source == HDE_STORE_SOURCE_FLATPAK) {
+        const char *flatpak_argv[] = { "flatpak", "uninstall", "--user", "-y", p->name, NULL };
+        char *headline = g_strdup_printf("Removing %s…", p->name);
+        gboolean ok = store_job_run("Uninstall Flatpak", headline, flatpak_argv);
+        g_free(headline);
+        set_busy(FALSE);
+        set_status(ok ? "%s was removed." : "%s could not be removed.", p->name);
+        after_change();
+        return;
+    }
     char **argv = hde_store_argv_append(r == 2 ? HDE_STORE_CMD_PURGE : HDE_STORE_CMD_REMOVE, p->name, NULL);
     char *headline = g_strdup_printf(tr("Removing %s…", "Đang gỡ %s…"), p->name);
     gboolean ok = argv && store_job_run(tr("Uninstall", "Gỡ bỏ"), headline, (const char *const *)argv);
@@ -1826,7 +1884,7 @@ static void rebuild_installed(void)
     for (GList *l = children; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
     g_list_free(children);
 
-    guint count = pkgs_installed ? pkgs_installed->len : 0;
+    guint count = (pkgs_installed ? pkgs_installed->len : 0) + (pkgs_flatpak ? pkgs_flatpak->len : 0);
     char size[32];
     hde_store_format_size(installed_kb, size, sizeof size);
 
@@ -1848,7 +1906,14 @@ static void rebuild_installed(void)
     gtk_style_context_add_class(gtk_widget_get_style_context(list), "store-card-flat");
     g_signal_connect(list, "row-activated", G_CALLBACK(on_row_activated), NULL);
     gtk_box_pack_start(GTK_BOX(installed_inner), list, FALSE, FALSE, 0);
-    list_fill(list, pkgs_installed);
+    GPtrArray *all_installed = g_ptr_array_new();
+    for (guint i = 0; pkgs_installed && i < pkgs_installed->len; i++)
+        g_ptr_array_add(all_installed, g_ptr_array_index(pkgs_installed, i));
+    for (guint i = 0; pkgs_flatpak && i < pkgs_flatpak->len; i++)
+        g_ptr_array_add(all_installed, g_ptr_array_index(pkgs_flatpak, i));
+    g_ptr_array_sort(all_installed, cmp_by_name);
+    list_fill(list, all_installed);
+    g_ptr_array_free(all_installed, TRUE);
     g_signal_connect(filter, "search-changed", G_CALLBACK(on_filter_changed), list);
 
     if (!count)
@@ -2275,6 +2340,22 @@ static void do_search(const char *query)
         g_ptr_array_add(pkgs_search, copy);
         max--;
     }
+    /* 3. Flathub applications: unlike APT packages, these are application-level results. */
+    if (g_find_program_in_path("flatpak") && flathub_connected()) {
+        const char *fp_argv[] = { "flatpak", "search", "--columns=application,name,description,version,branch,remotes", search_query, NULL };
+        char *fp_out = run_capture(fp_argv, NULL);
+        char **fp_lines = g_strsplit(fp_out ? fp_out : "", "\n", -1);
+        for (guint i = 0; fp_lines[i] && pkgs_search->len < 240; i++) {
+            HdeStorePackage tmp;
+            if (!parse_flatpak_search_line(fp_lines[i], &tmp) || g_hash_table_contains(seen, tmp.name)) continue;
+            HdeStorePackage *copy = g_new0(HdeStorePackage, 1);
+            *copy = tmp;
+            g_hash_table_add(seen, g_strdup(copy->name));
+            g_ptr_array_add(pkgs_search, copy);
+        }
+        g_strfreev(fp_lines);
+        g_free(fp_out);
+    }
     g_hash_table_destroy(seen);
 
     g_ptr_array_sort(pkgs_search, cmp_by_score);
@@ -2361,8 +2442,11 @@ static void on_upgrade_all(GtkButton *b, gpointer data)
     if (!pkgs_updates || !pkgs_updates->len) return;
     const char *argv[] = { "pkexec", "apt-get", "upgrade", "-y", NULL };
     set_busy(TRUE);
-    gboolean ok = store_job_run(tr("Update all", "Cập nhật tất cả"),
-                                tr("Installing every available update…", "Đang cài mọi bản cập nhật…"), argv);
+    gboolean ok = store_job_run("Update Debian packages", "Installing Debian package updates…", argv);
+    if (g_find_program_in_path("flatpak") && flathub_connected()) {
+        const char *fp_argv[] = { "flatpak", "update", "--user", "-y", NULL };
+        ok = store_job_run("Update Flatpak applications", "Installing Flatpak application updates…", fp_argv) && ok;
+    }
     set_busy(FALSE);
     set_status(ok ? tr("Everything is up to date.", "Mọi thứ đã là mới nhất.")
                   : tr("Some updates could not be installed.", "Một số bản cập nhật chưa cài được."));
@@ -2461,8 +2545,8 @@ static void on_refresh_clicked(GtkButton *b, gpointer data)
     set_busy(TRUE);
     set_status(tr("Reading the package database…", "Đang đọc cơ sở dữ liệu gói…"));
     load_installed();
-    load_updates();
     load_flatpak();
+    load_updates();
     load_featured();
     rebuild_installed();
     rebuild_updates();
@@ -2473,7 +2557,7 @@ static void on_refresh_clicked(GtkButton *b, gpointer data)
     if (search_query && *search_query) do_search(search_query);
     set_busy(FALSE);
     set_status(tr("%u packages installed · %u update(s) available.",
-                  "%u gói đã cài · %u bản cập nhật."), pkgs_installed ? pkgs_installed->len : 0,
+                  "%u gói đã cài · %u bản cập nhật."), (pkgs_installed ? pkgs_installed->len : 0) + (pkgs_flatpak ? pkgs_flatpak->len : 0),
                pkgs_updates ? pkgs_updates->len : 0);
 }
 
@@ -2664,9 +2748,8 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    /* The session's language, so GTK's own stock labels (Cancel, Open, …) follow it as well; the Store's
-     * own texts are picked by ui_is_vietnamese(), which reads the environment itself. */
-    setlocale(LC_ALL, "");
+    /* Use English consistently for GTK stock labels and Store text. */
+    setlocale(LC_ALL, "C.UTF-8");
 
     gtk_init(&argc, &argv);
     hde_theme_apply_process();
@@ -2783,8 +2866,8 @@ int main(int argc, char **argv)
     set_busy(TRUE);
     set_status(tr("Reading the package database…", "Đang đọc cơ sở dữ liệu gói…"));
     load_installed();
-    load_updates();
     load_flatpak();
+    load_updates();
     load_featured();
     rebuild_discover();
     rebuild_installed();
