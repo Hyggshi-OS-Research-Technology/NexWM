@@ -25,6 +25,12 @@
 
 /* ---------------------------------------------------------------- small helpers */
 
+/* The two texts of one message: English, Vietnamese. */
+static const char *pick(int vi, const char *en, const char *vi_text)
+{
+    return vi ? vi_text : en;
+}
+
 static void put(char *dst, size_t sz, const char *src)
 {
     if (!dst || !sz) return;
@@ -788,41 +794,58 @@ HdeStoreVerify hde_store_verify_for(const char *origin, HdeStoreSource source)
     return HDE_STORE_VERIFY_THIRD_PARTY;
 }
 
-const char *hde_store_verify_title(HdeStoreVerify v)
+const char *hde_store_verify_title(HdeStoreVerify v, int vi)
 {
     switch (v) {
-    case HDE_STORE_VERIFY_VERIFIED: return "Verified";
-    case HDE_STORE_VERIFY_THIRD_PARTY: return "Third party";
-    case HDE_STORE_VERIFY_UNVERIFIED: return "Unverified";
+    case HDE_STORE_VERIFY_VERIFIED: return pick(vi, "Verified", "Đã xác minh");
+    case HDE_STORE_VERIFY_THIRD_PARTY: return pick(vi, "Third party", "Bên thứ ba");
+    case HDE_STORE_VERIFY_UNVERIFIED: return pick(vi, "Unverified", "Chưa xác minh");
     case HDE_STORE_VERIFY_UNKNOWN:
-    default: return "Unknown origin";
+    default: return pick(vi, "Unknown origin", "Không rõ nguồn");
     }
 }
 
-char *hde_store_verify_detail(HdeStoreVerify v, const char *origin)
+char *hde_store_verify_detail(HdeStoreVerify v, const char *origin, int vi)
 {
-    const char *where = (origin && *origin) ? origin : "an unknown place";
-    char buf[320];
+    const char *where = (origin && *origin) ? origin : pick(vi, "an unknown place", "một nơi không rõ");
+    char buf[480];
     switch (v) {
     case HDE_STORE_VERIFY_VERIFIED:
-        snprintf(buf, sizeof buf,
-                 "Comes from the signed package repository of your system (%s) and is checked against "
-                 "its signature when it is installed.", where);
+        if (vi)
+            snprintf(buf, sizeof buf,
+                     "Đến từ kho gói đã ký của hệ thống (%s) và được kiểm tra chữ ký khi cài.", where);
+        else
+            snprintf(buf, sizeof buf,
+                     "Comes from the signed package repository of your system (%s) and is checked against "
+                     "its signature when it is installed.", where);
         break;
     case HDE_STORE_VERIFY_THIRD_PARTY:
-        snprintf(buf, sizeof buf,
-                 "Comes from %s, a repository added on top of your system.  Its signature is checked, but "
-                 "nobody from the distribution looked at what is in it.", where);
+        if (vi)
+            snprintf(buf, sizeof buf,
+                     "Đến từ %s, một kho được thêm vào hệ thống.  Chữ ký được kiểm tra, nhưng không ai của "
+                     "bản phân phối xem xét nội dung bên trong.", where);
+        else
+            snprintf(buf, sizeof buf,
+                     "Comes from %s, a repository added on top of your system.  Its signature is checked, but "
+                     "nobody from the distribution looked at what is in it.", where);
         break;
     case HDE_STORE_VERIFY_UNVERIFIED:
-        snprintf(buf, sizeof buf,
-                 "Comes from %s, which is not a signed repository of your system (a local file, a package "
-                 "installed by hand, or one whose repository is gone).  Only install it if you trust where "
-                 "it came from.", where);
+        if (vi)
+            snprintf(buf, sizeof buf,
+                     "Đến từ %s, không phải kho đã ký của hệ thống (tệp cục bộ, gói cài bằng tay, hoặc gói "
+                     "mà kho của nó đã mất).  Chỉ cài khi bạn tin nơi nó đến từ.", where);
+        else
+            snprintf(buf, sizeof buf,
+                     "Comes from %s, which is not a signed repository of your system (a local file, a package "
+                     "installed by hand, or one whose repository is gone).  Only install it if you trust where "
+                     "it came from.", where);
         break;
     case HDE_STORE_VERIFY_UNKNOWN:
     default:
-        snprintf(buf, sizeof buf, "Where this package comes from could not be determined (%s).", where);
+        if (vi)
+            snprintf(buf, sizeof buf, "Không xác định được gói này đến từ đâu (%s).", where);
+        else
+            snprintf(buf, sizeof buf, "Where this package comes from could not be determined (%s).", where);
         break;
     }
     char *out = malloc(strlen(buf) + 1);
@@ -830,27 +853,27 @@ char *hde_store_verify_detail(HdeStoreVerify v, const char *origin)
     return out;
 }
 
-const char *hde_store_source_title(HdeStoreSource s)
+const char *hde_store_source_title(HdeStoreSource s, int vi)
 {
     switch (s) {
-    case HDE_STORE_SOURCE_DEB: return "APT repository (.deb)";
-    case HDE_STORE_SOURCE_LOCAL: return "Local .deb file";
-    case HDE_STORE_SOURCE_FLATPAK: return "Flatpak (read-only)";
-    case HDE_STORE_SOURCE_DPKG_STATUS: return "dpkg database only";
+    case HDE_STORE_SOURCE_DEB: return pick(vi, "APT repository (.deb)", "Kho APT (.deb)");
+    case HDE_STORE_SOURCE_LOCAL: return pick(vi, "Local .deb file", "Tệp .deb cục bộ");
+    case HDE_STORE_SOURCE_FLATPAK: return pick(vi, "Flatpak (read-only)", "Flatpak (chỉ đọc)");
+    case HDE_STORE_SOURCE_DPKG_STATUS: return pick(vi, "dpkg database only", "Chỉ có trong dpkg");
     case HDE_STORE_SOURCE_UNKNOWN:
-    default: return "Unknown";
+    default: return pick(vi, "Unknown", "Không rõ");
     }
 }
 
-const char *hde_store_state_title(HdeStoreState s)
+const char *hde_store_state_title(HdeStoreState s, int vi)
 {
     switch (s) {
-    case HDE_STORE_STATE_INSTALLED: return "Installed";
-    case HDE_STORE_STATE_UPGRADABLE: return "Update available";
-    case HDE_STORE_STATE_RESIDUAL: return "Removed, configuration kept";
-    case HDE_STORE_STATE_BROKEN: return "Broken installation";
+    case HDE_STORE_STATE_INSTALLED: return pick(vi, "Installed", "Đã cài đặt");
+    case HDE_STORE_STATE_UPGRADABLE: return pick(vi, "Update available", "Có bản cập nhật");
+    case HDE_STORE_STATE_RESIDUAL: return pick(vi, "Removed, configuration kept", "Đã gỡ, còn tệp cấu hình");
+    case HDE_STORE_STATE_BROKEN: return pick(vi, "Broken installation", "Cài đặt lỗi");
     case HDE_STORE_STATE_NOT_INSTALLED:
-    default: return "Not installed";
+    default: return pick(vi, "Not installed", "Chưa cài đặt");
     }
 }
 
@@ -1027,26 +1050,27 @@ int hde_store_license_from_copyright(const char *text, char *out, size_t outsz)
     return 1;
 }
 
-const char *hde_store_license_title(const char *license)
+const char *hde_store_license_title(const char *license, int vi)
 {
-    if (!license || !*license) return "Not stated";
-    if (strstr(license, "Multiple")) return "Several licenses (see the copyright file)";
-    if (strstr(license, "GPL-3")) return "GNU GPL 3 or later";
-    if (strstr(license, "GPL-2")) return "GNU GPL 2 or later";
-    if (strstr(license, "AGPL")) return "GNU AGPL 3";
-    if (strstr(license, "LGPL-3")) return "GNU LGPL 3 or later";
-    if (strstr(license, "LGPL-2.1")) return "GNU LGPL 2.1 or later";
+    if (!license || !*license) return pick(vi, "Not stated", "Không ghi rõ");
+    if (strstr(license, "Multiple"))
+        return pick(vi, "Several licenses (see the copyright file)", "Nhiều giấy phép (xem tệp copyright)");
+    if (strstr(license, "GPL-3")) return pick(vi, "GNU GPL 3 or later", "GNU GPL 3 trở lên");
+    if (strstr(license, "GPL-2")) return pick(vi, "GNU GPL 2 or later", "GNU GPL 2 trở lên");
+    if (strstr(license, "AGPL")) return pick(vi, "GNU AGPL 3", "GNU AGPL 3");
+    if (strstr(license, "LGPL-3")) return pick(vi, "GNU LGPL 3 or later", "GNU LGPL 3 trở lên");
+    if (strstr(license, "LGPL-2.1")) return pick(vi, "GNU LGPL 2.1 or later", "GNU LGPL 2.1 trở lên");
     if (!strcmp(license, "MIT")) return "MIT (Expat)";
-    if (strstr(license, "Apache")) return "Apache License 2.0";
-    if (strstr(license, "BSD-3")) return "BSD 3-Clause";
-    if (strstr(license, "BSD-2")) return "BSD 2-Clause";
+    if (strstr(license, "Apache")) return pick(vi, "Apache License 2.0", "Giấy phép Apache 2.0");
+    if (strstr(license, "BSD-3")) return pick(vi, "BSD 3-Clause", "BSD 3 điều khoản");
+    if (strstr(license, "BSD-2")) return pick(vi, "BSD 2-Clause", "BSD 2 điều khoản");
     if (!strcmp(license, "BSD")) return "BSD";
-    if (strstr(license, "MPL")) return "Mozilla Public License 2.0";
+    if (strstr(license, "MPL")) return pick(vi, "Mozilla Public License 2.0", "Giấy phép Mozilla Public 2.0");
     if (!strcmp(license, "ISC")) return "ISC";
-    if (strstr(license, "Public domain")) return "Public domain";
+    if (strstr(license, "Public domain")) return pick(vi, "Public domain", "Phạm vi công cộng");
     if (strstr(license, "Zlib")) return "zlib";
-    if (strstr(license, "Artistic")) return "Artistic License 2.0";
-    if (strstr(license, "Proprietary")) return "Proprietary";
+    if (strstr(license, "Artistic")) return pick(vi, "Artistic License 2.0", "Giấy phép Artistic 2.0");
+    if (strstr(license, "Proprietary")) return pick(vi, "Proprietary", "Độc quyền");
     return license;
 }
 
@@ -1096,4 +1120,15 @@ void hde_store_argv_free(char **argv)
     if (!argv) return;
     for (size_t i = 0; argv[i]; i++) free(argv[i]);
     free(argv);
+}
+
+/* ------------------------------------------------------------------ the language of the Store */
+
+int hde_store_speak_vietnamese(const char *language, const char *forced)
+{
+    /* an explicit request wins over the session: somebody whose desktop is in English may still want the
+     * Store in Vietnamese, and a script that takes screenshots has to say which one it wants */
+    const char *choice = (forced && *forced) ? forced : language;
+    if (!choice || !*choice) return 1;                       /* nothing set: Vietnamese */
+    return strncasecmp(choice, "en", 2) == 0 ? 0 : 1;        /* English when asked for by name */
 }

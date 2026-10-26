@@ -245,10 +245,35 @@ int main(void)
               "no origin at all is unknown");
     check_int(hde_store_verify_for("flathub", HDE_STORE_SOURCE_FLATPAK), HDE_STORE_VERIFY_UNVERIFIED,
               "a Flatpak is outside the .deb trust chain");
-    check_str(hde_store_verify_title(HDE_STORE_VERIFY_VERIFIED), "Verified", "the title of a verified package");
-    check_str(hde_store_source_title(HDE_STORE_SOURCE_LOCAL), "Local .deb file", "the title of a local .deb");
-    char *detail = hde_store_verify_detail(HDE_STORE_VERIFY_THIRD_PARTY, "example/ppa");
+    check_str(hde_store_verify_title(HDE_STORE_VERIFY_VERIFIED, 0), "Verified",
+              "the title of a verified package, in English");
+    check_str(hde_store_verify_title(HDE_STORE_VERIFY_VERIFIED, 1), "Đã xác minh",
+              "the title of a verified package, in Vietnamese");
+    check_str(hde_store_verify_title(HDE_STORE_VERIFY_THIRD_PARTY, 1), "Bên thứ ba",
+              "a third-party package is named in Vietnamese");
+    check_str(hde_store_verify_title(HDE_STORE_VERIFY_UNVERIFIED, 1), "Chưa xác minh",
+              "an unverified package is named in Vietnamese");
+    check_str(hde_store_verify_title(HDE_STORE_VERIFY_UNKNOWN, 0), "Unknown origin",
+              "an unknown origin keeps its English title");
+    check_str(hde_store_source_title(HDE_STORE_SOURCE_LOCAL, 0), "Local .deb file",
+              "the title of a local .deb, in English");
+    check_str(hde_store_source_title(HDE_STORE_SOURCE_LOCAL, 1), "Tệp .deb cục bộ",
+              "the title of a local .deb, in Vietnamese");
+    check_str(hde_store_source_title(HDE_STORE_SOURCE_DEB, 1), "Kho APT (.deb)",
+              "an APT package is described in Vietnamese");
+    check_str(hde_store_state_title(HDE_STORE_STATE_INSTALLED, 0), "Installed",
+              "an installed package, in English");
+    check_str(hde_store_state_title(HDE_STORE_STATE_INSTALLED, 1), "Đã cài đặt",
+              "an installed package, in Vietnamese");
+    check_str(hde_store_state_title(HDE_STORE_STATE_UPGRADABLE, 1), "Có bản cập nhật",
+              "an upgradable package, in Vietnamese");
+    char *detail = hde_store_verify_detail(HDE_STORE_VERIFY_THIRD_PARTY, "example/ppa", 0);
     check(detail && strstr(detail, "example/ppa") != NULL, "the detail names the repository");
+    free(detail);
+    detail = hde_store_verify_detail(HDE_STORE_VERIFY_THIRD_PARTY, "example/ppa", 1);
+    check(detail && strstr(detail, "example/ppa") != NULL, "the Vietnamese detail names the repository too");
+    check(detail && strstr(detail, "một kho được thêm vào hệ thống") != NULL,
+          "the Vietnamese detail explains that the repository was added by hand");
     free(detail);
 
     /* ---- 10. License ---- */
@@ -262,7 +287,9 @@ int main(void)
         "License: GPL-3+\n";
     check_int(hde_store_license_from_copyright(dep5, lic, sizeof lic), 1, "reads a DEP-5 License field");
     check_str(lic, "GPL-3+", "the license is GPL-3+");
-    check_str(hde_store_license_title(lic), "GNU GPL 3 or later", "the friendly name of GPL-3+");
+    check_str(hde_store_license_title(lic, 0), "GNU GPL 3 or later", "the friendly name of GPL-3+");
+    check_str(hde_store_license_title(lic, 1), "GNU GPL 3 trở lên",
+              "and the same license in Vietnamese");
 
     const char *prose =
         "This package is free software; you can redistribute it and/or modify\n"
@@ -408,6 +435,21 @@ int main(void)
         check_str(argv[0], "pkexec", "and the first word is still pkexec");
         hde_store_argv_free(argv);
     }
+
+    /* ---- 14. the language of the Store: Vietnamese first ---- */
+    check_int(hde_store_speak_vietnamese("vi_VN.UTF-8", NULL), 1, "a Vietnamese session gets Vietnamese");
+    check_int(hde_store_speak_vietnamese("vi:en", NULL), 1, "LANGUAGE=vi:en is Vietnamese");
+    check_int(hde_store_speak_vietnamese("en_US.UTF-8", NULL), 0, "an English session gets English");
+    check_int(hde_store_speak_vietnamese("en:vi", NULL), 0, "LANGUAGE=en:vi is English");
+    check_int(hde_store_speak_vietnamese("EN_GB.UTF-8", NULL), 0, "the language code is not case sensitive");
+    check_int(hde_store_speak_vietnamese("fr_FR.UTF-8", NULL), 1, "any other language still gets Vietnamese");
+    check_int(hde_store_speak_vietnamese("C", NULL), 1, "POSIX 'C' gets Vietnamese");
+    check_int(hde_store_speak_vietnamese("C.UTF-8", NULL), 1, "and so does C.UTF-8");
+    check_int(hde_store_speak_vietnamese("", NULL), 1, "an empty locale is Vietnamese");
+    check_int(hde_store_speak_vietnamese(NULL, NULL), 1, "no locale at all is Vietnamese");
+    check_int(hde_store_speak_vietnamese("vi_VN", "en"), 0, "HDE_STORE_LANG=en wins over a Vietnamese session");
+    check_int(hde_store_speak_vietnamese("en_US", "vi"), 1, "HDE_STORE_LANG=vi wins over an English session");
+    check_int(hde_store_speak_vietnamese("vi_VN", ""), 1, "an empty HDE_STORE_LANG changes nothing");
 
     printf("\nstore-test: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

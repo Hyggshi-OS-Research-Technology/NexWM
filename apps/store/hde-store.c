@@ -133,14 +133,21 @@ static gboolean ui_is_vietnamese(void)
 {
     static int cached = -1;
     if (cached >= 0) return cached;
-    const char *lang = g_getenv("LC_ALL");
-    if (!lang || !*lang) lang = g_getenv("LC_MESSAGES");
-    if (!lang || !*lang) lang = g_getenv("LANG");
-    cached = (lang && g_str_has_prefix(lang, "vi")) ? 1 : 0;
+    /* LANGUAGE is a preference list ("vi:en"); the first entry decides.  LC_ALL, LC_MESSAGES and LANG are the
+     * single locale of the session, in the order glibc gives them.  hde_store_speak_vietnamese() has the rule
+     * itself (and its tests): Vietnamese unless English is asked for by name. */
+    const char *lang = g_getenv("LANGUAGE");
+    if (!lang || !*lang) {
+        lang = g_getenv("LC_ALL");
+        if (!lang || !*lang) lang = g_getenv("LC_MESSAGES");
+        if (!lang || !*lang) lang = g_getenv("LANG");
+    }
+    cached = hde_store_speak_vietnamese(lang, g_getenv("HDE_STORE_LANG"));
     return cached;
 }
 
-/* The Store speaks Vietnamese when the session does, English otherwise. */
+/* The Store speaks Vietnamese unless the session asks for English (or HDE_STORE_LANG says otherwise).
+ * The order of the arguments is English first, Vietnamese second — the Vietnamese is what is shown by default. */
 static const char *tr(const char *en, const char *vi)
 {
     return ui_is_vietnamese() ? vi : en;
@@ -535,7 +542,7 @@ static GtkWidget *package_row(HdeStorePackage *p)
     gtk_box_pack_start(GTK_BOX(h), v, TRUE, TRUE, 0);
 
     if (p->state != HDE_STORE_STATE_NOT_INSTALLED)
-        gtk_box_pack_end(GTK_BOX(h), badge(hde_store_state_title(p->state), badge_kind_for_state(p->state)),
+        gtk_box_pack_end(GTK_BOX(h), badge(hde_store_state_title(p->state, ui_is_vietnamese()), badge_kind_for_state(p->state)),
                          FALSE, FALSE, 0);
 
     gtk_container_add(GTK_CONTAINER(row), h);
@@ -908,9 +915,11 @@ static void rebuild_detail(void)
 
     GtkWidget *badges = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_margin_top(badges, 4);
-    gtk_box_pack_start(GTK_BOX(badges), badge(hde_store_state_title(p->state), badge_kind_for_state(p->state)),
+    gtk_box_pack_start(GTK_BOX(badges),
+                       badge(hde_store_state_title(p->state, ui_is_vietnamese()), badge_kind_for_state(p->state)),
                        FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(badges), badge(hde_store_verify_title(p->verify), badge_kind_for_verify(p->verify)),
+    gtk_box_pack_start(GTK_BOX(badges),
+                       badge(hde_store_verify_title(p->verify, ui_is_vietnamese()), badge_kind_for_verify(p->verify)),
                        FALSE, FALSE, 0);
     if (p->license[0])
         gtk_box_pack_start(GTK_BOX(badges), badge(p->license, "store-badge-plain"), FALSE, FALSE, 0);
@@ -985,10 +994,11 @@ static void rebuild_detail(void)
     gtk_box_pack_start(GTK_BOX(sc), info_row(tr("Downloaded from", "Nguồn tải"),
                                              p->origin[0] ? p->origin : tr("unknown", "không rõ")),
                        FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(sc), info_row(tr("Source", "Loại nguồn"), hde_store_source_title(p->source)),
+    gtk_box_pack_start(GTK_BOX(sc), info_row(tr("Source", "Loại nguồn"),
+                                             hde_store_source_title(p->source, ui_is_vietnamese())),
                        FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sc), info_row(tr("License", "Giấy phép"),
-                                             p->license[0] ? hde_store_license_title(p->license)
+                                             p->license[0] ? hde_store_license_title(p->license, ui_is_vietnamese())
                                                            : tr("not read yet", "chưa đọc được")),
                        FALSE, FALSE, 0);
 
@@ -998,7 +1008,8 @@ static void rebuild_detail(void)
     gtk_widget_set_size_request(vk, 150, -1);
     gtk_box_pack_start(GTK_BOX(verify_row), vk, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(verify_row),
-                       badge(hde_store_verify_title(p->verify), badge_kind_for_verify(p->verify)), FALSE, FALSE, 0);
+                       badge(hde_store_verify_title(p->verify, ui_is_vietnamese()), badge_kind_for_verify(p->verify)),
+                       FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sc), verify_row, FALSE, FALSE, 0);
 
     if (p->from_file && file_check_done) {
@@ -1026,7 +1037,7 @@ static void rebuild_detail(void)
         gtk_box_pack_start(GTK_BOX(sc), check_row, FALSE, FALSE, 0);
     }
 
-    char *verify_detail = hde_store_verify_detail(p->verify, p->origin);
+    char *verify_detail = hde_store_verify_detail(p->verify, p->origin, ui_is_vietnamese());
     if (verify_detail) {
         GtkWidget *d = label_with_class(verify_detail, "store-note");
         gtk_label_set_line_wrap(GTK_LABEL(d), TRUE);
@@ -1405,7 +1416,7 @@ static GtkWidget *source_row(const HdeStoreSourceEntry *s, const char *note)
     if (!s->enabled)
         gtk_box_pack_end(GTK_BOX(row), badge(tr("disabled", "đang tắt"), "store-badge-plain"), FALSE, FALSE, 0);
     HdeStoreVerify vfy = verify_for_source(s);
-    gtk_box_pack_end(GTK_BOX(row), badge(hde_store_verify_title(vfy), badge_kind_for_verify(vfy)),
+    gtk_box_pack_end(GTK_BOX(row), badge(hde_store_verify_title(vfy, ui_is_vietnamese()), badge_kind_for_verify(vfy)),
                      FALSE, FALSE, 0);
     return row;
 }
@@ -1904,7 +1915,7 @@ static void show_about(void)
 {
     const char *authors[] = { "Hyggshi OS Research Technology", NULL };
     gtk_show_about_dialog(GTK_WINDOW(main_win),
-                          "program-name", "Hyggshi Store",
+                          "program-name", tr("Hyggshi Store", "Cửa hàng Hyggshi"),
                           "version", HDE_VERSION,
                           "comments",
                           tr("The app store of Hyggshi OS: browse, install, update and remove .deb packages, and "
@@ -2045,7 +2056,7 @@ static void print_installed(void)
     for (guint i = 0; pkgs_installed && i < pkgs_installed->len; i++) {
         HdeStorePackage *p = g_ptr_array_index(pkgs_installed, i);
         printf("%s\t%s\t%s\t%s\n", p->name, p->version, p->origin[0] ? p->origin : "-",
-               hde_store_verify_title(p->verify));
+               hde_store_verify_title(p->verify, ui_is_vietnamese()));
     }
     free_all();
 }
@@ -2088,7 +2099,7 @@ int main(int argc, char **argv)
 
     /* ---- the window: a sidebar, the pages, and a status line ---- */
     main_win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(main_win), APP_TITLE);
+    gtk_window_set_title(GTK_WINDOW(main_win), tr(APP_TITLE, "Cửa hàng Hyggshi"));
     gtk_window_set_default_size(GTK_WINDOW(main_win), 1120, 760);
     gtk_widget_set_size_request(main_win, 940, 600);
     gtk_window_set_icon_name(GTK_WINDOW(main_win), APP_ICON);

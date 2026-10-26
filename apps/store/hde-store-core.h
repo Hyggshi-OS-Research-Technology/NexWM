@@ -97,8 +97,9 @@ int  hde_store_parse_apt_policy(const char *text, char *installed, size_t isz,
 /* "License: GPL-3+" / the prose of an older /usr/share/doc/<pkg>/copyright, reduced to a short name
  * ("GPL-3+", "MIT", "Apache-2.0", "Multiple licenses (5)").  Returns 1 when something was recognised. */
 int  hde_store_license_from_copyright(const char *text, char *out, size_t outsz);
-/* The friendly name of a license string found above ("GNU GPL 3 or later"). */
-const char *hde_store_license_title(const char *license);
+/* The friendly name of a license ("GNU GPL 3 or later").  vi != 0 gives the Vietnamese name: the Store
+ * speaks Vietnamese unless the session asks for English (hde_store_speak_vietnamese). */
+const char *hde_store_license_title(const char *license, int vi);
 
 /* ---- the sources of the machine (/etc/apt/sources.list and .d) ---- */
 typedef struct {
@@ -121,13 +122,22 @@ void hde_store_source_label(const HdeStoreSourceEntry *s, char *out, size_t outs
 
 /* ---- where it comes from, and whether that can be trusted ---- */
 HdeStoreVerify hde_store_verify_for(const char *origin, HdeStoreSource source);
-const char *hde_store_verify_title(HdeStoreVerify v);
+const char *hde_store_verify_title(HdeStoreVerify v, int vi);
 /* One sentence for the detail page; `origin` may be NULL.  Free with free(). */
-char *hde_store_verify_detail(HdeStoreVerify v, const char *origin);
-const char *hde_store_source_title(HdeStoreSource s);
+char *hde_store_verify_detail(HdeStoreVerify v, const char *origin, int vi);
+const char *hde_store_source_title(HdeStoreSource s, int vi);
 
-/* ---- states, sizes, searching ---- */
-const char *hde_store_state_title(HdeStoreState s);
+/* ---- which language the Store speaks ---- */
+/* 1 = Vietnamese, 0 = English.  `language` is the session's preference (LANGUAGE, LC_ALL, LC_MESSAGES or
+ * LANG — whichever is set first, "vi_VN.UTF-8", "vi:en", "en_GB" …), `forced` the HDE_STORE_LANG override.
+ * Vietnamese is the language of the Store and of Hyggshi OS, so it is what is shown unless the session asks
+ * for English by name: any other locale (fr_FR, ja_JP, C, an empty environment) gets Vietnamese. */
+int hde_store_speak_vietnamese(const char *language, const char *forced);
+
+/* ---- states, sizes, searching ----
+ * The functions that return text the user reads take `vi`: 0 is English, anything else Vietnamese
+ * (hde_store_speak_vietnamese() answers which one this session gets). */
+const char *hde_store_state_title(HdeStoreState s, int vi);
 /* "12.4 MB" from Installed-Size (KiB). */
 void        hde_store_format_size(unsigned long long kb, char *out, size_t outsz);
 /* Case-insensitive, accent-tolerant search.  0 = no match; higher = a better match
