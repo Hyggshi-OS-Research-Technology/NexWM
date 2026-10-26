@@ -21,6 +21,7 @@
 
 #include <gdk/gdkkeysyms.h>
 #include <gtk/gtk.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -2091,6 +2092,10 @@ int main(int argc, char **argv)
         g_free(pending_file);
         return 0;
     }
+
+    /* The session's language, so GTK's own stock labels (Cancel, Open, …) follow it as well; the Store's
+     * own texts are picked by ui_is_vietnamese(), which reads the environment itself. */
+    setlocale(LC_ALL, "");
 
     gtk_init(&argc, &argv);
     hde_theme_apply_process();
