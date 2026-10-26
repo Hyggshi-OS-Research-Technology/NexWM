@@ -64,6 +64,7 @@ static guint64 installed_kb;
 
 static HdeStorePackage *detail;     /* the package of the detail page (we own it) */
 static char *search_query;
+static guint search_delay_id;
 static char *pending_search;
 static char *pending_file;
 static gboolean pending_updates;
@@ -1884,7 +1885,11 @@ static void rebuild_installed(void)
     for (GList *l = children; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
     g_list_free(children);
 
-    guint count = (pkgs_installed ? pkgs_installed->len : 0) + (pkgs_flatpak ? pkgs_flatpak->len : 0);
+    guint count = pkgs_flatpak ? pkgs_flatpak->len : 0;
+    for (guint i = 0; pkgs_installed && i < pkgs_installed->len; i++) {
+        HdeStorePackage *p = g_ptr_array_index(pkgs_installed, i);
+        if (desktop_for(p->name)) count++;
+    }
     char size[32];
     hde_store_format_size(installed_kb, size, sizeof size);
 
@@ -1907,8 +1912,11 @@ static void rebuild_installed(void)
     g_signal_connect(list, "row-activated", G_CALLBACK(on_row_activated), NULL);
     gtk_box_pack_start(GTK_BOX(installed_inner), list, FALSE, FALSE, 0);
     GPtrArray *all_installed = g_ptr_array_new();
-    for (guint i = 0; pkgs_installed && i < pkgs_installed->len; i++)
-        g_ptr_array_add(all_installed, g_ptr_array_index(pkgs_installed, i));
+    for (guint i = 0; pkgs_installed && i < pkgs_installed->len; i++) {
+        HdeStorePackage *p = g_ptr_array_index(pkgs_installed, i);
+        /* Installed is an application view, not thousands of libraries and dependencies. */
+        if (desktop_for(p->name)) g_ptr_array_add(all_installed, p);
+    }
     for (guint i = 0; pkgs_flatpak && i < pkgs_flatpak->len; i++)
         g_ptr_array_add(all_installed, g_ptr_array_index(pkgs_flatpak, i));
     g_ptr_array_sort(all_installed, cmp_by_name);
@@ -2345,13 +2353,15 @@ static void do_search(const char *query)
         const char *fp_argv[] = { "flatpak", "search", "--columns=application,name,description,version,branch,remotes", search_query, NULL };
         char *fp_out = run_capture(fp_argv, NULL);
         char **fp_lines = g_strsplit(fp_out ? fp_out : "", "\n", -1);
-        for (guint i = 0; fp_lines[i] && pkgs_search->len < 240; i++) {
+        guint fp_count = 0;
+        for (guint i = 0; fp_lines[i] && fp_count < 80; i++) {
             HdeStorePackage tmp;
             if (!parse_flatpak_search_line(fp_lines[i], &tmp) || g_hash_table_contains(seen, tmp.name)) continue;
             HdeStorePackage *copy = g_new0(HdeStorePackage, 1);
             *copy = tmp;
             g_hash_table_add(seen, g_strdup(copy->name));
             g_ptr_array_add(pkgs_search, copy);
+            fp_count++;
         }
         g_strfreev(fp_lines);
         g_free(fp_out);
@@ -2359,6 +2369,10 @@ static void do_search(const char *query)
     g_hash_table_destroy(seen);
 
     g_ptr_array_sort(pkgs_search, cmp_by_score);
+    /* Hundreds of GTK rows make scrolling and every redraw expensive. Keep the best
+     * application-oriented matches; users can refine the query for the rest. */
+    if (pkgs_search->len > 120)
+        g_ptr_array_remove_range(pkgs_search, 120, pkgs_search->len - 120);
 
     rebuild_results();
     show_page("results");
@@ -2366,10 +2380,43 @@ static void do_search(const char *query)
     set_status(tr("%u results for “%s”.", "%u kết quả cho “%s”."), pkgs_search->len, search_query);
 }
 
+static gboolean run_delayed_search(gpointer data)
+{
+    (void)data;
+    search_delay_id = 0;
+    const char *query = gtk_entry_get_text(GTK_ENTRY(search_entry));
+    if (query && g_utf8_strlen(query, -1) < 2) {
+        set_status("Type at least 2 characters to search.");
+        return G_SOURCE_REMOVE;
+    }
+    do_search(query);
+    return G_SOURCE_REMOVE;
+}
+
+static void run_search_now(GtkEntry *entry, gpointer data)
+{
+    (void)data;
+    if (search_delay_id) {
+        g_source_remove(search_delay_id);
+        search_delay_id = 0;
+    }
+    const char *query = gtk_entry_get_text(entry);
+    if (!query || !*query || g_utf8_strlen(query, -1) >= 2) do_search(query);
+    else set_status("Type at least 2 characters to search.");
+}
+
 static void on_search_changed(GtkSearchEntry *entry, gpointer data)
 {
     (void)data;
-    do_search(gtk_entry_get_text(GTK_ENTRY(entry)));
+    if (search_delay_id) g_source_remove(search_delay_id);
+    const char *query = gtk_entry_get_text(GTK_ENTRY(entry));
+    if (!query || !*query) {
+        search_delay_id = 0;
+        do_search("");
+        return;
+    }
+    /* Do not launch apt-cache and Flatpak once per keystroke. */
+    search_delay_id = g_timeout_add(450, run_delayed_search, NULL);
 }
 
 static void on_category_clicked(GtkButton *b, gpointer data)
@@ -2681,6 +2728,10 @@ static void on_theme_changed(gpointer data)
 
 static void free_all(void)
 {
+    if (search_delay_id) {
+        g_source_remove(search_delay_id);
+        search_delay_id = 0;
+    }
     pkgs_clear(&pkgs_installed);
     pkgs_clear(&pkgs_updates);
     pkgs_clear(&pkgs_search);
@@ -2781,6 +2832,7 @@ int main(int argc, char **argv)
     gtk_entry_set_placeholder_text(GTK_ENTRY(search_entry), tr("Search apps…", "Tìm ứng dụng…"));
     gtk_widget_set_size_request(search_entry, 300, -1);
     g_signal_connect(search_entry, "search-changed", G_CALLBACK(on_search_changed), NULL);
+    g_signal_connect(search_entry, "activate", G_CALLBACK(run_search_now), NULL);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), search_entry);
 
     GtkWidget *refresh = gtk_button_new_from_icon_name("view-refresh-symbolic", GTK_ICON_SIZE_BUTTON);
