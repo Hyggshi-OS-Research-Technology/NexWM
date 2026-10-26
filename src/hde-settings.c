@@ -69,6 +69,8 @@ static const SettingItem items[] = {
     { "power", "battery-good-symbolic|battery-full-symbolic", "Power", "Battery, power mode, battery saver and sleep" },
     { "keyboard", "input-keyboard-symbolic", "Keyboard & Shortcuts", "Layouts, repeat, Super key, sound and display keys" },
     { "users", "system-users-symbolic|avatar-default-symbolic", "Users", "Accounts and administrator" },
+    { "health", "utilities-system-monitor-symbolic|dialog-warning-symbolic|emblem-ok-symbolic", "System Health",
+      "NexDiag checks: session, packages, services, network, configuration and logs" },
     { "support", "help-browser-symbolic|help-faq-symbolic|dialog-question-symbolic", "Support",
       "Help center, diagnostics, quick repair and keyboard reference" },
     { "about", "help-about-symbolic", "About", "Hyggshi Desktop Environment and this computer" },
@@ -1057,6 +1059,7 @@ static GtkWidget *make_page(const char *id)
     if (!strcmp(id, "power")) return page_power_new();
     if (!strcmp(id, "keyboard")) return page_keyboard_new();
     if (!strcmp(id, "users")) return make_users_page();
+    if (!strcmp(id, "health")) return page_health_new();
     if (!strcmp(id, "support")) return page_support_new();
     return page_about_new();
 }
@@ -1219,7 +1222,8 @@ static GtkWidget *search_list;
 static const char *resolve_page_alias(const char *id)
 {
     if (!id) return "display";
-    if (!strcmp(id, "help") || !strcmp(id, "diagnostics")) return "support";
+    if (!strcmp(id, "diagnostics") || !strcmp(id, "nexdiag") || !strcmp(id, "health")) return "health";
+    if (!strcmp(id, "help")) return "support";
     if (!strcmp(id, "applications") || !strcmp(id, "default-apps") || !strcmp(id, "defaults")) return "apps";
     return id;
 }
@@ -1257,6 +1261,7 @@ static const char *page_keywords(const char *id)
     if (!strcmp(id, "power")) return "battery saver sleep suspend lock idle performance";
     if (!strcmp(id, "keyboard")) return "shortcuts hotkeys layout xkb repeat super key bindings";
     if (!strcmp(id, "users")) return "account password administrator sudo profile";
+    if (!strcmp(id, "health")) return "health diagnostics nexdiag logs report bug dpkg systemd network libraries broken";
     if (!strcmp(id, "support")) return "help support diagnostics repair troubleshoot bug report";
     if (!strcmp(id, "about")) return "version system hardware cpu ram memory os";
     return "";
