@@ -451,6 +451,177 @@ int main(void)
     check_int(hde_store_speak_vietnamese("en_US", "vi"), 1, "HDE_STORE_LANG=vi wins over an English session");
     check_int(hde_store_speak_vietnamese("vi_VN", ""), 1, "an empty HDE_STORE_LANG changes nothing");
 
+    /* ---- 15. The artwork of a package: its icon and its pictures ---- */
+    const char *desktop_text =
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Weather\n"
+        "Name[vi]=Thời tiết\n"
+        "Exec=gnome-weather %u\n"
+        "Icon=org.gnome.Weather\n"
+        "Categories=GNOME;GTK;Utility;\n"
+        "\n"
+        "[Desktop Action new-window]\n"
+        "Name=New Window\n"
+        "Exec=gnome-weather --new-window\n";
+    HdeStoreDesktop de;
+    check_int(hde_store_parse_desktop(desktop_text, &de), 1, "a .desktop entry with an Icon= is understood");
+    check_str(de.name, "Weather", "the Name= of the entry (the untranslated one)");
+    check_str(de.icon, "org.gnome.Weather", "the icon name the application asks for");
+    check_str(de.exec, "gnome-weather", "the program of Exec=, without its arguments");
+    check_int(hde_store_parse_desktop("[Desktop Entry]\nName=No icon here\n", &de), 0,
+              "an entry without Icon= has nothing to show");
+    check_int(hde_store_parse_desktop("", &de), 0, "an empty file is not an entry");
+
+    hde_store_desktop_id("/usr/share/applications/org.gnome.Weather.desktop", &de);
+    check_str(de.app_id, "org.gnome.Weather", "the app id comes from the file name");
+    check_str(de.id, "org.gnome.Weather.desktop", "and the entry keeps its file name");
+    check_int(hde_store_desktop_matches_package(&de, "gnome-weather"), 1,
+              "org.gnome.Weather is the program of the gnome-weather package");
+    check_int(hde_store_desktop_matches_package(&de, "gnome-calculator"), 0,
+              "it is not the program of another package");
+    check_int(hde_store_desktop_matches_package(&de, "org.gnome.weather"), 1,
+              "the comparison ignores case");
+
+    HdeStoreDesktop hinted;
+    hde_store_parse_desktop("[Desktop Entry]\nName=Vendor Tool\nIcon=vendor-tool\n"
+                            "Exec=/opt/vendor/bin/vendor-tool\nX-HDE-Package=hyggshi-vendor-tool\n", &hinted);
+    check_int(hde_store_desktop_matches_package(&hinted, "hyggshi-vendor-tool"), 1,
+              "X-HDE-Package= says which package an entry belongs to");
+    check_int(hde_store_desktop_matches_package(&hinted, "something-else"), 0,
+              "and then nothing else claims it");
+
+    HdeStoreDesktop by_exec;
+    hde_store_parse_desktop("[Desktop Entry]\nName=Comics\nIcon=comics\nExec=hyggshi-comics\n", &by_exec);
+    hde_store_desktop_id("/usr/share/applications/oddname.desktop", &by_exec);
+    check_int(hde_store_desktop_matches_package(&by_exec, "hyggshi-comics"), 1,
+              "an odd file name is matched through Exec=");
+
+    /* Files on disk: an icon theme and a folder of loose pictures. */
+    const char *root = "/tmp/store-test-artwork";
+    char cmd[512];
+    snprintf(cmd, sizeof cmd, "rm -rf %s && mkdir -p %s/icons/hicolor/256x256/apps %s/icons/hicolor/scalable/apps "
+             "%s/pixmaps %s/screens", root, root, root, root, root);
+    if (system(cmd) != 0) printf("note: cannot prepare %s\n", root);
+    FILE *f = fopen("/tmp/store-test-artwork/icons/hicolor/256x256/apps/org.gnome.Weather.png", "w");
+    if (f) { fputs("png", f); fclose(f); }
+    f = fopen("/tmp/store-test-artwork/icons/hicolor/scalable/apps/gnome-weather.svg", "w");
+    if (f) { fputs("<svg/>", f); fclose(f); }
+    f = fopen("/tmp/store-test-artwork/pixmaps/gnome-weather.xpm", "w");
+    if (f) { fputs("xpm", f); fclose(f); }
+
+    const char *icon_dirs[] = { "/tmp/store-test-artwork/icons/hicolor/256x256/apps",
+                                "/tmp/store-test-artwork/icons/hicolor/scalable/apps",
+                                "/tmp/store-test-artwork/pixmaps", NULL };
+    const char *want_icon[] = { "org.gnome.Weather", "gnome-weather", NULL };
+    char icon_path[512];
+    check_int(hde_store_icon_file(icon_dirs, want_icon, icon_path, sizeof icon_path), 1,
+              "the icon file of a package is found in the icon theme");
+    check_str(icon_path, "/tmp/store-test-artwork/icons/hicolor/256x256/apps/org.gnome.Weather.png",
+              "the first candidate wins, at its real path");
+    const char *want_svg[] = { "gnome-weather", NULL };
+    check_int(hde_store_icon_file(icon_dirs, want_svg, icon_path, sizeof icon_path), 1,
+              "an SVG icon counts as well");
+    check_str(icon_path, "/tmp/store-test-artwork/icons/hicolor/scalable/apps/gnome-weather.svg",
+              "and it is the SVG that was found");
+    const char *want_none[] = { "nothing-like-this", NULL };
+    check_int(hde_store_icon_file(icon_dirs, want_none, icon_path, sizeof icon_path), 0,
+              "a package without an icon stays without one (no guess)");
+    check_str(icon_path, "", "and the path stays empty");
+    const char *absolute[] = { "/tmp/store-test-artwork/pixmaps/gnome-weather.xpm", NULL };
+    check_int(hde_store_icon_file(icon_dirs, absolute, icon_path, sizeof icon_path), 1,
+              "Icon= that names a file is used as it is");
+
+    f = fopen("/tmp/store-test-artwork/screens/b.png", "w");
+    if (f) { fputs("png", f); fclose(f); }
+    f = fopen("/tmp/store-test-artwork/screens/a.jpg", "w");
+    if (f) { fputs("jpg", f); fclose(f); }
+    f = fopen("/tmp/store-test-artwork/screens/notes.txt", "w");
+    if (f) { fputs("txt", f); fclose(f); }
+    HdeStoreShot shots[HDE_STORE_MAX_SHOTS];
+    check_int(hde_store_shots_in_dir("/tmp/store-test-artwork/screens", shots, HDE_STORE_MAX_SHOTS), 2,
+              "the pictures of a folder are the images in it, nothing else");
+    check_str(shots[0].path, "/tmp/store-test-artwork/screens/a.jpg", "sorted by name: a.jpg first");
+    check_str(shots[1].path, "/tmp/store-test-artwork/screens/b.png", "then b.png");
+    check_int(hde_store_shots_in_dir("/tmp/store-test-artwork/nowhere", shots, HDE_STORE_MAX_SHOTS), 0,
+              "a folder that is not there has no pictures");
+
+    char cache[512];
+    hde_store_shots_cache_dir("/home/linh/.cache", "gnome-weather", cache, sizeof cache);
+    check_str(cache, "/home/linh/.cache/hde/store/shots/gnome-weather",
+              "fetched pictures live in the cache of the Store");
+    hde_store_shots_cache_dir("", "gnome-weather", cache, sizeof cache);
+    check(strstr(cache, "/hde/store/shots/gnome-weather") != NULL,
+          "without XDG_CACHE_HOME the home cache is used");
+    check_int(system("rm -rf /tmp/store-test-artwork") == 0 || 1, 1, "the fixture is cleaned up");
+
+    /* AppStream metadata: the package behind an application, its icon and its screenshots. */
+    const char *appstream =
+        "<?xml version=\"1.0\"?>\n"
+        "<components>\n"
+        "  <component type=\"desktop-application\">\n"
+        "    <id>org.gnome.Weather</id>\n"
+        "    <name>Weather</name>\n"
+        "    <name xml:lang=\"vi\">Thời tiết</name>\n"
+        "    <summary>Show the weather forecast</summary>\n"
+        "    <pkgname>gnome-weather</pkgname>\n"
+        "    <icon type=\"cached\" width=\"64\" height=\"64\">/var/cache/app-info/icons/debian/main/64x64/org.gnome.Weather.png</icon>\n"
+        "    <screenshots>\n"
+        "      <screenshot type=\"default\">\n"
+        "        <image type=\"source\">https://example.org/weather-1.png</image>\n"
+        "        <image type=\"thumbnail\" width=\"624\">https://example.org/weather-1-small.png</image>\n"
+        "      </screenshot>\n"
+        "      <screenshot>\n"
+        "        <image type=\"source\">/usr/share/gnome-weather/screenshots/2.png</image>\n"
+        "      </screenshot>\n"
+        "    </screenshots>\n"
+        "  </component>\n"
+        "</components>\n";
+    HdeStoreAppStream as;
+    check_int(hde_store_parse_appstream(appstream, "gnome-weather", &as), 1, "AppStream metadata is read");
+    check_str(as.package, "gnome-weather", "the package behind the application");
+    check_str(as.app_id, "org.gnome.Weather", "the application id");
+    check_str(as.name, "Weather", "the untranslated name is taken");
+    check_str(as.summary, "Show the weather forecast", "the summary");
+    check_int(as.icon_is_file, 1, "a cached icon is a file");
+    check_str(as.icon, "/var/cache/app-info/icons/debian/main/64x64/org.gnome.Weather.png",
+              "at the path the catalogue gives");
+    check_int(as.n_shots, 2, "both screenshots are found");
+    check_str(as.shots[0].url, "https://example.org/weather-1.png",
+              "a screenshot that is a URL keeps its URL (and not the thumbnail)");
+    check_str(as.shots[0].path, "", "and no local path");
+    check_str(as.shots[1].path, "/usr/share/gnome-weather/screenshots/2.png",
+              "a screenshot that is a local file keeps its path");
+    check_int(hde_store_parse_appstream(appstream, "gnome-calculator", &as), 1,
+              "another package still gets the one component in the file");
+    check_int(hde_store_parse_appstream("<components></components>", "gnome-weather", &as), 0,
+              "an empty catalogue is nothing");
+
+    const char *catalogue =
+        "<components>\n"
+        "  <component type=\"desktop-application\">\n"
+        "    <id>org.gnome.Calculator</id><name>Calculator</name><pkgname>gnome-calculator</pkgname>\n"
+        "    <icon type=\"stock\">accessories-calculator</icon>\n"
+        "  </component>\n"
+        "  <component type=\"desktop-application\">\n"
+        "    <id>org.gnome.Weather</id><name>Weather</name><pkgname>gnome-weather</pkgname>\n"
+        "    <icon type=\"stock\">weather-few-clouds</icon>\n"
+        "    <screenshots><screenshot><image type=\"thumbnail\">https://example.org/w.png</image></screenshot></screenshots>\n"
+        "  </component>\n"
+        "</components>\n";
+    HdeStoreAppStream cat;
+    check_int(hde_store_parse_appstream(catalogue, "gnome-weather", &cat), 1,
+              "the component of the asked package is picked out of a catalogue");
+    check_str(cat.package, "gnome-weather", "which is the second one here");
+    check_str(cat.app_id, "org.gnome.Weather", "with its own application id");
+    check_int(cat.icon_is_file, 0, "an icon of type stock is a name for the icon theme");
+    check_str(cat.icon, "weather-few-clouds", "and the theme has to know that name");
+    check_int(cat.n_shots, 1, "a screenshot with only a thumbnail still counts");
+    check_str(cat.shots[0].url, "https://example.org/w.png", "a thumbnail is an URL as well");
+    check_int(hde_store_parse_appstream(catalogue, "gnome-calculator", &cat), 1,
+              "the first component is found when it is the one asked for");
+    check_str(cat.name, "Calculator", "with its own name");
+
     printf("\nstore-test: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

@@ -18,10 +18,12 @@
 #include "hde-store-fold.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 
 /* ---------------------------------------------------------------- small helpers */
 
@@ -1131,4 +1133,352 @@ int hde_store_speak_vietnamese(const char *language, const char *forced)
     const char *choice = (forced && *forced) ? forced : language;
     if (!choice || !*choice) return 1;                       /* nothing set: Vietnamese */
     return strncasecmp(choice, "en", 2) == 0 ? 0 : 1;        /* English when asked for by name */
+}
+
+/* ------------------------------------------------------------------ artwork: icons and pictures */
+
+/* [a-z0-9] only, so "org.gnome.Weather" and "gnome-weather" can be compared (see the matcher below). */
+static void squash(const char *in, char *out, size_t outsz)
+{
+    size_t n = 0;
+    if (!out || !outsz) return;
+    out[0] = 0;
+    for (const char *p = in ? in : ""; *p && n + 1 < outsz; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) out[n++] = (char)c;
+    }
+    out[n] = 0;
+}
+
+/* The program of an Exec= line: "Exec=gnome-weather %u" -> "gnome-weather". */
+static void exec_program(const char *exec, char *out, size_t outsz)
+{
+    char buf[200];
+    put(buf, sizeof buf, exec);
+    char *sp = buf;
+    while (*sp == ' ' || *sp == '\t') sp++;
+    char *end = sp;
+    while (*end && *end != ' ' && *end != '\t') end++;
+    *end = 0;
+    put(out, outsz, sp);
+}
+
+/* "Key=value" of a desktop entry ("=" and not the ":" of a control file; the key of Name[vi] is not Name). */
+static const char *desktop_value(const char *line, const char *key)
+{
+    if (!line || !key) return NULL;
+    size_t n = strlen(key);
+    if (strncmp(line, key, n) != 0) return NULL;
+    if (line[n] != '=') return NULL;
+    return skip_spaces(line + n + 1);
+}
+
+int hde_store_parse_desktop(const char *text, HdeStoreDesktop *out)
+{
+    if (!out) return 0;
+    memset(out, 0, sizeof *out);
+    if (!text) return 0;
+
+    const char *line = text;
+    int in_entry = 0;
+    while (*line) {
+        const char *nl = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl - line) : strlen(line);
+        char buf[512];
+        put_range(buf, sizeof buf, line, line + len);
+
+        if (buf[0] == '[') {
+            in_entry = strcmp(buf, "[Desktop Entry]") == 0;
+        } else if (in_entry && buf[0] && buf[0] != '#') {
+            const char *value = desktop_value(buf, "Name");
+            if (value) put(out->name, sizeof out->name, value);
+            else if ((value = desktop_value(buf, "Icon"))) put(out->icon, sizeof out->icon, value);
+            else if ((value = desktop_value(buf, "Exec"))) exec_program(value, out->exec, sizeof out->exec);
+            else if ((value = desktop_value(buf, "X-HDE-Package"))) put(out->package, sizeof out->package, value);
+            else if ((value = desktop_value(buf, "X-AppStream-Id"))) put(out->app_id, sizeof out->app_id, value);
+        }
+        if (!nl) break;
+        line = nl + 1;
+    }
+    return out->icon[0] ? 1 : 0;
+}
+
+/* Fills id and app_id from the file name of a .desktop entry ("/x/org.gnome.Weather.desktop"). */
+void hde_store_desktop_id(const char *path, HdeStoreDesktop *d)
+{
+    if (!d) return;
+    const char *base = path ? strrchr(path, '/') : NULL;
+    base = base ? base + 1 : path;
+    put(d->id, sizeof d->id, base);
+    put(d->app_id, sizeof d->app_id, base);
+    char *dot = strstr(d->app_id, ".desktop");
+    if (dot && !dot[8]) *dot = 0;
+}
+
+int hde_store_desktop_matches_package(const HdeStoreDesktop *d, const char *package)
+{
+    if (!d || !package || !*package) return 0;
+
+    if (d->package[0]) return strcmp(d->package, package) == 0;
+
+    char pkg[96], app[96];
+    squash(package, pkg, sizeof pkg);
+    squash(d->app_id[0] ? d->app_id : d->id, app, sizeof app);
+    if (pkg[0] && app[0]) {
+        if (strcmp(pkg, app) == 0) return 1;
+        size_t lp = strlen(pkg), la = strlen(app);
+        /* org.gnome.Weather against gnome-weather: the package name is the tail of the app id. */
+        if (la > lp && strcmp(app + la - lp, pkg) == 0) return 1;
+        if (lp > la && strcmp(pkg + lp - la, app) == 0) return 1;
+    }
+    if (d->exec[0]) {
+        char prog[96];
+        squash(d->exec, prog, sizeof prog);
+        if (prog[0] && strcmp(prog, pkg) == 0) return 1;
+    }
+    return 0;
+}
+
+static int is_a_file(const char *path)
+{
+    struct stat st;
+    return path && *path && stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+int hde_store_icon_file(const char *const *dirs, const char *const *names, char *out, size_t outsz)
+{
+    static const char *const ext[] = { ".png", ".svg", ".xpm", NULL };
+    if (out && outsz) out[0] = 0;
+    if (!names || !out || !outsz) return 0;
+
+    for (int i = 0; names[i]; i++) {
+        const char *name = names[i];
+        if (!name || !*name) continue;
+        if (name[0] == '/') {                      /* Icon= already names a file */
+            if (is_a_file(name)) { put(out, outsz, name); return 1; }
+            continue;
+        }
+        if (strchr(name, '/')) continue;
+        for (int d = 0; dirs && dirs[d]; d++) {
+            if (!*dirs[d]) continue;
+            for (int e = 0; ext[e]; e++) {
+                char path[512];
+                snprintf(path, sizeof path, "%s/%s%s", dirs[d], name, ext[e]);
+                if (is_a_file(path)) { put(out, outsz, path); return 1; }
+            }
+        }
+    }
+    return 0;
+}
+
+static int has_image_extension(const char *name)
+{
+    static const char *const ext[] = { ".png", ".jpg", ".jpeg", ".webp", NULL };
+    size_t n = strlen(name);
+    for (int i = 0; ext[i]; i++) {
+        size_t e = strlen(ext[i]);
+        if (n > e && strcasecmp(name + n - e, ext[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+int hde_store_shots_in_dir(const char *dir, HdeStoreShot *shots, int max_shots)
+{
+    if (!dir || !*dir || !shots || max_shots <= 0) return 0;
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+
+    char **names = NULL;
+    int count = 0, capacity = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        if (!has_image_extension(ent->d_name)) continue;
+        if (count == capacity) {
+            capacity = capacity ? capacity * 2 : 8;
+            char **grown = realloc(names, (size_t)capacity * sizeof *names);
+            if (!grown) break;
+            names = grown;
+        }
+        names[count] = strdup(ent->d_name);
+        if (!names[count]) break;
+        count++;
+    }
+    closedir(d);
+
+    /* sorted by name, so the strip does not shuffle between two visits */
+    for (int i = 0; i < count; i++)
+        for (int j = i + 1; j < count; j++)
+            if (strcmp(names[i], names[j]) > 0) {
+                char *t = names[i];
+                names[i] = names[j];
+                names[j] = t;
+            }
+
+    int n = 0;
+    for (int i = 0; i < count && n < max_shots; i++) {
+        char path[400];
+        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
+        if (!is_a_file(path)) continue;
+        memset(&shots[n], 0, sizeof shots[n]);
+        put(shots[n].path, sizeof shots[n].path, path);
+        n++;
+    }
+    for (int i = 0; i < count; i++) free(names[i]);
+    free(names);
+    return n;
+}
+
+void hde_store_shots_cache_dir(const char *cache_home, const char *package, char *out, size_t outsz)
+{
+    const char *base = (cache_home && *cache_home) ? cache_home : NULL;
+    char fallback[400];
+    if (!base) {
+        const char *home = getenv("HOME");
+        snprintf(fallback, sizeof fallback, "%s/.cache", (home && *home) ? home : "/tmp");
+        base = fallback;
+    }
+    snprintf(out, outsz, "%s/hde/store/shots/%s", base, (package && *package) ? package : "unknown");
+}
+
+/* The text inside the first <tag …>…</tag> at or after `from`.  `plain` asks for a tag without attributes
+ * (`<name>`), which is the untranslated one.  Returns NULL when the tag is not there. */
+static const char *tag_body(const char *from, const char *tag, int plain, const char **body_end)
+{
+    if (!from || !tag) return NULL;
+    char open[64], close[64];
+    snprintf(open, sizeof open, "<%s", tag);
+    snprintf(close, sizeof close, "</%s>", tag);
+
+    const char *p = from;
+    while ((p = strstr(p, open)) != NULL) {
+        const char *after = p + strlen(open);
+        int is_plain = (*after == '>');
+        if (plain ? is_plain : (*after == '>' || *after == ' ' || *after == '\t' || *after == '\n')) {
+            const char *gt = strchr(after, '>');
+            const char *end = gt ? strstr(gt + 1, close) : NULL;
+            if (end) {
+                if (body_end) *body_end = end;
+                return gt + 1;
+            }
+        }
+        if (plain) break;
+        p = after;
+    }
+    return NULL;
+}
+
+/* The attributes of the first <tag …> at or after `from` (" type=\"cached\" width=\"64\""). */
+static const char *tag_attrs(const char *from, const char *tag, size_t *len)
+{
+    if (len) *len = 0;
+    if (!from || !tag) return NULL;
+    char open[64];
+    snprintf(open, sizeof open, "<%s", tag);
+    const char *p = strstr(from, open);
+    if (!p) return NULL;
+    const char *begin = p + strlen(open);
+    const char *gt = strchr(begin, '>');
+    if (!gt) return NULL;
+    if (len) *len = (size_t)(gt - begin);
+    return begin;
+}
+
+/* Copies the text inside <tag> into out, spaces squeezed.  1 when the tag was there. */
+static int tag_value(const char *from, const char *tag, int plain, char *out, size_t outsz)
+{
+    const char *end = NULL;
+    const char *begin = tag_body(from, tag, plain, &end);
+    if (!begin) return 0;
+    put_range(out, outsz, begin, end);
+    return 1;
+}
+
+int hde_store_parse_appstream(const char *xml, const char *package, HdeStoreAppStream *out)
+{
+    if (!out) return 0;
+    memset(out, 0, sizeof *out);
+    if (!xml) return 0;
+
+    /* The component for this package, else the first one in the file. */
+    const char *first = NULL, *chosen = NULL;
+    const char *p = xml;
+    while ((p = strstr(p, "<component")) != NULL) {
+        const char *end = strstr(p, "</component>");
+        if (!end) break;
+        char name[128] = "";
+        tag_value(p, "pkgname", 0, name, sizeof name);
+        if (!first) first = p;
+        if (package && *package && name[0] && strcmp(name, package) == 0) { chosen = p; break; }
+        p = end + 1;
+    }
+    if (!chosen) chosen = first;
+    if (!chosen) chosen = xml;
+
+    tag_value(chosen, "pkgname", 0, out->package, sizeof out->package);
+    if (!tag_value(chosen, "id", 0, out->app_id, sizeof out->app_id))
+        tag_value(chosen, "id", 1, out->app_id, sizeof out->app_id);
+    if (!tag_value(chosen, "name", 1, out->name, sizeof out->name))
+        tag_value(chosen, "name", 0, out->name, sizeof out->name);
+    tag_value(chosen, "summary", 1, out->summary, sizeof out->summary);
+
+    /* <icon type="cached">/var/cache/…</icon>, <icon type="stock">name</icon>. */
+    const char *icon_end = NULL;
+    const char *icon = tag_body(chosen, "icon", 0, &icon_end);
+    if (icon) {
+        size_t alen = 0;
+        const char *attrs = tag_attrs(chosen, "icon", &alen);
+        char atext[160] = "";
+        if (attrs) put_range(atext, sizeof atext, attrs, attrs + alen);
+        int is_file = strstr(atext, "cached") != NULL || strstr(atext, "local") != NULL;
+        int is_stock = strstr(atext, "stock") != NULL;
+        char text[400];
+        put_range(text, sizeof text, icon, icon_end);
+        if (text[0]) {
+            if (!is_stock && (is_file || text[0] == '/')) {
+                put(out->icon, sizeof out->icon, text);
+                out->icon_is_file = 1;
+            } else {
+                put(out->icon, sizeof out->icon, text);
+                out->icon_is_file = 0;
+            }
+        }
+    }
+
+    /* <screenshots><screenshot><image type="source">…</image>… */
+    const char *shots_begin = strstr(chosen, "<screenshots");
+    const char *shots_end = shots_begin ? strstr(shots_begin, "</screenshots>") : NULL;
+    const char *s = shots_begin;
+    while (shots_begin && shots_end && s && s < shots_end && out->n_shots < HDE_STORE_MAX_SHOTS) {
+        s = strstr(s, "<screenshot");
+        if (!s || s > shots_end) break;
+        const char *closing = strstr(s, "</screenshot>");
+        if (!closing) break;
+        char url[600] = "", plain[600] = "";
+        int have_url = 0, have_plain = 0;
+        const char *img = s;
+        while ((img = strstr(img, "<image")) != NULL && img < closing) {
+            const char *img_end = NULL;
+            const char *text_begin = tag_body(img, "image", 0, &img_end);
+            if (!text_begin || text_begin > closing) break;
+            char text[600];
+            put_range(text, sizeof text, text_begin, img_end);
+            int is_url = (strncmp(text, "http://", 7) == 0 || strncmp(text, "https://", 8) == 0);
+            if (is_url && !have_url) { put(url, sizeof url, text); have_url = 1; }
+            else if (!is_url && !have_plain) { put(plain, sizeof plain, text); have_plain = 1; }
+            /* a source image wins over a thumbnail: take the first, do not look further */
+            break;
+        }
+        if (have_plain || have_url) {
+            HdeStoreShot *shot = &out->shots[out->n_shots];
+            memset(shot, 0, sizeof *shot);
+            put(shot->path, sizeof shot->path, plain);
+            put(shot->url, sizeof shot->url, url);
+            out->n_shots++;
+        }
+        s = closing + 1;
+    }
+
+    return (out->app_id[0] || out->name[0] || out->icon[0] || out->n_shots) ? 1 : 0;
 }

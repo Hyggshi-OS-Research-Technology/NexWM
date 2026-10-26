@@ -101,6 +101,69 @@ int  hde_store_license_from_copyright(const char *text, char *out, size_t outsz)
  * speaks Vietnamese unless the session asks for English (hde_store_speak_vietnamese). */
 const char *hde_store_license_title(const char *license, int vi);
 
+/* ---- the artwork of a package: its icon and the pictures it ships ----
+ * A package name alone buys nothing on screen.  Two kinds of file on a Debian machine say what a program
+ * looks like: the desktop entries in /usr/share/applications name the icon it uses, and the AppStream
+ * metadata (appdata files under /usr/share/metadata, and the catalogue under /var/lib/app-info/xmls)
+ * names the package behind an application and carries its screenshots.  Both are parsed here; nothing in
+ * this file touches a display. */
+
+/* One [Desktop Entry] of /usr/share/applications. */
+typedef struct {
+    char id[160];       /* "org.gnome.Weather.desktop" */
+    char app_id[160];   /* "org.gnome.Weather" */
+    char name[160];     /* Name= ("Weather") */
+    char icon[200];     /* Icon= — an icon name, or a file when it starts with '/' */
+    char exec[200];     /* Exec=, the program only ("gnome-weather") */
+    char package[80];   /* X-HDE-Package=, "" when the entry does not name one */
+} HdeStoreDesktop;
+
+/* Reads the [Desktop Entry] group of a .desktop file.  1 when the entry has an Icon= to show. */
+int hde_store_parse_desktop(const char *text, HdeStoreDesktop *out);
+/* id and app_id from the file name, for when the entry has to be read without one. */
+void hde_store_desktop_id(const char *path, HdeStoreDesktop *d);
+/* 1 when this entry is the program `package` provides.  X-HDE-Package= decides when it is there; without
+ * it the app id is compared to the package name (org.gnome.Weather ↔ gnome-weather, separators and case
+ * ignored, and an application id that ends in the package name counts), then Exec=. */
+int hde_store_desktop_matches_package(const HdeStoreDesktop *d, const char *package);
+
+#define HDE_STORE_MAX_SHOTS 6
+
+/* One screenshot: a file that is here already, or the URL of one that has to be fetched. */
+typedef struct {
+    char path[400];
+    char url[600];
+} HdeStoreShot;
+
+/* An AppStream <component>, reduced to what the detail page shows. */
+typedef struct {
+    char package[80];   /* <pkgname> — the package that provides this application */
+    char app_id[160];   /* <id> ("org.gnome.Weather") */
+    char name[160];     /* <name> */
+    char summary[240];  /* <summary> */
+    char icon[400];     /* <icon>: a file when icon_is_file, otherwise a name for the icon theme */
+    int  icon_is_file;
+    HdeStoreShot shots[HDE_STORE_MAX_SHOTS];
+    int  n_shots;
+} HdeStoreAppStream;
+
+/* Reads the first component of an AppStream file (or a whole catalogue, taking the one whose <pkgname>
+ * is `package`).  Local pictures land in shots[i].path, http(s) ones in shots[i].url.
+ * 1 when a component for `package` (or the first component) was understood. */
+int hde_store_parse_appstream(const char *xml, const char *package, HdeStoreAppStream *out);
+
+/* The first of `names` that exists in one of `dirs`, as name.png / name.svg / name.xpm.
+ * `names` ends with NULL (e.g. "org.gnome.Weather", "gnome-weather"); 1 when a file was found. */
+int hde_store_icon_file(const char *const *dirs, const char *const *names, char *out, size_t outsz);
+
+/* The pictures of one directory (*.png, *.jpg, *.jpeg, *.webp), sorted by name, at most max_shots.
+ * Used for /usr/share/<pkg>/screenshots and for the Store's own cache of fetched screenshots. */
+int hde_store_shots_in_dir(const char *dir, HdeStoreShot *shots, int max_shots);
+
+/* Where the Store keeps the pictures it fetched: $XDG_CACHE_HOME/hde/store/shots/<package> (or
+ * ~/.cache/... when cache_home is empty).  Writes the path; creates nothing. */
+void hde_store_shots_cache_dir(const char *cache_home, const char *package, char *out, size_t outsz);
+
 /* ---- the sources of the machine (/etc/apt/sources.list and .d) ---- */
 typedef struct {
     char types[40];        /* "deb", "deb-src", "deb deb-src" (deb822: "deb") */

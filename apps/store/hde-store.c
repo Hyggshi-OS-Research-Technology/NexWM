@@ -215,16 +215,6 @@ static const char *badge_kind_for_verify(HdeStoreVerify v)
     }
 }
 
-static const char *icon_for_package(const HdeStorePackage *p)
-{
-    if (p->app_id[0]) return p->app_id;
-    if (!strcmp(p->name, "firefox") || !strcmp(p->name, "firefox-esr")) return "firefox";
-    if (strstr(p->name, "libreoffice")) return "libreoffice-writer";
-    if (strstr(p->name, "gimp")) return "gimp";
-    if (strstr(p->name, "vlc")) return "vlc";
-    return "application-x-executable";
-}
-
 /* How far a source of this machine can be trusted: a suite and a host of the distribution itself is
  * verified; anything else somebody added is third party; a Flatpak is outside the .deb trust chain. */
 static HdeStoreVerify verify_for_source(const HdeStoreSourceEntry *s)
@@ -508,6 +498,465 @@ static void package_read_license(HdeStorePackage *p)
     g_free(base);
 }
 
+/* ------------------------------------------------------------------ icons and previews
+ *
+ * A package name is not a picture.  What the Store shows comes from two places on the machine: the desktop
+ * entries in /usr/share/applications (they say which icon the program asks for) and AppStream metadata (it
+ * names the package behind an application, its cached icon and its screenshots).  hde-store-core.c parses
+ * them; the code below finds them, caches them, and turns them into widgets.  When a program has no picture
+ * at all the Store draws a tile with its initial instead of an empty space.
+ */
+
+static GPtrArray *store_desktops;     /* HdeStoreDesktop*, filled once from the application directories */
+static GHashTable *desktop_lookup;    /* package -> HdeStoreDesktop* (or a NULL marker) */
+static GHashTable *store_appstreams;  /* package -> HdeStoreAppStream* (empty when the machine has none) */
+static GHashTable *store_shot_lists;  /* package -> GPtrArray of the pictures that are here now */
+static GHashTable *shots_fetching;    /* package -> how many downloads are running */
+
+static const char *const store_icon_dirs[] = {
+    "/usr/share/icons/hicolor/256x256/apps",
+    "/usr/share/icons/hicolor/128x128/apps",
+    "/usr/share/icons/hicolor/96x96/apps",
+    "/usr/share/icons/hicolor/64x64/apps",
+    "/usr/share/icons/hicolor/48x48/apps",
+    "/usr/share/icons/hicolor/scalable/apps",
+    "/usr/local/share/icons/hicolor/256x256/apps",
+    "/usr/local/share/icons/hicolor/scalable/apps",
+    "/usr/share/pixmaps",
+    "/usr/local/share/pixmaps",
+    NULL
+};
+
+static const char *const store_desktop_dirs[] = {
+    "/usr/share/applications",
+    "/usr/local/share/applications",
+    NULL                                  /* the user's own entries are added at load time */
+};
+
+static void store_desktops_load(void)
+{
+    if (store_desktops) return;
+    store_desktops = g_ptr_array_new_with_free_func(g_free);
+    desktop_lookup = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+    char *user_dir = g_build_filename(g_get_user_data_dir(), "applications", NULL);
+    const char *dirs[4];
+    int n = 0;
+    for (int i = 0; store_desktop_dirs[i]; i++) dirs[n++] = store_desktop_dirs[i];
+    dirs[n++] = user_dir;                 /* last: the user's own entry wins over the system one */
+    dirs[n] = NULL;
+
+    for (int i = 0; dirs[i]; i++) {
+        GDir *d = g_dir_open(dirs[i], 0, NULL);
+        if (!d) continue;
+        const char *name;
+        while ((name = g_dir_read_name(d)) != NULL) {
+            if (!g_str_has_suffix(name, ".desktop")) continue;
+            char *path = g_build_filename(dirs[i], name, NULL);
+            char *text = NULL;
+            if (g_file_get_contents(path, &text, NULL, NULL)) {
+                HdeStoreDesktop *de = g_new0(HdeStoreDesktop, 1);
+                if (hde_store_parse_desktop(text, de)) {
+                    hde_store_desktop_id(path, de);
+                    if (!de->name[0]) g_strlcpy(de->name, de->app_id, sizeof de->name);
+                    g_ptr_array_add(store_desktops, de);
+                } else {
+                    g_free(de);
+                }
+                g_free(text);
+            }
+            g_free(path);
+        }
+        g_dir_close(d);
+    }
+    g_free(user_dir);
+}
+
+/* The desktop entry of a package: the one that says X-HDE-Package= wins, then any that matches the name. */
+static const HdeStoreDesktop *desktop_for(const char *package)
+{
+    store_desktops_load();
+    gpointer cached = NULL;
+    if (g_hash_table_lookup_extended(desktop_lookup, package, NULL, &cached)) return cached;
+
+    const HdeStoreDesktop *fallback = NULL;
+    if (store_desktops) {
+        for (guint i = 0; i < store_desktops->len; i++) {
+            const HdeStoreDesktop *de = g_ptr_array_index(store_desktops, i);
+            if (!hde_store_desktop_matches_package(de, package)) continue;
+            if (de->package[0]) { fallback = de; break; }
+            if (!fallback) fallback = de;
+        }
+    }
+    g_hash_table_insert(desktop_lookup, g_strdup(package), (gpointer)fallback);
+    return fallback;
+}
+
+static gboolean appstream_belongs_to(const HdeStoreAppStream *as, const char *package)
+{
+    if (as->package[0]) return strcmp(as->package, package) == 0;
+    if (!as->app_id[0]) return FALSE;
+    HdeStoreDesktop d;
+    memset(&d, 0, sizeof d);
+    g_strlcpy(d.app_id, as->app_id, sizeof d.app_id);
+    return hde_store_desktop_matches_package(&d, package);
+}
+
+/* Every AppStream file of the machine, read once.  The catalogue is a handful of large files, so the index
+ * only remembers which file names which package; the file itself is read when a page asks for it. */
+static const char *const appstream_dirs[] = {
+    "/usr/share/metadata", "/usr/share/appdata",
+    "/var/lib/app-info/xmls", "/var/lib/swcatalog/xmls", NULL
+};
+
+static GHashTable *appstream_index;   /* package -> path of the file that names it */
+static GHashTable *appstream_texts;   /* path -> the text of that file, a few of them */
+
+static char *read_any(const char *path)
+{
+    char *text = NULL;
+    if (g_str_has_suffix(path, ".gz")) {
+        const char *argv[] = { "gzip", "-dc", path, NULL };
+        text = run_capture(argv, NULL);
+    } else {
+        g_file_get_contents(path, &text, NULL, NULL);
+    }
+    return text;
+}
+
+static char *appstream_text(const char *path)
+{
+    if (!appstream_texts)
+        appstream_texts = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    char *cached = g_hash_table_lookup(appstream_texts, path);
+    if (cached) return cached;
+    if (g_hash_table_size(appstream_texts) >= 4) g_hash_table_remove_all(appstream_texts);
+    char *text = read_any(path);
+    if (!text) return NULL;
+    g_hash_table_insert(appstream_texts, g_strdup(path), text);
+    return text;
+}
+
+static void appstream_index_build(void)
+{
+    if (appstream_index) return;
+    appstream_index = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+
+    for (int i = 0; appstream_dirs[i]; i++) {
+        GDir *d = g_dir_open(appstream_dirs[i], 0, NULL);
+        if (!d) continue;
+        const char *name;
+        while ((name = g_dir_read_name(d)) != NULL) {
+            if (!g_str_has_suffix(name, ".xml") && !g_str_has_suffix(name, ".xml.gz")) continue;
+            char *path = g_build_filename(appstream_dirs[i], name, NULL);
+            char *text = appstream_text(path);
+            if (text) {
+                for (const char *p = strstr(text, "<pkgname>"); p; p = strstr(p + 1, "<pkgname>")) {
+                    const char *begin = p + strlen("<pkgname>");
+                    const char *end = strstr(begin, "</pkgname>");
+                    if (!end) break;
+                    char pkg[96];
+                    size_t n = (size_t)(end - begin);
+                    if (n >= sizeof pkg) n = sizeof pkg - 1;
+                    memcpy(pkg, begin, n);
+                    pkg[n] = 0;
+                    if (pkg[0] && !g_hash_table_contains(appstream_index, pkg))
+                        g_hash_table_insert(appstream_index, g_strdup(pkg), g_strdup(path));
+                }
+            }
+            g_free(path);
+        }
+        g_dir_close(d);
+    }
+}
+
+/* The AppStream component of a package, read once.  Empty when this machine has no catalogue (a fresh
+ * install without `apt update` has none), which is not an error: the icon then comes from the .desktop. */
+static HdeStoreAppStream *appstream_for(const char *package)
+{
+    if (!store_appstreams)
+        store_appstreams = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    HdeStoreAppStream *cached = g_hash_table_lookup(store_appstreams, package);
+    if (cached) return cached;
+
+    appstream_index_build();
+    HdeStoreAppStream *found = NULL;
+
+    const char *path = g_hash_table_lookup(appstream_index, package);
+    if (path) {
+        char *text = appstream_text(path);
+        if (text) {
+            HdeStoreAppStream *as = g_new0(HdeStoreAppStream, 1);
+            if (hde_store_parse_appstream(text, package, as) && appstream_belongs_to(as, package))
+                found = as;
+            else
+                g_free(as);
+        }
+    }
+
+    /* An appdata file of a single application does not have to name its package: look inside those too. */
+    for (int i = 0; appstream_dirs[i] && !found; i++) {
+        GDir *d = g_dir_open(appstream_dirs[i], 0, NULL);
+        if (!d) continue;
+        const char *name;
+        while ((name = g_dir_read_name(d)) != NULL && !found) {
+            if (!g_str_has_suffix(name, ".xml")) continue;      /* the gz files are the catalogue, indexed above */
+            char *file = g_build_filename(appstream_dirs[i], name, NULL);
+            if (g_strcmp0(file, path) != 0) {
+                char *text = appstream_text(file);
+                if (text) {
+                    HdeStoreAppStream *as = g_new0(HdeStoreAppStream, 1);
+                    if (hde_store_parse_appstream(text, package, as) && appstream_belongs_to(as, package))
+                        found = as;
+                    else
+                        g_free(as);
+                }
+            }
+            g_free(file);
+        }
+        g_dir_close(d);
+    }
+
+    g_hash_table_insert(store_appstreams, g_strdup(package), found ? found : g_new0(HdeStoreAppStream, 1));
+    return g_hash_table_lookup(store_appstreams, package);
+}
+
+/* The first UTF-8 character of a name, in upper case when it is ASCII — what goes in the tile. */
+static void initial_of(const char *text, char *out, size_t outsz)
+{
+    if (outsz < 2) return;
+    out[0] = 0;
+    if (!text || !*text) { g_strlcpy(out, "?", outsz); return; }
+    unsigned char c = (unsigned char)text[0];
+    size_t len = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2 : ((c & 0xF0) == 0xE0) ? 3 : 4;
+    if (len >= outsz) len = outsz - 1;
+    memcpy(out, text, len);
+    out[len] = 0;
+    if (len == 1 && out[0] >= 'a' && out[0] <= 'z') out[0] = (char)(out[0] - 'a' + 'A');
+}
+
+static GtkWidget *tile_icon(const char *name, int pixel)
+{
+    char letter[16];
+    initial_of(name, letter, sizeof letter);
+
+    GtkWidget *tile = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_size_request(tile, pixel, pixel);
+    gtk_widget_set_valign(tile, GTK_ALIGN_CENTER);
+    gtk_style_context_add_class(gtk_widget_get_style_context(tile), "store-tile");
+    GtkWidget *l = gtk_label_new(letter);
+    gtk_style_context_add_class(gtk_widget_get_style_context(l), "store-tile-letter");
+    gtk_widget_set_halign(l, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(l, GTK_ALIGN_CENTER);
+    gtk_widget_set_vexpand(l, TRUE);
+    gtk_box_pack_start(GTK_BOX(tile), l, TRUE, TRUE, 0);
+    return tile;
+}
+
+static GtkWidget *icon_from_name(const char *name, int pixel)
+{
+    GtkWidget *img = gtk_image_new_from_icon_name(name, GTK_ICON_SIZE_DIALOG);
+    gtk_image_set_pixel_size(GTK_IMAGE(img), pixel);
+    return img;
+}
+
+/* The icon of a package, at `pixel` pixels.  `deep` also reads the AppStream catalogue (slow: it is only
+ * worth it for the page that is open, not for every row of a list). */
+static GtkWidget *package_icon(const HdeStorePackage *p, int pixel, int deep)
+{
+    const char *names[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+    int n = 0;
+    const HdeStoreAppStream *as = deep ? appstream_for(p->name) : NULL;
+    const HdeStoreDesktop *de = desktop_for(p->name);
+
+    if (as && as->icon[0]) names[n++] = as->icon;
+    if (de && de->icon[0]) names[n++] = de->icon;
+    if (p->app_id[0] && strcmp(p->app_id, p->name)) names[n++] = p->app_id;
+    names[n++] = p->name;
+
+    char path[600];
+    if (hde_store_icon_file(store_icon_dirs, (const char *const *)names, path, sizeof path)) {
+        GtkWidget *img = gtk_image_new_from_file(path);
+        gtk_image_set_pixel_size(GTK_IMAGE(img), pixel);
+        return img;
+    }
+    GtkIconTheme *theme = gtk_icon_theme_get_default();
+    for (int i = 0; i < n; i++) {
+        if (names[i][0] == '/' || !names[i][0]) continue;
+        if (gtk_icon_theme_has_icon(theme, names[i])) return icon_from_name(names[i], pixel);
+    }
+    return tile_icon((de && de->name[0]) ? de->name : p->name, pixel);
+}
+
+/* ---- the pictures the application ships, or the ones the Store fetched for it ---- */
+
+static void shot_list_free(gpointer data)
+{
+    g_ptr_array_free(data, TRUE);
+}
+
+static GPtrArray *shots_for(const HdeStorePackage *p)
+{
+    if (!store_shot_lists)
+        store_shot_lists = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, shot_list_free);
+    GPtrArray *list = g_hash_table_lookup(store_shot_lists, p->name);
+    if (list) return list;
+
+    list = g_ptr_array_new_with_free_func(g_free);
+    const HdeStoreAppStream *as = appstream_for(p->name);
+    if (as) {
+        for (int i = 0; i < as->n_shots; i++)
+            if (as->shots[i].path[0] && g_file_test(as->shots[i].path, G_FILE_TEST_EXISTS))
+                g_ptr_array_add(list, g_strdup(as->shots[i].path));
+    }
+
+    const char *bases[] = { "/usr/share", "/usr/local/share", "/usr/share/doc", NULL };
+    const char *subs[] = { "screenshots", "screenshot", "images", NULL };
+    for (int b = 0; bases[b] && list->len < HDE_STORE_MAX_SHOTS; b++) {
+        for (int u = 0; subs[u] && list->len < HDE_STORE_MAX_SHOTS; u++) {
+            char *dir = g_build_filename(bases[b], p->name, subs[u], NULL);
+            HdeStoreShot local[HDE_STORE_MAX_SHOTS];
+            int got = hde_store_shots_in_dir(dir, local, HDE_STORE_MAX_SHOTS);
+            for (int j = 0; j < got && list->len < HDE_STORE_MAX_SHOTS; j++)
+                g_ptr_array_add(list, g_strdup(local[j].path));
+            g_free(dir);
+        }
+    }
+    char cache[600];
+    hde_store_shots_cache_dir(g_getenv("XDG_CACHE_HOME"), p->name, cache, sizeof cache);
+    if (list->len < HDE_STORE_MAX_SHOTS) {
+        HdeStoreShot local[HDE_STORE_MAX_SHOTS];
+        int got = hde_store_shots_in_dir(cache, local, HDE_STORE_MAX_SHOTS);
+        for (int j = 0; j < got && list->len < HDE_STORE_MAX_SHOTS; j++)
+            g_ptr_array_add(list, g_strdup(local[j].path));
+    }
+    g_hash_table_insert(store_shot_lists, g_strdup(p->name), list);
+    return list;
+}
+
+static void on_shot_fetched(GPid pid, gint status, gpointer data)
+{
+    (void)status;
+    char *package = data;
+    g_spawn_close_pid(pid);
+
+    int left = GPOINTER_TO_INT(g_hash_table_lookup(shots_fetching, package)) - 1;
+    if (left > 0) {
+        g_hash_table_insert(shots_fetching, g_strdup(package), GINT_TO_POINTER(left));
+    } else {
+        g_hash_table_remove(shots_fetching, package);
+        if (store_shot_lists) g_hash_table_remove(store_shot_lists, package);   /* read the cache again */
+        if (detail && !strcmp(detail->name, package)) rebuild_detail();
+    }
+    g_free(package);
+}
+
+/* Screenshots on a Debian machine are mostly URLs.  Fetch the first ones into the Store's cache with curl or
+ * wget (the Store already runs apt-get and gzip the same way) and rebuild the page when they are here. */
+static void fetch_shots(const HdeStorePackage *p)
+{
+    if (!store_appstreams) return;
+    if (!shots_fetching) shots_fetching = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    if (g_hash_table_lookup(shots_fetching, p->name)) return;      /* already on their way */
+
+    HdeStoreAppStream *as = appstream_for(p->name);
+    if (!as || !as->n_shots) return;
+
+    const char *tool = g_find_program_in_path("curl") ? "curl"
+                     : g_find_program_in_path("wget") ? "wget" : NULL;
+    if (!tool) return;
+
+    char dir[600];
+    hde_store_shots_cache_dir(g_getenv("XDG_CACHE_HOME"), p->name, dir, sizeof dir);
+    if (g_mkdir_with_parents(dir, 0700) != 0) return;
+    gboolean curl = !strcmp(tool, "curl");
+
+    int started = 0;
+    for (int i = 0; i < as->n_shots && started < 2; i++) {
+        if (!as->shots[i].url[0]) continue;
+        char *out = g_strdup_printf("%s/%d.png", dir, i + 1);
+        if (g_file_test(out, G_FILE_TEST_EXISTS)) { g_free(out); continue; }
+
+        const char *argv[10];
+        int n = 0;
+        argv[n++] = tool;
+        if (curl) {
+            argv[n++] = "-fsSL"; argv[n++] = "--max-time"; argv[n++] = "25"; argv[n++] = "-o";
+        } else {
+            argv[n++] = "-q"; argv[n++] = "-T"; argv[n++] = "25"; argv[n++] = "-O";
+        }
+        argv[n++] = out;
+        argv[n++] = as->shots[i].url;
+        argv[n] = NULL;
+
+        GPid pid = 0;
+        if (g_spawn_async(NULL, (gchar **)argv, NULL, G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
+                          NULL, NULL, &pid, NULL)) {
+            int running = GPOINTER_TO_INT(g_hash_table_lookup(shots_fetching, p->name)) + 1;
+            g_hash_table_insert(shots_fetching, g_strdup(p->name), GINT_TO_POINTER(running));
+            g_child_watch_add(pid, on_shot_fetched, g_strdup(p->name));
+            started++;
+        }
+        g_free(out);
+    }
+}
+
+static void on_shot_clicked(GtkButton *button, gpointer data)
+{
+    (void)data;
+    const char *path = g_object_get_data(G_OBJECT(button), "store-shot-path");
+    if (!path) return;
+    GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, 1200, 800, TRUE, NULL);
+    if (!pb) return;
+
+    GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(win), tr("Screenshot", "Ảnh xem trước"));
+    gtk_window_set_default_size(GTK_WINDOW(win), gdk_pixbuf_get_width(pb) + 24, gdk_pixbuf_get_height(pb) + 24);
+    if (main_win) gtk_window_set_transient_for(GTK_WINDOW(win), GTK_WINDOW(main_win));
+    GtkWidget *img = gtk_image_new_from_pixbuf(pb);
+    g_object_unref(pb);
+    gtk_container_add(GTK_CONTAINER(win), img);
+    gtk_widget_show_all(win);
+}
+
+/* The row of pictures of the detail page.  NULL when the application has no picture at all. */
+static GtkWidget *shots_strip(HdeStorePackage *p)
+{
+    GPtrArray *shots = shots_for(p);
+    if (!shots->len) {
+        const HdeStoreAppStream *as = appstream_for(p->name);
+        if (as && as->n_shots) {
+            fetch_shots(p);
+            return label_with_class(tr("Fetching the screenshots of this application…",
+                                       "Đang tải ảnh xem trước của ứng dụng này…"), "store-row-sub");
+        }
+        return NULL;
+    }
+
+    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+    gtk_widget_set_size_request(scroll, -1, 190);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 2);
+    for (guint i = 0; i < shots->len; i++) {
+        const char *path = g_ptr_array_index(shots, i);
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, 320, 180, TRUE, NULL);
+        if (!pb) continue;                     /* not a picture after all (a broken download) */
+        GtkWidget *button = gtk_button_new();
+        gtk_button_set_relief(GTK_BUTTON(button), GTK_RELIEF_NONE);
+        gtk_style_context_add_class(gtk_widget_get_style_context(button), "store-shot");
+        gtk_widget_set_tooltip_text(button, tr("Click to see it larger", "Bấm để xem lớn hơn"));
+        gtk_container_add(GTK_CONTAINER(button), gtk_image_new_from_pixbuf(pb));
+        g_object_unref(pb);
+        g_object_set_data_full(G_OBJECT(button), "store-shot-path", g_strdup(path), g_free);
+        g_signal_connect(button, "clicked", G_CALLBACK(on_shot_clicked), NULL);
+        gtk_box_pack_start(GTK_BOX(box), button, FALSE, FALSE, 0);
+    }
+    gtk_container_add(GTK_CONTAINER(scroll), box);
+    return scroll;
+}
+
 /* ------------------------------------------------------------------ rows */
 
 static GtkWidget *package_row(HdeStorePackage *p)
@@ -519,8 +968,7 @@ static GtkWidget *package_row(HdeStorePackage *p)
     gtk_container_set_border_width(GTK_CONTAINER(h), 9);
     gtk_widget_set_valign(h, GTK_ALIGN_CENTER);
 
-    GtkWidget *icon = gtk_image_new_from_icon_name(icon_for_package(p), GTK_ICON_SIZE_DND);
-    gtk_image_set_pixel_size(GTK_IMAGE(icon), 34);
+    GtkWidget *icon = package_icon(p, 34, 0);
     gtk_widget_set_valign(icon, GTK_ALIGN_CENTER);
     gtk_box_pack_start(GTK_BOX(h), icon, FALSE, FALSE, 0);
 
@@ -901,8 +1349,7 @@ static void rebuild_detail(void)
     GtkWidget *hero = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 18);
     gtk_style_context_add_class(gtk_widget_get_style_context(hero), "store-hero");
 
-    GtkWidget *icon = gtk_image_new_from_icon_name(icon_for_package(p), GTK_ICON_SIZE_DIALOG);
-    gtk_image_set_pixel_size(GTK_IMAGE(icon), 72);
+    GtkWidget *icon = package_icon(p, 72, 1);
     gtk_widget_set_valign(icon, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(hero), icon, FALSE, FALSE, 0);
 
@@ -966,6 +1413,17 @@ static void rebuild_detail(void)
     }
     gtk_box_pack_start(GTK_BOX(hero), actions, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(detail_inner), hero, FALSE, FALSE, 0);
+
+    /* ---- the pictures of the application: what is on disk now, or what is being fetched ---- */
+    gtk_box_pack_start(GTK_BOX(detail_inner), section_heading(tr("Screenshots", "Ảnh xem trước")),
+                       FALSE, FALSE, 0);
+    GtkWidget *strip = shots_strip(p);
+    gtk_box_pack_start(GTK_BOX(detail_inner),
+                       strip ? strip
+                             : label_with_class(tr("This application does not come with a screenshot.",
+                                                   "Ứng dụng này không kèm ảnh xem trước."),
+                                                "store-row-sub"),
+                       FALSE, FALSE, 0);
 
     /* ---- version, source, license, verification: what a store must say about a package ---- */
     gtk_box_pack_start(GTK_BOX(detail_inner), section_heading(tr("Package", "Gói phần mềm")), FALSE, FALSE, 0);
@@ -1986,6 +2444,10 @@ static void apply_store_css(void)
         ".store-card-flat { background: alpha(@theme_fg_color, 0.03);"
         "  border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 12px; }\n"
         ".store-card-flat row { border-bottom: 1px solid alpha(@theme_fg_color, 0.07); }\n"
+        ".store-tile { background: alpha(@theme_fg_color, 0.12); border-radius: 9px; }\n"
+        ".store-tile-letter { font-size: 15px; font-weight: 700; color: alpha(@theme_fg_color, 0.72); }\n"
+        ".store-shot { padding: 0; border: 1px solid alpha(@theme_fg_color, 0.12); border-radius: 10px; }\n"
+        ".store-shot:hover { border-color: alpha(@theme_fg_color, 0.28); }\n"
         ".store-hero { background: alpha(@theme_fg_color, 0.04);"
         "  border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 14px; padding: 18px; }\n"
         ".store-banner { background-image: linear-gradient(135deg, #3584e4, #9141ac);"
