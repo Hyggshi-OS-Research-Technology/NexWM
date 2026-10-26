@@ -553,7 +553,7 @@ int main(void)
     hde_store_shots_cache_dir("", "gnome-weather", cache, sizeof cache);
     check(strstr(cache, "/hde/store/shots/gnome-weather") != NULL,
           "without XDG_CACHE_HOME the home cache is used");
-    check_int(system("rm -rf /tmp/store-test-artwork") == 0 || 1, 1, "the fixture is cleaned up");
+    check_int(system("rm -rf /tmp/store-test-artwork"), 0, "the fixture is cleaned up");
 
     /* AppStream metadata: the package behind an application, its icon and its screenshots. */
     const char *appstream =

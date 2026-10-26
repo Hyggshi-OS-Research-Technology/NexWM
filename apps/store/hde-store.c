@@ -806,9 +806,12 @@ static GtkWidget *package_icon(const HdeStorePackage *p, int pixel, int deep)
 
     char path[600];
     if (hde_store_icon_file(store_icon_dirs(), (const char *const *)names, path, sizeof path)) {
-        GtkWidget *img = gtk_image_new_from_file(path);
-        gtk_image_set_pixel_size(GTK_IMAGE(img), pixel);
-        return img;
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, pixel, pixel, TRUE, NULL);
+        if (pb) {
+            GtkWidget *img = gtk_image_new_from_pixbuf(pb);
+            g_object_unref(pb);
+            return img;
+        }
     }
     GtkIconTheme *theme = gtk_icon_theme_get_default();
     for (int i = 0; i < n; i++) {
