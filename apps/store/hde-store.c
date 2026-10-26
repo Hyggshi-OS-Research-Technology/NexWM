@@ -36,6 +36,8 @@
 
 static GtkWidget *main_win;
 static GtkWidget *stack;
+static GtkWidget *back_button;
+static char *detail_return_page;
 static GtkWidget *sidebar;
 /* NexSDK's check of a local .deb (nexsdk/pkg.h): the same findings `hde-pkg-check` prints, so the Store can
  * say what is wrong with a file BEFORE it is installed instead of after. */
@@ -314,6 +316,11 @@ static gint cmp_by_score(gconstpointer a, gconstpointer b)
     const HdeStorePackage *pb = *(HdeStorePackage * const *)b;
     int sa = hde_store_match(pa, search_query);
     int sb = hde_store_match(pb, search_query);
+    /* Desktop applications first; technical packages remain searchable below them. */
+    for (int i = 0; curated_apps[i]; i++) {
+        if (!strcmp(pa->name, curated_apps[i])) sa += 8;
+        if (!strcmp(pb->name, curated_apps[i])) sb += 8;
+    }
     if (sa != sb) return sb - sa;
     if (pa->installed != pb->installed) return pb->installed - pa->installed;
     return cmp_by_name(a, b);
@@ -968,13 +975,13 @@ static GtkWidget *shots_strip(HdeStorePackage *p)
 
     GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
-    gtk_widget_set_size_request(scroll, -1, 190);
+    gtk_widget_set_size_request(scroll, -1, 420);
 
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_container_set_border_width(GTK_CONTAINER(box), 2);
     for (guint i = 0; i < shots->len; i++) {
         const char *path = g_ptr_array_index(shots, i);
-        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, 320, 180, TRUE, NULL);
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, 800, 400, TRUE, NULL);
         if (!pb) continue;                     /* not a picture after all (a broken download) */
         GtkWidget *button = gtk_button_new();
         gtk_button_set_relief(GTK_BUTTON(button), GTK_RELIEF_NONE);
@@ -1009,7 +1016,8 @@ static GtkWidget *package_row(HdeStorePackage *p)
     gtk_widget_set_valign(v, GTK_ALIGN_CENTER);
     gtk_widget_set_hexpand(v, TRUE);
 
-    const char *title = (p->summary[0] && strcmp(p->summary, p->name)) ? p->summary : p->name;
+    const HdeStoreDesktop *de = desktop_for(p->name);
+    const char *title = de && de->name[0] ? de->name : p->name;
     GtkWidget *title_l = label_with_class(title, "store-row-title");
     gtk_label_set_ellipsize(GTK_LABEL(title_l), PANGO_ELLIPSIZE_END);
     gtk_label_set_max_width_chars(GTK_LABEL(title_l), 58);
@@ -1267,7 +1275,20 @@ static gboolean store_job_run(const char *title, const char *headline, const cha
 static void show_page(const char *name)
 {
     if (!stack) return;
+    if (!strcmp(name, "detail") &&
+        g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(stack)), "detail")) {
+        g_free(detail_return_page);
+        detail_return_page = g_strdup(gtk_stack_get_visible_child_name(GTK_STACK(stack)));
+    }
+    if (back_button) gtk_widget_set_sensitive(back_button, !strcmp(name, "detail"));
     gtk_stack_set_visible_child_name(GTK_STACK(stack), name);
+}
+
+static void on_back_clicked(GtkButton *button, gpointer data)
+{
+    (void)button;
+    (void)data;
+    show_page(detail_return_page ? detail_return_page : "discover");
 }
 
 static GtkWidget *page_scroller(GtkWidget **inner_out)
@@ -1382,13 +1403,17 @@ static void rebuild_detail(void)
     GtkWidget *hero = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 18);
     gtk_style_context_add_class(gtk_widget_get_style_context(hero), "store-hero");
 
-    GtkWidget *icon = package_icon(p, 72, 1);
+    GtkWidget *icon = package_icon(p, 112, 1);
     gtk_widget_set_valign(icon, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(hero), icon, FALSE, FALSE, 0);
 
     GtkWidget *head = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     gtk_widget_set_hexpand(head, TRUE);
-    gtk_box_pack_start(GTK_BOX(head), label_with_class(p->name, "store-h1"), FALSE, FALSE, 0);
+    const HdeStoreAppStream *app = appstream_for(p->name);
+    const HdeStoreDesktop *entry = desktop_for(p->name);
+    const char *app_name = app && app->name[0] ? app->name
+                         : entry && entry->name[0] ? entry->name : p->name;
+    gtk_box_pack_start(GTK_BOX(head), label_with_class(app_name, "store-h1"), FALSE, FALSE, 0);
     GtkWidget *sum = label_with_class(p->summary, "store-lead");
     gtk_label_set_line_wrap(GTK_LABEL(sum), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(sum), 62);
@@ -2145,8 +2170,10 @@ static void rebuild_results(void)
 
 static void do_search(const char *query)
 {
+    /* query may point into search_query itself when refreshing. */
+    char *new_query = g_strdup(query ? query : "");
     g_free(search_query);
-    search_query = g_strdup(query ? query : "");
+    search_query = new_query;
 
     pkgs_clear(&pkgs_search);
     pkgs_search = pkgs_new();
@@ -2167,7 +2194,7 @@ static void do_search(const char *query)
 
     GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     char **lines = g_strsplit(out, "\n", -1);
-    int max = 120;
+    int max = 2000; /* rank before limiting: APT output is alphabetic, not relevance ordered */
     for (guint i = 0; lines[i] && max > 0; i++) {
         HdeStorePackage tmp;
         if (!hde_store_parse_apt_search_line(lines[i], &tmp)) continue;
@@ -2481,7 +2508,7 @@ static void apply_store_css(void)
         ".store-tile-letter { font-size: 15px; font-weight: 700; color: alpha(@theme_fg_color, 0.72); }\n"
         ".store-shot { padding: 0; border: 1px solid alpha(@theme_fg_color, 0.12); border-radius: 10px; }\n"
         ".store-shot:hover { border-color: alpha(@theme_fg_color, 0.28); }\n"
-        ".store-hero { background: alpha(@theme_fg_color, 0.04);"
+        ".store-hero { background-image: linear-gradient(120deg, alpha(@theme_selected_bg_color, 0.30), alpha(@theme_fg_color, 0.04));"
         "  border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 14px; padding: 18px; }\n"
         ".store-banner { background-image: linear-gradient(135deg, #3584e4, #9141ac);"
         "  border-radius: 16px; padding: 20px; }\n"
@@ -2534,6 +2561,8 @@ static void free_all(void)
     }
     g_free(detail);
     detail = NULL;
+    g_free(detail_return_page);
+    detail_return_page = NULL;
     g_free(search_query);
     search_query = NULL;
 }
@@ -2611,6 +2640,12 @@ int main(int argc, char **argv)
     gtk_header_bar_set_title(GTK_HEADER_BAR(header), tr("Store", "Cửa hàng"));
     gtk_header_bar_set_subtitle(GTK_HEADER_BAR(header), tr("Install, update and remove software",
                                                           "Cài, cập nhật và gỡ phần mềm"));
+
+    back_button = gtk_button_new_from_icon_name("go-previous-symbolic", GTK_ICON_SIZE_BUTTON);
+    gtk_widget_set_tooltip_text(back_button, tr("Back to the list", "Quay lại danh sách"));
+    gtk_widget_set_sensitive(back_button, FALSE);
+    g_signal_connect(back_button, "clicked", G_CALLBACK(on_back_clicked), NULL);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), back_button);
 
     search_entry = gtk_search_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(search_entry), tr("Search apps…", "Tìm ứng dụng…"));
