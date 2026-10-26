@@ -243,6 +243,7 @@ components: $(BUILD)/hde-desktop $(BUILD)/hde-panel $(BUILD)/hde-settings $(BUIL
             $(BUILD)/hde-screenshot $(BUILD)/hde-files $(BUILD)/hde-media $(BUILD)/hde-choose $(BUILD)/hde-cmd \
             $(BUILD)/hde-clock $(BUILD)/hde-camera $(BUILD)/hde-calc $(BUILD)/hde-editor $(BUILD)/hde-resources \
             $(BUILD)/hde-partition $(BUILD)/hde-weather $(BUILD)/hde-calendar $(BUILD)/hde-logs $(BUILD)/hde-widgets $(BUILD)/nexwm \
+            $(BUILD)/hde-store $(BUILD)/hde-nexdiag $(BUILD)/nexdiag $(BUILD)/hde-pkg-check \
             $(HDE_LOCK_TARGET) $(IDLE_TARGET) $(AUTOMOUNT_TARGET) $(KEYRING_TARGET)
 
 $(BUILD)/hde-desktop: $(DESKTOP_SRC) $(HDE_HEADERS) | $(BUILD)
@@ -645,7 +646,8 @@ check-install:
 	if [ -n "$$bad" ]; then echo "ERROR: installed session/application metadata points at /usr/local:" >&2; echo "$$bad" >&2; exit 1; fi
 	@echo "check-install: $(PREFIX) contains every required program; session metadata matches the built features"
 
-install: all
+# $(BUILD)/nexsdk.pc is generated (the prefix and the version in it), so install builds it explicitly
+install: all $(BUILD)/nexsdk.pc
 	@$(MAKE) --no-print-directory check-components
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(XSESSIONS) $(DESTDIR)$(APPS_DIR)
 	for b in $(REQUIRED_PROGRAMS); do install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; done
@@ -659,7 +661,7 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/share/nexsdk/examples $(DESTDIR)$(PREFIX)/share/nexsdk/templates
 	install -m644 nexsdk/examples/*.c nexsdk/examples/Makefile nexsdk/README.md $(DESTDIR)$(PREFIX)/share/nexsdk/examples/
 	cp -r nexsdk/templates/hello-c nexsdk/templates/gtk-app nexsdk/templates/library $(DESTDIR)$(PREFIX)/share/nexsdk/templates/
-	@find $(DESTDIR)$(PREFIX)/share/nexsdk/templates -name '*.sh' -exec chmod 755 {} + 2>/dev/null || true
+	@find $(DESTDIR)$(PREFIX)/share/nexsdk/templates \( -name '*.sh' -o -name rules \) -exec chmod 755 {} + 2>/dev/null || true
 	install -d $(DESTDIR)$(PREFIX)/share/doc/nexsdk
 	install -m644 nexsdk/README.md $(DESTDIR)$(PREFIX)/share/doc/nexsdk/README.md
 	install -d $(DESTDIR)$(PREFIX)/share/hde/pam
