@@ -513,23 +513,49 @@ static GHashTable *store_appstreams;  /* package -> HdeStoreAppStream* (empty wh
 static GHashTable *store_shot_lists;  /* package -> GPtrArray of the pictures that are here now */
 static GHashTable *shots_fetching;    /* package -> how many downloads are running */
 
-static const char *const store_icon_dirs[] = {
-    "/usr/share/icons/hicolor/256x256/apps",
-    "/usr/share/icons/hicolor/128x128/apps",
-    "/usr/share/icons/hicolor/96x96/apps",
-    "/usr/share/icons/hicolor/64x64/apps",
-    "/usr/share/icons/hicolor/48x48/apps",
-    "/usr/share/icons/hicolor/scalable/apps",
-    "/usr/local/share/icons/hicolor/256x256/apps",
-    "/usr/local/share/icons/hicolor/scalable/apps",
-    "/usr/share/pixmaps",
-    "/usr/local/share/pixmaps",
-    NULL
-};
+/* Where an icon can be: the hicolor theme (which every theme inherits), the loose pictures of /usr/share/
+ * pixmaps, and what Flatpak exports for the applications it installed. */
+static GPtrArray *icon_dirs;   /* char*, built once */
+
+static void icon_dirs_build(void)
+{
+    if (icon_dirs) return;
+    icon_dirs = g_ptr_array_new_with_free_func(g_free);
+    static const char *const sizes[] = { "256x256", "128x128", "96x96", "64x64", "48x48", "scalable", NULL };
+    static const char *const themes[] = {
+        "/usr/share/icons/hicolor", "/usr/local/share/icons/hicolor",
+        "/var/lib/flatpak/exports/share/icons/hicolor", NULL
+    };
+    for (int t = 0; themes[t]; t++)
+        for (int s = 0; sizes[s]; s++) {
+            char *dir = g_strdup_printf("%s/%s/apps", themes[t], sizes[s]);
+            g_ptr_array_add(icon_dirs, dir);
+        }
+    g_ptr_array_add(icon_dirs, g_build_filename("/usr/share", "pixmaps", NULL));
+    g_ptr_array_add(icon_dirs, g_build_filename("/usr/local/share", "pixmaps", NULL));
+
+    char *user_data = g_build_filename(g_get_user_data_dir(), "flatpak", "exports", "share", "icons",
+                                       "hicolor", NULL);
+    for (int s = 0; sizes[s]; s++) {
+        char *dir = g_strdup_printf("%s/%s/apps", user_data, sizes[s]);
+        g_ptr_array_add(icon_dirs, dir);
+    }
+    g_free(user_data);
+}
+
+static const char *const *store_icon_dirs(void)
+{
+    icon_dirs_build();
+    /* hde_store_icon_file() walks a NULL-terminated array: keep one behind the last element */
+    if (!icon_dirs->len || g_ptr_array_index(icon_dirs, icon_dirs->len - 1) != NULL)
+        g_ptr_array_add(icon_dirs, NULL);
+    return (const char *const *)icon_dirs->pdata;
+}
 
 static const char *const store_desktop_dirs[] = {
     "/usr/share/applications",
     "/usr/local/share/applications",
+    "/var/lib/flatpak/exports/share/applications",
     NULL                                  /* the user's own entries are added at load time */
 };
 
@@ -540,9 +566,12 @@ static void store_desktops_load(void)
     desktop_lookup = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 
     char *user_dir = g_build_filename(g_get_user_data_dir(), "applications", NULL);
-    const char *dirs[4];
+    char *flatpak_dir = g_build_filename(g_get_user_data_dir(), "flatpak", "exports", "share",
+                                         "applications", NULL);
+    const char *dirs[6];
     int n = 0;
     for (int i = 0; store_desktop_dirs[i]; i++) dirs[n++] = store_desktop_dirs[i];
+    dirs[n++] = flatpak_dir;
     dirs[n++] = user_dir;                 /* last: the user's own entry wins over the system one */
     dirs[n] = NULL;
 
@@ -569,6 +598,7 @@ static void store_desktops_load(void)
         }
         g_dir_close(d);
     }
+    g_free(flatpak_dir);
     g_free(user_dir);
 }
 
@@ -775,7 +805,7 @@ static GtkWidget *package_icon(const HdeStorePackage *p, int pixel, int deep)
     names[n++] = p->name;
 
     char path[600];
-    if (hde_store_icon_file(store_icon_dirs, (const char *const *)names, path, sizeof path)) {
+    if (hde_store_icon_file(store_icon_dirs(), (const char *const *)names, path, sizeof path)) {
         GtkWidget *img = gtk_image_new_from_file(path);
         gtk_image_set_pixel_size(GTK_IMAGE(img), pixel);
         return img;
@@ -811,7 +841,7 @@ static GPtrArray *shots_for(const HdeStorePackage *p)
     }
 
     const char *bases[] = { "/usr/share", "/usr/local/share", "/usr/share/doc", NULL };
-    const char *subs[] = { "screenshots", "screenshot", "images", NULL };
+    const char *subs[] = { "screenshots", "screenshot", NULL };
     for (int b = 0; bases[b] && list->len < HDE_STORE_MAX_SHOTS; b++) {
         for (int u = 0; subs[u] && list->len < HDE_STORE_MAX_SHOTS; u++) {
             char *dir = g_build_filename(bases[b], p->name, subs[u], NULL);
