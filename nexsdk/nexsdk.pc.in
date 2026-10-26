@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: nexsdk
+Description: The toolkit for building applications for Hyggshi OS and HDE (system, notifications, settings, package checks)
+Version: @NEXSDK_VERSION@
+Libs: -L${libdir} -lnexsdk
+Cflags: -I${includedir}

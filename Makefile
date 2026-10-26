@@ -1,4 +1,5 @@
 CC ?= cc
+AR ?= ar
 CFLAGS ?= -O2 -Wall -Wextra -Wpedantic -std=c11
 CPPFLAGS += -Ihde-core/include -Isrc -Iapps/widgets -Iapps/calc -Iapps/calendar -Iapps/weather -Iapps/logs
 BUILD ?= build
@@ -187,6 +188,13 @@ CMD_HEADERS=$(wildcard hde-cmd/src/*.h)
 # glance whether the programs that run are the ones just built. Rewritten only when it changes (then only the three
 # programs that show it are rebuilt). See scripts/hde-version.sh.
 VERSION_H = $(BUILD)/hde-version.h
+# NexSDK (nexsdk/): what a program needs to be an application for Hyggshi OS — the system it runs on, a
+# notification without a shell, the desktop's settings without losing the comments in them, and the .deb
+# check that keeps a package from being published with a missing Depends.  Plain C, no glib, no GTK: it can
+# be used from a GTK program, a command line tool and the unit test alike.
+NEXSDK_SRC=$(wildcard nexsdk/src/*.c)
+NEXSDK_HEADERS=$(wildcard nexsdk/include/nexsdk/*.h)
+NEXSDK_OBJ=$(patsubst nexsdk/src/%.c,$(BUILD)/nexsdk-%.o,$(NEXSDK_SRC))
 # NexWM (nexwm/), the window manager of HDE: one program for both, told apart by --x11 (the window manager, XCB) and
 # --wayland (the compositor, wlroots). nexwm/src/config.c is the part that needs neither of them (nexwm.conf).
 NEXWM_SRC=$(wildcard nexwm/src/*.c)
@@ -195,7 +203,7 @@ NEXWM_HEADERS=$(wildcard nexwm/src/*.h)
 PROGRAMS=hde-session hde-desktop hde-panel hde-settings hde-hotkeys hde-xsettings hde-screenshot hde-files hde-media \
          hde-choose hde-cmd hde-clock hde-camera hde-calc hde-editor hde-resources hde-partition hde-weather \
          hde-calendar hde-logs hde-widgets nexwm hde-lock hde-idle hde-automount hde-keyring \
-         hde-store hde-nexdiag nexdiag
+         hde-store hde-nexdiag nexdiag hde-pkg-check
 # A complete HDE install needs every one of these. The optional dependencies may make `make all` skip one; install
 # and the distribution package must not do that silently.
 REQUIRED_PROGRAMS=$(PROGRAMS)
@@ -330,6 +338,18 @@ $(BUILD)/nexdiag: nexdiag/cli.c nexdiag/nexdiag-core.c nexdiag/nexdiag-core.h | 
 $(BUILD)/hde-nexdiag: nexdiag/gui.c nexdiag/nexdiag-core.c nexdiag/nexdiag-core.h src/hde-theme.c src/hde-theme.h \
                       src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -Inexdiag -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+# NexSDK: the static library the templates and the examples link against (`pkg-config --libs nexsdk` once
+# installed).  Nothing in it needs a toolkit, so it also builds on a machine without libgtk-3-dev.
+$(BUILD)/nexsdk-%.o: nexsdk/src/%.c $(NEXSDK_HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) -Inexsdk/include -c -o $@ $<
+$(BUILD)/libnexsdk.a: $(NEXSDK_OBJ)
+	$(AR) rcs $@ $^
+$(BUILD)/nexsdk.pc: nexsdk/nexsdk.pc.in | $(BUILD)
+	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@NEXSDK_VERSION@|1.0|g' $< > $@
+# hde-pkg-check: is this .deb ready to be published?  The engine is nexsdk/src/hde-pkg-core.c, so a build
+# script (and Hyggshi Store, when it installs a local .deb) can ask the same questions.
+$(BUILD)/hde-pkg-check: nexsdk/tools/hde-pkg-check.c $(BUILD)/libnexsdk.a $(NEXSDK_HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) -Inexsdk/include -o $@ $< $(BUILD)/libnexsdk.a
 # Hyggshi Desktop Widgets Manager (apps/widgets/)
 $(BUILD)/hde-widgets: apps/widgets/main.c apps/widgets/hde-widgets.c apps/widgets/hde-widgets.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
 	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
@@ -345,6 +365,9 @@ $(BUILD)/calendar-test: tests/calendar-test.c apps/calendar/hde-calendar-core.c 
 # Logs engine unit tests (tests/logs-test.c)
 $(BUILD)/logs-test: tests/logs-test.c apps/logs/hde-logs-core.c apps/logs/hde-logs-core.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Isrc -Iapps/logs -o $@ $(filter %.c,$^)
+# NexSDK unit tests (tests/nexsdk-test.c): the parsers, the notification argv, the settings file, the .deb checks
+$(BUILD)/nexsdk-test: tests/nexsdk-test.c $(NEXSDK_SRC) $(NEXSDK_HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) -Inexsdk/include -o $@ tests/nexsdk-test.c $(NEXSDK_SRC)
 # Hyggshi Store engine unit tests (tests/store-test.c): packages, sources, verification, version comparison
 $(BUILD)/store-test: tests/store-test.c apps/store/hde-store-core.c apps/store/hde-store-core.h | $(BUILD)
 	$(CC) -O2 -Wall -Wextra -Wpedantic -std=c11 -Iapps/store -o $@ $(filter %.c,$^)
@@ -488,7 +511,7 @@ UNIT_TESTS=$(BUILD)/randr-plan-test $(BUILD)/svgpath-test $(BUILD)/power-test $(
             $(BUILD)/idle-test $(BUILD)/disks-test $(BUILD)/keyring-test $(BUILD)/peek-test $(BUILD)/switch-test \
             $(BUILD)/distro-test $(BUILD)/media-test $(BUILD)/player-test $(BUILD)/choose-test $(BUILD)/nexwm-test \
             $(BUILD)/cmd-vt-test $(BUILD)/calc-test $(BUILD)/weather-test $(BUILD)/calendar-test $(BUILD)/logs-test \
-            $(BUILD)/wallpaper-test $(BUILD)/store-test $(BUILD)/nexdiag-test \
+            $(BUILD)/wallpaper-test $(BUILD)/store-test $(BUILD)/nexdiag-test $(BUILD)/nexsdk-test \
             tests/choose-run-test.sh tests/sddm-test.sh tests/session-entry-test.sh tests/arch-test.sh
 # build/hde-choose (the real GTK program) is not a prerequisite: a machine without libgtk-3-dev still runs every unit
 # test that does not need it, and tests/choose-run-test.sh falls back to the stand-in for GTK3.
@@ -626,6 +649,17 @@ install: all
 	for b in $(REQUIRED_PROGRAMS); do install -m755 $(BUILD)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; done
 	install -m755 data/hde-start $(DESTDIR)$(PREFIX)/bin/hde-start
 	install -m755 data/hde-start-wayland $(DESTDIR)$(PREFIX)/bin/hde-start-wayland
+	# NexSDK: headers, the static library, the pkg-config file, the templates and the examples
+	install -d $(DESTDIR)$(PREFIX)/include/nexsdk $(DESTDIR)$(PREFIX)/lib/pkgconfig
+	install -m644 nexsdk/include/nexsdk/*.h $(DESTDIR)$(PREFIX)/include/nexsdk/
+	install -m644 $(BUILD)/libnexsdk.a $(DESTDIR)$(PREFIX)/lib/libnexsdk.a
+	install -m644 $(BUILD)/nexsdk.pc $(DESTDIR)$(PREFIX)/lib/pkgconfig/nexsdk.pc
+	install -d $(DESTDIR)$(PREFIX)/share/nexsdk/examples $(DESTDIR)$(PREFIX)/share/nexsdk/templates
+	install -m644 nexsdk/examples/*.c nexsdk/examples/Makefile nexsdk/README.md $(DESTDIR)$(PREFIX)/share/nexsdk/examples/
+	cp -r nexsdk/templates/hello-c nexsdk/templates/gtk-app nexsdk/templates/library $(DESTDIR)$(PREFIX)/share/nexsdk/templates/
+	@find $(DESTDIR)$(PREFIX)/share/nexsdk/templates -name '*.sh' -exec chmod 755 {} + 2>/dev/null || true
+	install -d $(DESTDIR)$(PREFIX)/share/doc/nexsdk
+	install -m644 nexsdk/README.md $(DESTDIR)$(PREFIX)/share/doc/nexsdk/README.md
 	install -d $(DESTDIR)$(PREFIX)/share/hde/pam
 	install -m644 packaging/pam/hde-keyring $(DESTDIR)$(PREFIX)/share/hde/pam/hde-keyring
 	@echo "NOTE: to have the login password open the keyring as well, add $(PREFIX)/share/hde/pam/hde-keyring to the PAM file of the display manager (/etc/pam.d/sddm)"
@@ -732,6 +766,9 @@ uninstall:
 	      $(DESTDIR)$(APPS_DIR)/hde-widgets.desktop $(DESTDIR)$(APPS_DIR)/hde-store.desktop $(DESTDIR)$(APPS_DIR)/nexdiag.desktop
 	rm -f $(DESTDIR)$(APPS_DIR)/hde-files.desktop $(DESTDIR)$(APPS_DIR)/hde-media.desktop $(DESTDIR)$(APPS_DIR)/hde-video.desktop \
 	      $(DESTDIR)$(APPS_DIR)/hde-cmd.desktop $(DESTDIR)$(APPS_DIR)/hde-mimeapps.list
+	rm -rf $(DESTDIR)$(PREFIX)/include/nexsdk $(DESTDIR)$(PREFIX)/share/nexsdk
+	rm -f $(DESTDIR)$(PREFIX)/lib/libnexsdk.a $(DESTDIR)$(PREFIX)/lib/pkgconfig/nexsdk.pc
+	rm -rf $(DESTDIR)$(PREFIX)/share/doc/nexsdk
 	rm -rf $(DESTDIR)$(PREFIX)/share/hde
 	rm -rf $(DESTDIR)$(SDDM_THEMES)/$(SDDM_THEME)
 	rm -f $(DESTDIR)$(PREFIX)/bin/hde-login

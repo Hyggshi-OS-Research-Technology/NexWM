@@ -1,0 +1,22 @@
+Source: libmylib
+Section: libs
+Priority: optional
+Maintainer: Your Name <you@example.com>
+Build-Depends: debhelper-compat (= 13), cmake, pkg-config
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: libmylib1
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: A library for Hyggshi OS
+ The NexSDK library template: a shared library with a header and a pkg-config file.
+ .
+ The -dev package holds what a program needs to build against it.
+
+Package: libmylib-dev
+Section: libdevel
+Architecture: any
+Depends: libmylib1 (= ${binary:Version}), ${misc:Depends}
+Description: Development files for libmylib
+ The header and the pkg-config file of the NexSDK library template.

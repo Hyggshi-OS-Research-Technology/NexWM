@@ -1,0 +1,17 @@
+Source: hello-c
+Section: utils
+Priority: optional
+Maintainer: Your Name <you@example.com>
+Build-Depends: debhelper-compat (= 13), cmake, pkg-config, libnexsdk-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/Hyggshi-OS-Research-Technology/NexWM
+Rules-Requires-Root: no
+
+Package: hello-c
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, nexsdk (>= 1.0)
+Description: Hello for Hyggshi OS
+ A small program that prints what this machine is and, inside HDE, sends a notification.
+ .
+ It is the starting point of the NexSDK templates: copy it, change the name and the
+ description, and the packaging is already right.

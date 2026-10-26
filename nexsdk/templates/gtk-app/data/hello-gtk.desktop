@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hello GTK
+Comment=The Hyggshi OS GTK application template
+Exec=/usr/bin/hello-gtk
+Icon=hello-gtk
+Terminal=false
+Categories=GTK;Utility;
+StartupNotify=true

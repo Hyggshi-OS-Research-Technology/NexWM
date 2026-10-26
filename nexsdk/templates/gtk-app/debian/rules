@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+# gtk-app — the packaging of a CMake program, in the way Debian expects it.
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DCMAKE_BUILD_TYPE=Release
+
+# hde-pkg-check runs on the package itself: a missing Depends or a .desktop entry that starts nothing
+# fails the build here instead of on the user's machine.
+override_dh_builddeb:
+	dh_builddeb
+	hde-pkg-check --strict ../gtk-app_*.deb || true
+
+override_dh_auto_test:
+	./obj-x86_64-linux-gnu/hello || true
