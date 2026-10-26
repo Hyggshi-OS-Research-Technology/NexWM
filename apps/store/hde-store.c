@@ -6,11 +6,11 @@
  *   Install   — the detail page: version, source, license and how far it can be trusted, then the
  *               package is installed (or removed) through pkexec + apt-get, with its output on screen
  *   Updates   — everything the repositories offer to replace, one by one or all at once
- *   Sources   — /etc/apt/sources.list and sources.list.d (classic and deb822), plus Flatpak (read-only)
+ *   Sources   — /etc/apt/sources.list and sources.list.d (classic and deb822), plus Flatpak and a per-user Flathub connection
  *
  * Everything the Store knows about a package is parsed by apps/store/hde-store-core.c, which has no GTK
  * and is tested without a package manager (tests/store-test.c).  .deb is the first half of the store;
- * Flatpak is read-only in this version (see README.md in this folder).
+ * The Store can connect the per-user Flathub remote; browsing/installing Flatpaks remains read-only for now.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -1193,8 +1193,8 @@ static gboolean store_job_run(const char *title, const char *headline, const cha
     gtk_box_pack_start(GTK_BOX(box), head, FALSE, FALSE, 0);
 
     gtk_box_pack_start(GTK_BOX(box),
-                       label_with_class(tr("pkexec asks for your password outside this window.",
-                                           "pkexec sẽ hỏi mật khẩu ở ngoài cửa sổ này."),
+                       label_with_class(tr("If administrator permission is needed, the system will ask outside this window.",
+                                           "Nếu cần quyền quản trị, hệ thống sẽ hỏi ở ngoài cửa sổ này."),
                                         "store-row-sub"),
                        FALSE, FALSE, 0);
 
@@ -1938,6 +1938,38 @@ static GtkWidget *source_row(const HdeStoreSourceEntry *s, const char *note)
     return row;
 }
 
+static gboolean flathub_connected(void)
+{
+    if (!g_find_program_in_path("flatpak")) return FALSE;
+    const char *const argv[] = { "flatpak", "remotes", "--user", "--columns=name", NULL };
+    char *out = run_capture(argv, NULL);
+    gboolean found = FALSE;
+    char **lines = g_strsplit(out ? out : "", "\n", -1);
+    for (guint i = 0; lines[i]; i++) {
+        if (!g_strcmp0(g_strstrip(lines[i]), "flathub")) { found = TRUE; break; }
+    }
+    g_strfreev(lines);
+    g_free(out);
+    return found;
+}
+
+static void on_connect_flathub(GtkButton *button, gpointer data)
+{
+    (void)button;
+    (void)data;
+    const char *const argv[] = {
+        "flatpak", "remote-add", "--user", "--if-not-exists",
+        "flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo", NULL
+    };
+    gboolean ok = store_job_run(tr("Connect Flathub", "Kết nối Flathub"),
+                                tr("Adding Flathub for this user…", "Đang thêm Flathub cho người dùng này…"), argv);
+    if (ok) {
+        load_flatpak();
+        set_status(tr("Flathub is connected.", "Đã kết nối Flathub."));
+    }
+    rebuild_sources();
+}
+
 static void rebuild_sources(void)
 {
     if (!sources_inner) return;
@@ -2007,17 +2039,31 @@ static void rebuild_sources(void)
                                             "store-row-sub"), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sources_inner), box, FALSE, FALSE, 0);
 
-    /* Flatpak: read-only, and said so */
+    /* Flathub is configured per-user, so connecting it needs no administrator password. */
     gtk_box_pack_start(GTK_BOX(sources_inner), section_heading(tr("Flatpak", "Flatpak")), FALSE, FALSE, 0);
     GtkWidget *fc = card();
     if (!g_find_program_in_path("flatpak")) {
         gtk_box_pack_start(GTK_BOX(fc),
-                           label_with_class(tr("Flatpak is not installed.  The Store installs .deb packages; Flatpak "
-                                               "support is being researched and is read-only when flatpak is present.",
-                                               "Flatpak chưa được cài. Cửa hàng cài gói .deb; Flatpak đang được "
-                                               "nghiên cứu và chỉ đọc khi có flatpak."),
+                           label_with_class(tr("Flatpak is not installed. Install the flatpak package first, then return here to connect Flathub.",
+                                               "Flatpak chưa được cài. Hãy cài gói flatpak trước, rồi quay lại đây để kết nối Flathub."),
                                             "store-row-sub"), FALSE, FALSE, 0);
-    } else if (!pkgs_flatpak || !pkgs_flatpak->len) {
+    } else {
+        gboolean connected = flathub_connected();
+        GtkWidget *remote_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        GtkWidget *remote_text = label_with_class(
+            connected ? tr("Flathub — connected for this user", "Flathub — đã kết nối cho người dùng này")
+                      : tr("Flathub — apps and updates from flathub.org", "Flathub — ứng dụng và cập nhật từ flathub.org"),
+            "store-info-value");
+        gtk_widget_set_hexpand(remote_text, TRUE);
+        gtk_box_pack_start(GTK_BOX(remote_row), remote_text, TRUE, TRUE, 0);
+        GtkWidget *connect = gtk_button_new_with_label(
+            connected ? tr("Connected", "Đã kết nối") : tr("Connect Flathub", "Kết nối Flathub"));
+        gtk_widget_set_sensitive(connect, !connected);
+        if (!connected) g_signal_connect(connect, "clicked", G_CALLBACK(on_connect_flathub), NULL);
+        gtk_box_pack_end(GTK_BOX(remote_row), connect, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(fc), remote_row, FALSE, FALSE, 0);
+
+        if (!pkgs_flatpak || !pkgs_flatpak->len) {
         gtk_box_pack_start(GTK_BOX(fc),
                            label_with_class(tr("No Flatpak applications are installed on this computer.",
                                                "Máy này chưa cài ứng dụng Flatpak nào."), "store-row-sub"),
@@ -2034,6 +2080,7 @@ static void rebuild_sources(void)
                                                "Flatpak applications yet.",
                                                "Chỉ đọc: bản này của Cửa hàng chưa cài hay gỡ ứng dụng Flatpak."),
                                             "store-note"), FALSE, FALSE, 0);
+        }
     }
     gtk_box_pack_start(GTK_BOX(sources_inner), fc, FALSE, FALSE, 0);
     gtk_widget_show_all(sources_inner);
