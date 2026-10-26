@@ -328,8 +328,10 @@ $(BUILD)/hde-logs: apps/logs/hde-logs.c apps/logs/hde-logs-core.c apps/logs/hde-
 # Hyggshi Store (apps/store/): search, install, update and remove software.  hde-store-core.c is the part without
 # GTK (packages, sources, verification, version comparison) and tests/store-test.c runs it anywhere.
 $(BUILD)/hde-store: apps/store/hde-store.c apps/store/hde-store-core.c apps/store/hde-store-core.h \
-                    apps/store/hde-store-fold.h src/hde-theme.c src/hde-theme.h src/hde-build.h $(VERSION_H) | $(BUILD)
-	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -Iapps/store -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
+                    apps/store/hde-store-fold.h nexsdk/src/hde-pkg-core.c nexsdk/src/hde-core.c \
+                    nexsdk/include/nexsdk/pkg.h nexsdk/include/nexsdk/nexsdk.h src/hde-theme.c src/hde-theme.h \
+                    src/hde-build.h $(VERSION_H) | $(BUILD)
+	$(CC) $(GUI_CFLAGS) $(GUI_CPPFLAGS) -Iapps/store -Inexsdk/include -I$(BUILD) $(GTK_CFLAGS) -o $@ $(filter %.c,$^) $(GTK_LIBS) -lm
 # NexDiag: one set of checks for the session, the packages, the services, the network, the configuration and the logs,
 # written as a report that can be attached to a GitHub issue.  nexdiag/nexdiag-core.c is plain C: the same checks are
 # used by the command line (nexdiag), the window (hde-nexdiag) and Settings > System Health (src/hde-settings-health.c).

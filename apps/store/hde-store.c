@@ -16,6 +16,7 @@
 
 #include "hde-build.h"
 #include "hde-store-core.h"
+#include "nexsdk/nexsdk.h"
 #include "hde-theme.h"
 
 #include <gdk/gdkkeysyms.h>
@@ -35,6 +36,10 @@
 static GtkWidget *main_win;
 static GtkWidget *stack;
 static GtkWidget *sidebar;
+/* NexSDK's check of a local .deb (nexsdk/pkg.h): the same findings `hde-pkg-check` prints, so the Store can
+ * say what is wrong with a file BEFORE it is installed instead of after. */
+static NexSdkPkgReport file_check;
+static gboolean file_check_done;
 static GtkWidget *search_entry;
 static GtkWidget *status_label;
 static GtkWidget *busy_spinner;
@@ -819,6 +824,50 @@ static GtkWidget *info_row(const char *key, const char *value)
     return h;
 }
 
+/* ------------------------------------------------------------------ a .deb, checked before it is installed */
+
+static void file_check_run(const char *path)
+{
+    memset(&file_check, 0, sizeof file_check);
+    file_check_done = FALSE;
+    if (!path || !*path) return;
+    /* 0 when the file could be read (whatever was found); -1 leaves a finding that says why */
+    nexsdk_pkg_check(path, &file_check);
+    file_check_done = TRUE;
+}
+
+static int file_check_count(NexSdkPkgStatus status)
+{
+    int n = 0;
+    for (int i = 0; i < file_check.count; i++)
+        if (file_check.findings[i].status == status) n++;
+    return n;
+}
+
+static void on_file_check_details(GtkButton *b, gpointer data)
+{
+    (void)b;
+    (void)data;
+    char *text = nexsdk_pkg_report_text(&file_check);
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(tr("Package check", "Kiểm tra gói"), GTK_WINDOW(main_win),
+                                                 GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                                 tr("_Close", "_Đóng"), GTK_RESPONSE_CLOSE, NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dlg), 760, 520);
+    GtkWidget *area = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    GtkWidget *view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(view)), text ? text : "", -1);
+    GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_container_add(GTK_CONTAINER(sw), view);
+    gtk_box_pack_start(GTK_BOX(area), sw, TRUE, TRUE, 0);
+    gtk_widget_show_all(dlg);
+    gtk_dialog_run(GTK_DIALOG(dlg));
+    gtk_widget_destroy(dlg);
+    g_free(text);
+}
+
 /* ------------------------------------------------------------------ detail page */
 
 static void rebuild_detail(void)
@@ -952,6 +1001,31 @@ static void rebuild_detail(void)
                        badge(hde_store_verify_title(p->verify), badge_kind_for_verify(p->verify)), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sc), verify_row, FALSE, FALSE, 0);
 
+    if (p->from_file && file_check_done) {
+        int errors = file_check_count(NEXSDK_PKG_ERROR);
+        int warnings = file_check_count(NEXSDK_PKG_WARN);
+        char summary[240];
+        if (errors)
+            g_snprintf(summary, sizeof summary, tr("%d error(s) and %d warning(s) — see the details",
+                                                   "%d lỗi và %d cảnh báo — xem chi tiết"), errors, warnings);
+        else if (warnings)
+            g_snprintf(summary, sizeof summary, tr("%d warning(s), nothing fatal", "%d cảnh báo, không có lỗi"),
+                       warnings);
+        else
+            g_snprintf(summary, sizeof summary, "%s", tr("Nothing wrong with this package",
+                                                         "Không có gì sai với gói này"));
+        GtkWidget *check_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+        gtk_container_set_border_width(GTK_CONTAINER(check_row), 3);
+        GtkWidget *ck = label_with_class(tr("Package check", "Kiểm tra gói"), "store-info-key");
+        gtk_widget_set_size_request(ck, 150, -1);
+        gtk_box_pack_start(GTK_BOX(check_row), ck, FALSE, FALSE, 0);
+        GtkWidget *b = gtk_button_new_with_label(summary);
+        gtk_style_context_add_class(gtk_widget_get_style_context(b), "store-link");
+        g_signal_connect(b, "clicked", G_CALLBACK(on_file_check_details), NULL);
+        gtk_box_pack_start(GTK_BOX(check_row), b, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(sc), check_row, FALSE, FALSE, 0);
+    }
+
     char *verify_detail = hde_store_verify_detail(p->verify, p->origin);
     if (verify_detail) {
         GtkWidget *d = label_with_class(verify_detail, "store-note");
@@ -1053,6 +1127,28 @@ static void on_install_clicked(GtkButton *b, gpointer data)
     (void)b;
     HdeStorePackage *p = data;
     if (!p || p->source == HDE_STORE_SOURCE_FLATPAK) return;
+
+    if (p->from_file && file_check_done && file_check_count(NEXSDK_PKG_ERROR) > 0) {
+        /* not a refusal: the user may have built it themselves and know why.  But the Store does not install
+         * a package that its own check calls broken without saying so. */
+        GtkWidget *dlg = gtk_message_dialog_new(GTK_WINDOW(main_win), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                                GTK_MESSAGE_WARNING, GTK_BUTTONS_CANCEL,
+                                                "%s", tr("This package has problems", "Gói này có lỗi"));
+        gtk_message_dialog_format_secondary_text(
+            GTK_MESSAGE_DIALOG(dlg),
+            tr("%d error(s) and %d warning(s) were found in this file.  The details are on the package page.\n\n"
+               "Install it anyway?  A package with a broken dependency can leave the system half-installed.",
+               "Đã tìm thấy %d lỗi và %d cảnh báo trong tệp này. Chi tiết ở trang của gói.\n\n"
+               "Vẫn cài? Một gói có phụ thuộc sai có thể làm hệ thống cài dở dang."),
+            file_check_count(NEXSDK_PKG_ERROR), file_check_count(NEXSDK_PKG_WARN));
+        gtk_dialog_add_button(GTK_DIALOG(dlg), tr("_Install anyway", "_Vẫn cài"), GTK_RESPONSE_ACCEPT);
+        int response = gtk_dialog_run(GTK_DIALOG(dlg));
+        gtk_widget_destroy(dlg);
+        if (response != GTK_RESPONSE_ACCEPT) {
+            set_status(tr("%s was not installed.", "Chưa cài %s."), p->name);
+            return;
+        }
+    }
 
     set_busy(TRUE);
     set_status(tr("Installing %s…", "Đang cài %s…"), p->name);
@@ -1716,6 +1812,7 @@ static void open_local_file(const char *path)
         return;
     }
     g_free(control);
+    file_check_run(path);
 
     g_free(detail);
     detail = g_new0(HdeStorePackage, 1);
@@ -1895,6 +1992,10 @@ static void apply_store_css(void)
         ".store-info-key { font-size: 12px; color: alpha(@theme_fg_color, 0.62); }\n"
         ".store-info-value { font-size: 13px; }\n"
         ".store-note { font-size: 12px; color: alpha(@theme_fg_color, 0.70); }\n"
+        /* a button that reads as a link: the package check opens its details with it */
+        ".store-link { background: none; border: none; box-shadow: none; padding: 0 2px;\n"
+        "  color: @theme_selected_bg_color; font-size: 12px; }\n"
+        ".store-link:hover { text-decoration: underline; }\n"
         ".store-body { font-size: 13px; }\n"
         ".store-empty { color: alpha(@theme_fg_color, 0.62); }\n"
         ".store-job-headline { font-weight: 700; }\n"

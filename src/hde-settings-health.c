@@ -34,6 +34,7 @@ static GtkWidget *health_log_frame;
 
 static NexdiagReport health_report;
 static gboolean health_have_report;
+static gboolean health_started;          /* the checks run the first time the page is opened */
 static volatile gint health_running;
 
 /* ------------------------------------------------------------------ small helpers */
@@ -169,6 +170,17 @@ static void health_run_now(void)
     g_thread_unref(g_thread_new("nexdiag", health_worker, NULL));
 }
 
+/* Settings builds every page at startup: the checks wait until this one is actually shown, so opening
+ * Settings does not run dpkg and systemctl for someone who only wanted to change the wallpaper. */
+static void on_health_map(GtkWidget *w, gpointer data)
+{
+    (void)w;
+    (void)data;
+    if (health_started) return;
+    health_started = TRUE;
+    health_run_now();
+}
+
 static void on_health_run(GtkButton *b, gpointer data)
 {
     (void)b;
@@ -265,6 +277,7 @@ GtkWidget *page_health_new(void)
 {
     health_box = page_base();
     health_have_report = FALSE;
+    health_started = FALSE;
     g_atomic_int_set(&health_running, 0);
 
     /* ---- heading ---- */
@@ -384,7 +397,7 @@ GtkWidget *page_health_new(void)
     gtk_widget_set_visible(health_log_frame, FALSE);
     gtk_widget_set_visible(health_spinner, FALSE);
 
-    /* the page fills itself in as soon as it is opened */
-    health_run_now();
+    /* the page fills itself in the first time it is opened (see on_health_map) */
+    g_signal_connect(health_box, "map", G_CALLBACK(on_health_map), NULL);
     return health_box;
 }
