@@ -39,6 +39,8 @@ Depends: ${shlibs:Depends},
          labwc,
          xwayland
 Recommends: metacity | xfwm4 | openbox,
+            apt,
+            pkexec | policykit-1,
             network-manager,
             bluez,
             pipewire-pulse | pulseaudio,
@@ -60,7 +62,10 @@ Description: Hyggshi Desktop Environment
  panel, desktop icons and wallpaper, file manager, settings, terminal,
  screenshot tool, widgets, notifications, its own window manager (NexWM),
  lock screen, idle handling, automatic mounting of removable drives and
- keyring integration.
+ keyring integration.  Hyggshi Store installs, updates and removes software;
+ NexDiag checks the session and writes a report for a bug report; NexSDK
+ (headers, static library, pkg-config file and templates) is what programs
+ outside HDE are built with, and hde-pkg-check is its packaging check.
  .
  The package installs the HDE (X11) and nexwm sessions.  When the Wayland
  layer-shell components are built, the HDE (Wayland) session is installed

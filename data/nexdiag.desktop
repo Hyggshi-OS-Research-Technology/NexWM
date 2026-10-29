@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=NexDiag
+GenericName=Diagnostics & Troubleshooting
+Comment=Check the session, the packages, the services, the network and the logs of Hyggshi OS and make a report
+Exec=@PREFIX@/bin/hde-nexdiag
+Icon=utilities-system-monitor
+Terminal=false
+Categories=GTK;System;Monitor;Utility;
+Keywords=diagnostics;troubleshoot;health;support;report;bug;logs;dpkg;systemd;
+StartupNotify=true

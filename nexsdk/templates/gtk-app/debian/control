@@ -1,0 +1,17 @@
+Source: gtk-app
+Section: gnome
+Priority: optional
+Maintainer: Your Name <you@example.com>
+Build-Depends: debhelper-compat (= 13), cmake, pkg-config, libgtk-3-dev, libnexsdk-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/Hyggshi-OS-Research-Technology/NexWM
+Rules-Requires-Root: no
+
+Package: gtk-app
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, libgtk-3-0, nexsdk (>= 1.0)
+Description: Hello GTK for Hyggshi OS
+ A GTK3 window that shows what this machine is and sends a notification through NexSDK.
+ .
+ It is the starting point of the NexSDK GTK template: the window, the menu entry and the icon
+ are already in the right places.

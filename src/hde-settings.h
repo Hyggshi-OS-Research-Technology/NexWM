@@ -51,6 +51,7 @@ GtkWidget *page_windows_new(void);
 GtkWidget *page_keyboard_new(void);
 GtkWidget *page_sound_new(void);
 GtkWidget *page_display_new(void);          /* hde-settings-display.c: brightness, screens, Project, Night Light */
+GtkWidget *page_health_new(void);           /* hde-settings-health.c: System Health, the NexDiag checks */
 GtkWidget *page_support_new(void);          /* hde-settings-about.c: Help & Support Center */
 GtkWidget *page_about_new(void);            /* hde-settings-about.c */
 GtkWidget *page_panel_new(void);            /* hde-settings-panel.c: Settings > Panel */
