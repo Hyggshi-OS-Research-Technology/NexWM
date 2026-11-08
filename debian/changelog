@@ -1,11 +1,12 @@
-hde (0.1.0) unstable; urgency=medium
+hde (0.2.0-1) unstable; urgency=medium
 
-  * Initial Debian package.
-  * Build and install the complete desktop: desktop, panel, settings, files,
-    media, terminal, widgets, NexWM, lock screen, idle handling, automount and
-    keyring integration.
-  * Install under /usr, as required by Debian policy.
-  * Install the Wayland session only when layer-shell, Wayland and xkbcommon
-    support were actually built.
+  * Refresh Hyggshi Store: prioritize Vietnamese regardless of desktop locale,
+    and support per-user Flatpak discovery and package actions alongside APT.
+  * Recommend Flatpak so Store users can enable Flathub without searching for
+    the package name themselves.
+  * Ship the complete HDE desktop with X11 and Wayland session support, NexWM,
+    HDE Cmd, updated SDDM login theme and lock screen.
+  * Notify the user when a supervised HDE component or window manager crashes,
+    including when automatic restarts are stopped after repeated failures.
 
- -- HyggshiOSDeveloper <hyggshidev@gmail.com>  Tue, 20 Oct 2026 00:00:00 +0000
+ -- HyggshiOSDeveloper <hyggshidev@gmail.com>  Thu, 29 Oct 2026 00:00:00 +0000

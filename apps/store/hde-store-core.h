@@ -12,12 +12,12 @@
 
 #include <stddef.h>
 
-/* Where a package comes from.  .deb (APT/dpkg) is what the Store installs; Flatpak is read-only for now
- * (see the Sources page: "research"), local .deb files are what "Install a file…" takes. */
+/* Where a package comes from. APT and Flatpak apps can be installed by the Store; local .deb files are
+ * what "Install a file…" takes. */
 typedef enum {
     HDE_STORE_SOURCE_DEB = 0,       /* a repository known to APT */
     HDE_STORE_SOURCE_LOCAL = 1,     /* a .deb file on disk, not from a repository */
-    HDE_STORE_SOURCE_FLATPAK = 2,   /* a Flatpak remote (read-only in this version) */
+    HDE_STORE_SOURCE_FLATPAK = 2,   /* a Flatpak remote */
     HDE_STORE_SOURCE_DPKG_STATUS = 3, /* only known to dpkg, no repository behind it anymore */
     HDE_STORE_SOURCE_UNKNOWN = 4
 } HdeStoreSource;
@@ -232,7 +232,7 @@ extern const char *const HDE_STORE_CMD_UPGRADABLE[];
 extern const char *const HDE_STORE_CMD_SEARCH[];
 /* What a package offers right now: `apt-cache policy <pkg>` */
 extern const char *const HDE_STORE_CMD_POLICY[];
-/* Flatpak, read-only: `flatpak list --columns=application,version,origin,branch` (empty without flatpak) */
+/* Installed Flatpak apps: `flatpak list --columns=application,version,origin,branch` (empty without flatpak) */
 extern const char *const HDE_STORE_CMD_FLATPAK[];
 
 /* `base` (NULL-terminated) copied with `a` and `b` appended (either may be NULL).  Free with

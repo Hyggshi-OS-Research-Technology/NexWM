@@ -28,6 +28,7 @@ GLIBX_LIBS:=$(shell pkg-config --libs glib-2.0 x11 2>/dev/null || echo "-lglib-2
 # and to udisks2 through it. Without it none of the three is built (the rest of HDE does not need it).
 GIO_CFLAGS:=$(shell pkg-config --cflags gio-2.0 2>/dev/null)
 GIO_LIBS:=$(shell pkg-config --libs gio-2.0 2>/dev/null)
+SESSION_GIO_CFLAGS:=$(if $(GIO_LIBS),-DHDE_SESSION_HAVE_GIO $(GIO_CFLAGS))
 # XScreenSaver and DPMS: how long nobody has touched the computer and turning the screen off (hde-idle, on the
 # "HDE" X11 session). XScreenSaverQueryInfo is in libXss (libxss-dev / libXScrnSaver-devel / libxss), while DPMS is
 # in libXext: both are needed, and linking only -lXext leaves hde-idle with undefined XScreenSaver* symbols.
@@ -501,7 +502,7 @@ $(BUILD)/hde-core-demo: apps/hde-core-demo.c $(CORE_OBJ) | $(BUILD)
 # tests/keyring-test.c can check it without a keyring on the machine)
 $(BUILD)/hde-session: apps/hde-session.c src/hde-keyring-core.c src/hde-keyring-core.h src/hde-wm.h \
                       src/hde-build.h $(VERSION_H) $(CORE_OBJ) | $(BUILD)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -I$(BUILD) -o $@ $(filter-out %.h,$^)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SESSION_GIO_CFLAGS) -I$(BUILD) -o $@ $(filter-out %.h,$^) $(GIO_LIBS)
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 backend/x11/x11_backend.o: src/hde-commands.h

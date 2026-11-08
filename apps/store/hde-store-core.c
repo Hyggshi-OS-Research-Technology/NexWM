@@ -407,7 +407,7 @@ int hde_store_parse_apt_search_line(const char *line, HdeStorePackage *out)
     return 1;
 }
 
-/* ---------------------------------------------------------------- flatpak (read-only) */
+/* ---------------------------------------------------------------- Flatpak inventory */
 
 int hde_store_parse_flatpak_line(const char *line, HdeStorePackage *out)
 {
@@ -860,7 +860,7 @@ const char *hde_store_source_title(HdeStoreSource s, int vi)
     switch (s) {
     case HDE_STORE_SOURCE_DEB: return pick(vi, "APT repository (.deb)", "Kho APT (.deb)");
     case HDE_STORE_SOURCE_LOCAL: return pick(vi, "Local .deb file", "Tệp .deb cục bộ");
-    case HDE_STORE_SOURCE_FLATPAK: return pick(vi, "Flatpak (read-only)", "Flatpak (chỉ đọc)");
+    case HDE_STORE_SOURCE_FLATPAK: return pick(vi, "Flatpak application", "Ứng dụng Flatpak");
     case HDE_STORE_SOURCE_DPKG_STATUS: return pick(vi, "dpkg database only", "Chỉ có trong dpkg");
     case HDE_STORE_SOURCE_UNKNOWN:
     default: return pick(vi, "Unknown", "Không rõ");

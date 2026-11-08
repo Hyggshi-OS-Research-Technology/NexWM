@@ -31,6 +31,9 @@
 #include "hde-keyring-core.h"
 #include "hde-wm.h"
 #include "hde-build.h"
+#ifdef HDE_SESSION_HAVE_GIO
+#include <gio/gio.h>
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -59,6 +62,93 @@ static void on_usr1(int sig) { (void)sig; g_restart = 1; }
 static void on_usr2(int sig) { (void)sig; g_switch_wm = 1; }
 
 static int executable(const char *p) { return p && *p && access(p, X_OK) == 0; }
+
+typedef struct CrashNotice CrashNotice;
+struct CrashNotice {
+    char *summary;
+    char *body;
+    time_t retry_at;
+    unsigned attempts;
+    CrashNotice *next;
+};
+
+static CrashNotice *g_crash_notices;
+
+/* The panel owns HDE's notification service. Queue notices when it is temporarily unavailable
+ * (for example, when the panel itself crashed) and retry after the session has restarted it. */
+static int send_session_notification(const char *summary, const char *body)
+{
+#ifdef HDE_SESSION_HAVE_GIO
+    GError *error = NULL;
+    GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+    if (!bus) {
+        g_clear_error(&error);
+        return 0;
+    }
+    GVariant *args = g_variant_new("(susss@as@a{sv}i)", "HDE", 0u, "dialog-error",
+                                  summary, body, g_variant_new_strv(NULL, 0),
+                                  g_variant_new_array(G_VARIANT_TYPE("{sv}"), NULL, 0), 5000);
+    GVariant *reply = g_dbus_connection_call_sync(
+        bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications", "Notify", args, G_VARIANT_TYPE("(u)"),
+        G_DBUS_CALL_FLAGS_NO_AUTO_START, 1000, NULL, &error);
+    g_object_unref(bus);
+    if (reply) {
+        g_variant_unref(reply);
+        g_clear_error(&error);
+        return 1;
+    }
+    g_clear_error(&error);
+#else
+    (void)summary;
+    (void)body;
+#endif
+    return 0;
+}
+
+static void queue_crash_notification(const char *summary, const char *body)
+{
+    CrashNotice *notice = calloc(1, sizeof *notice);
+    if (!notice) return;
+    notice->summary = strdup(summary ? summary : "Ứng dụng gặp sự cố");
+    notice->body = strdup(body ? body : "Một tiến trình của HDE đã thoát bất thường.");
+    if (!notice->summary || !notice->body) {
+        free(notice->summary);
+        free(notice->body);
+        free(notice);
+        return;
+    }
+    notice->retry_at = time(NULL);
+    CrashNotice **tail = &g_crash_notices;
+    while (*tail) tail = &(*tail)->next;
+    *tail = notice;
+}
+
+static void flush_crash_notifications(time_t now)
+{
+    CrashNotice **link = &g_crash_notices;
+    while (*link) {
+        CrashNotice *notice = *link;
+        if (now < notice->retry_at) { link = &notice->next; continue; }
+        if (send_session_notification(notice->summary, notice->body)) {
+            *link = notice->next;
+            free(notice->summary);
+            free(notice->body);
+            free(notice);
+            continue;
+        }
+        if (++notice->attempts >= 20) {
+            fprintf(stderr, "hde-session: could not deliver crash notification: %s\n", notice->summary);
+            *link = notice->next;
+            free(notice->summary);
+            free(notice->body);
+            free(notice);
+            continue;
+        }
+        notice->retry_at = now + 1;
+        link = &notice->next;
+    }
+}
 
 static int self_dir(char *out, size_t n, const char *argv0)
 {
@@ -484,10 +574,17 @@ static void comp_exited(Component *c, int status)
     if (now - c->fail_window > 60) { c->fail_window = now; c->fails = 0; }
     if (++c->fails > c->max_fails) {
         fprintf(stderr, "hde-session: %s keeps crashing; not restarting it again (see this log)\n", c->label);
+        char body[512];
+        snprintf(body, sizeof body,
+                 "%s liên tục gặp sự cố; HDE đã dừng tự khởi động để tránh vòng lặp.", c->label);
+        queue_crash_notification("Ứng dụng gặp sự cố", body);
         return;
     }
     c->restart_at = now + (c->fails > 2 ? 3 : 1);
     fprintf(stderr, "hde-session: restarting %s (attempt %d)\n", c->label, c->fails);
+    char body[512];
+    snprintf(body, sizeof body, "%s đã thoát bất thường. HDE đang khởi động lại ứng dụng.", c->label);
+    queue_crash_notification("Ứng dụng gặp sự cố", body);
 }
 
 static void start_components(void)
@@ -607,6 +704,14 @@ static void wm_exited(int status)
     }
     if (now - wm_fail_window > 60) { wm_fail_window = now; wm_fails = 0; }
     if (++wm_fails <= 3) wm_idx = wm_index_of(wm_cur);    /* crash: restart the same WM */
+    char body[512];
+    if (wm_fails <= 3)
+        snprintf(body, sizeof body, "%s đã thoát bất thường. HDE đang khởi động lại window manager.",
+                 wm_cur ? wm_cur->name : "Window manager");
+    else
+        snprintf(body, sizeof body, "%s liên tục gặp sự cố; HDE đang thử window manager khác.",
+                 wm_cur ? wm_cur->name : "Window manager");
+    queue_crash_notification("Window manager gặp sự cố", body);
     wm_restart_at = now + 1;
 }
 
@@ -1055,6 +1160,7 @@ int main(int argc, char **argv)
         if (g_restart) { g_restart = 0; restart_components(); }
         if (g_switch_wm) { g_switch_wm = 0; if (g_use_wm) wm_switch(); }
         time_t now = time(NULL);
+        flush_crash_notifications(now);
         for (int i = 0; i < N_COMP; i++)
             if (comps[i].restart_at && now >= comps[i].restart_at) { comps[i].restart_at = 0; comp_start(&comps[i]); }
         if (g_use_wm) wm_tick(now);

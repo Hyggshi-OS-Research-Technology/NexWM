@@ -9,8 +9,8 @@
  *   Sources   — /etc/apt/sources.list and sources.list.d (classic and deb822), plus Flatpak and a per-user Flathub connection
  *
  * Everything the Store knows about a package is parsed by apps/store/hde-store-core.c, which has no GTK
- * and is tested without a package manager (tests/store-test.c).  .deb is the first half of the store;
- * The Store can connect the per-user Flathub remote; browsing/installing Flatpaks remains read-only for now.
+ * and is exercised without a package manager (tests/store-test.c). APT packages and per-user Flatpak apps
+ * can both be discovered, installed, updated and removed.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -58,13 +58,15 @@ static GPtrArray *pkgs_installed;   /* HdeStorePackage*, sorted by name */
 static GPtrArray *pkgs_updates;     /* HdeStorePackage*, sorted by name */
 static GPtrArray *pkgs_search;      /* HdeStorePackage*, ranked for search_query */
 static GPtrArray *pkgs_featured;    /* HdeStorePackage*, the curated app list */
-static GPtrArray *pkgs_flatpak;     /* HdeStorePackage*, read-only */
+static GPtrArray *pkgs_flatpak;     /* HdeStorePackage*, installed for this user */
 static GHashTable *by_name;         /* name -> HdeStorePackage*, the installed ones */
 static guint64 installed_kb;
 
 static HdeStorePackage *detail;     /* the package of the detail page (we own it) */
 static char *search_query;
 static guint search_delay_id;
+static guint search_generation;
+static guint active_search_generation;
 static char *pending_search;
 static char *pending_file;
 static gboolean pending_updates;
@@ -137,12 +139,13 @@ static HdeStoreVerify verify_for_source(const HdeStoreSourceEntry *s);
 
 static gboolean ui_is_vietnamese(void)
 {
-    /* Hyggshi Store now has one consistent interface language. */
-    return FALSE;
+    /* Vietnamese is the Store's primary language regardless of the desktop locale.
+     * English is available only when explicitly requested. */
+    const char *forced = g_getenv("HDE_STORE_LANG");
+    return forced && *forced ? hde_store_speak_vietnamese(NULL, forced) : TRUE;
 }
 
-/* The Store speaks Vietnamese unless the session asks for English (or HDE_STORE_LANG says otherwise).
- * The order of the arguments is English first, Vietnamese second — the Vietnamese is what is shown by default. */
+/* The order of the arguments is English first, Vietnamese second; Vietnamese is the default. */
 static const char *tr(const char *en, const char *vi)
 {
     return ui_is_vietnamese() ? vi : en;
@@ -1092,6 +1095,62 @@ static void list_fill(GtkWidget *list, GPtrArray *pkgs)
     gtk_widget_show_all(list);
 }
 
+/* Discover uses roomy cards with the real application icon and summary, while the
+ * management pages keep their compact rows. */
+static void on_featured_clicked(GtkButton *button, gpointer data)
+{
+    (void)button;
+    open_detail((const HdeStorePackage *)data);
+}
+
+static GtkWidget *featured_card(HdeStorePackage *p)
+{
+    GtkWidget *button = gtk_button_new();
+    gtk_button_set_relief(GTK_BUTTON(button), GTK_RELIEF_NONE);
+    gtk_style_context_add_class(gtk_widget_get_style_context(button), "store-app-card-button");
+    g_signal_connect(button, "clicked", G_CALLBACK(on_featured_clicked), p);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_style_context_add_class(gtk_widget_get_style_context(box), "store-app-card");
+    gtk_container_set_border_width(GTK_CONTAINER(box), 14);
+
+    GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *icon = package_icon(p, 56, 0);
+    gtk_widget_set_valign(icon, GTK_ALIGN_CENTER);
+    gtk_box_pack_start(GTK_BOX(top), icon, FALSE, FALSE, 0);
+    GtkWidget *labels = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_valign(labels, GTK_ALIGN_CENTER);
+    gtk_widget_set_hexpand(labels, TRUE);
+    const HdeStoreDesktop *de = desktop_for(p->name);
+    const char *name = de && de->name[0] ? de->name : p->name;
+    GtkWidget *title = label_with_class(name, "store-app-card-title");
+    gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
+    gtk_label_set_max_width_chars(GTK_LABEL(title), 24);
+    gtk_box_pack_start(GTK_BOX(labels), title, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(labels), label_with_class(p->section[0] ? p->section : tr("Application", "Ứng dụng"),
+                                                         "store-row-sub"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(top), labels, TRUE, TRUE, 0);
+    GtkWidget *chevron = gtk_image_new_from_icon_name("go-next-symbolic", GTK_ICON_SIZE_MENU);
+    gtk_widget_set_valign(chevron, GTK_ALIGN_CENTER);
+    gtk_box_pack_end(GTK_BOX(top), chevron, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), top, FALSE, FALSE, 0);
+
+    const char *summary = p->summary[0] ? p->summary : p->description;
+    GtkWidget *desc = label_with_class(summary, "store-app-card-description");
+    gtk_label_set_line_wrap(GTK_LABEL(desc), TRUE);
+    gtk_label_set_lines(GTK_LABEL(desc), 2);
+    gtk_label_set_ellipsize(GTK_LABEL(desc), PANGO_ELLIPSIZE_END);
+    gtk_widget_set_valign(desc, GTK_ALIGN_START);
+    gtk_widget_set_size_request(desc, -1, 36);
+    gtk_box_pack_start(GTK_BOX(box), desc, TRUE, TRUE, 0);
+
+    if (p->state == HDE_STORE_STATE_INSTALLED || p->state == HDE_STORE_STATE_UPGRADABLE)
+        gtk_box_pack_start(GTK_BOX(box), badge(hde_store_state_title(p->state, ui_is_vietnamese()),
+                                               badge_kind_for_state(p->state)), FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(button), box);
+    return button;
+}
+
 static GtkWidget *empty_label(const char *text)
 {
     GtkWidget *l = label_with_class(text, "store-empty");
@@ -1317,6 +1376,11 @@ static gboolean store_job_run(const char *title, const char *headline, const cha
 static void show_page(const char *name)
 {
     if (!stack) return;
+    if (strcmp(name, "results") && active_search_generation) {
+        search_generation++;
+        active_search_generation = 0;
+        set_busy(FALSE);
+    }
     if (!strcmp(name, "detail") &&
         g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(stack)), "detail")) {
         g_free(detail_return_page);
@@ -1338,7 +1402,7 @@ static GtkWidget *page_scroller(GtkWidget **inner_out)
     GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     GtkWidget *inner = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
-    gtk_container_set_border_width(GTK_CONTAINER(inner), 22);
+    gtk_container_set_border_width(GTK_CONTAINER(inner), 28);
     gtk_container_add(GTK_CONTAINER(sw), inner);
     if (inner_out) *inner_out = inner;
     return sw;
@@ -2149,9 +2213,8 @@ static void rebuild_sources(void)
             g_free(line);
         }
         gtk_box_pack_start(GTK_BOX(fc),
-                           label_with_class(tr("Read-only: this version of the Store does not install or remove "
-                                               "Flatpak applications yet.",
-                                               "Chỉ đọc: bản này của Cửa hàng chưa cài hay gỡ ứng dụng Flatpak."),
+                           label_with_class(tr("Flatpak applications can be installed and removed for this user.",
+                                               "Có thể cài đặt và gỡ ứng dụng Flatpak cho người dùng này."),
                                             "store-note"), FALSE, FALSE, 0);
         }
     }
@@ -2166,19 +2229,20 @@ static void rebuild_discover(void)
     for (GList *l = children; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
     g_list_free(children);
 
-    GtkWidget *hero = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *hero = gtk_box_new(GTK_ORIENTATION_VERTICAL, 9);
     gtk_style_context_add_class(gtk_widget_get_style_context(hero), "store-banner");
-    gtk_box_pack_start(GTK_BOX(hero), label_with_class(tr("Discover", "Khám phá"), "store-banner-title"),
+    gtk_box_pack_start(GTK_BOX(hero), label_with_class(tr("Find your next favourite app", "Tìm ứng dụng bạn yêu thích"),
+                                                        "store-banner-title"),
                        FALSE, FALSE, 0);
     GtkWidget *hero_sub = label_with_class(
-        tr("Find software for your Linux desktop, see where it comes from, and install it.",
-           "Tìm ứng dụng mới cho Linux của bạn, xem nó đến từ đâu, và cài đặt."),
+        tr("Explore useful apps for your desktop. Every app shows where it comes from before you install it.",
+           "Khám phá ứng dụng hữu ích cho máy tính. Luôn xem nguồn phần mềm trước khi cài đặt."),
         "store-banner-sub");
     gtk_label_set_line_wrap(GTK_LABEL(hero_sub), TRUE);
     gtk_box_pack_start(GTK_BOX(hero), hero_sub, FALSE, FALSE, 0);
 
     GtkWidget *hero_buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_set_margin_top(hero_buttons, 8);
+    gtk_widget_set_margin_top(hero_buttons, 5);
     GtkWidget *b_lists = gtk_button_new_with_label(tr("Update lists", "Cập nhật danh sách"));
     g_signal_connect(b_lists, "clicked", G_CALLBACK(on_update_lists), NULL);
     gtk_box_pack_start(GTK_BOX(hero_buttons), b_lists, FALSE, FALSE, 0);
@@ -2226,15 +2290,24 @@ static void rebuild_discover(void)
     gtk_box_pack_start(GTK_BOX(mini), manage, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(discover_inner), mini, FALSE, FALSE, 0);
 
-    gtk_box_pack_start(GTK_BOX(discover_inner), section_heading(tr("Popular apps", "Ứng dụng phổ biến")),
-                       FALSE, FALSE, 0);
+    GtkWidget *popular_head = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *popular_title = section_heading(tr("Popular apps", "Ứng dụng phổ biến"));
+    gtk_widget_set_hexpand(popular_title, TRUE);
+    gtk_box_pack_start(GTK_BOX(popular_head), popular_title, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(popular_head), label_with_class(tr("Hand-picked for you", "Gợi ý dành cho bạn"),
+                                                               "store-row-sub"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(discover_inner), popular_head, FALSE, FALSE, 0);
     if (pkgs_featured && pkgs_featured->len) {
-        GtkWidget *list = gtk_list_box_new();
-        gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
-        gtk_style_context_add_class(gtk_widget_get_style_context(list), "store-card-flat");
-        g_signal_connect(list, "row-activated", G_CALLBACK(on_row_activated), NULL);
-        gtk_box_pack_start(GTK_BOX(discover_inner), list, FALSE, FALSE, 0);
-        list_fill(list, pkgs_featured);
+        GtkWidget *grid = gtk_flow_box_new();
+        gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(grid), GTK_SELECTION_NONE);
+        gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(grid), 3);
+        gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(grid), 1);
+        gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(grid), 12);
+        gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(grid), 12);
+        gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(grid), TRUE);
+        for (guint i = 0; i < pkgs_featured->len; i++)
+            gtk_flow_box_insert(GTK_FLOW_BOX(grid), featured_card(g_ptr_array_index(pkgs_featured, i)), -1);
+        gtk_box_pack_start(GTK_BOX(discover_inner), grid, FALSE, FALSE, 0);
     } else {
         GtkWidget *hint = card();
         gtk_box_pack_start(GTK_BOX(hint),
@@ -2288,32 +2361,78 @@ static void rebuild_results(void)
 
 /* ------------------------------------------------------------------ searching */
 
-static void do_search(const char *query)
+typedef struct {
+    char *query;
+    guint generation;
+} StoreSearchRequest;
+
+typedef struct {
+    char *apt;
+    char *flatpak;
+} StoreSearchOutput;
+
+static void search_request_free(gpointer data)
 {
-    /* query may point into search_query itself when refreshing. */
-    char *new_query = g_strdup(query ? query : "");
-    g_free(search_query);
-    search_query = new_query;
+    StoreSearchRequest *request = data;
+    if (!request) return;
+    g_free(request->query);
+    g_free(request);
+}
 
-    pkgs_clear(&pkgs_search);
-    pkgs_search = pkgs_new();
+static void search_output_free(gpointer data)
+{
+    StoreSearchOutput *output = data;
+    if (!output) return;
+    g_free(output->apt);
+    g_free(output->flatpak);
+    g_free(output);
+}
 
-    if (!search_query[0]) {
-        rebuild_results();
-        show_page("results");
+static void search_worker(GTask *task, gpointer source_object, gpointer task_data, GCancellable *cancellable)
+{
+    (void)source_object;
+    (void)cancellable;
+    StoreSearchRequest *request = task_data;
+    StoreSearchOutput *output = g_new0(StoreSearchOutput, 1);
+
+    char **argv = hde_store_argv_append(HDE_STORE_CMD_SEARCH, request->query, NULL);
+    output->apt = run_capture((const char *const *)argv, NULL);
+    hde_store_argv_free(argv);
+    if (g_find_program_in_path("flatpak") && flathub_connected()) {
+        const char *fp_argv[] = { "flatpak", "search",
+            "--columns=application,name,description,version,branch,remotes", request->query, NULL };
+        output->flatpak = run_capture(fp_argv, NULL);
+    } else {
+        output->flatpak = g_strdup("");
+    }
+    g_task_return_pointer(task, output, search_output_free);
+}
+
+static void search_done(GObject *source_object, GAsyncResult *async_result, gpointer user_data)
+{
+    (void)source_object;
+    (void)user_data;
+    GTask *task = G_TASK(async_result);
+    StoreSearchRequest *request = g_task_get_task_data(task);
+    GError *error = NULL;
+    StoreSearchOutput *output = g_task_propagate_pointer(task, &error);
+    if (request->generation != search_generation) {
+        search_output_free(output);
+        g_clear_error(&error);
+        return;
+    }
+    active_search_generation = 0;
+    if (!output) {
+        g_clear_error(&error);
+        set_busy(FALSE);
+        set_status("%s", tr("Search failed.", "Không thể tìm kiếm."));
         return;
     }
 
-    set_busy(TRUE);
-    set_status(tr("Searching for “%s”…", "Đang tìm “%s”…"), search_query);
-
-    /* 1. what the repositories know */
-    char **argv = hde_store_argv_append(HDE_STORE_CMD_SEARCH, search_query, NULL);
-    char *out = run_capture((const char *const *)argv, NULL);
-    hde_store_argv_free(argv);
-
+    pkgs_clear(&pkgs_search);
+    pkgs_search = pkgs_new();
     GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    char **lines = g_strsplit(out, "\n", -1);
+    char **lines = g_strsplit(output->apt, "\n", -1);
     int max = 2000; /* rank before limiting: APT output is alphabetic, not relevance ordered */
     for (guint i = 0; lines[i] && max > 0; i++) {
         HdeStorePackage tmp;
@@ -2325,7 +2444,7 @@ static void do_search(const char *query)
         if (installed) {
             g_free(p);
             p = g_new0(HdeStorePackage, 1);
-            *p = *installed;            /* the installed copy has the summary, the size and the origin */
+            *p = *installed;
         }
         if (g_hash_table_contains(seen, p->name)) {
             g_free(p);
@@ -2336,36 +2455,29 @@ static void do_search(const char *query)
         max--;
     }
     g_strfreev(lines);
-    g_free(out);
 
-    /* 2. what is installed: it has descriptions of its own, even without package lists */
     for (guint i = 0; pkgs_installed && i < pkgs_installed->len && max > 0; i++) {
         HdeStorePackage *p = g_ptr_array_index(pkgs_installed, i);
-        if (hde_store_match(p, search_query) <= 0) continue;
-        if (g_hash_table_contains(seen, p->name)) continue;
+        if (hde_store_match(p, search_query) <= 0 || g_hash_table_contains(seen, p->name)) continue;
         HdeStorePackage *copy = g_new0(HdeStorePackage, 1);
         *copy = *p;
+        g_hash_table_add(seen, g_strdup(copy->name));
         g_ptr_array_add(pkgs_search, copy);
         max--;
     }
-    /* 3. Flathub applications: unlike APT packages, these are application-level results. */
-    if (g_find_program_in_path("flatpak") && flathub_connected()) {
-        const char *fp_argv[] = { "flatpak", "search", "--columns=application,name,description,version,branch,remotes", search_query, NULL };
-        char *fp_out = run_capture(fp_argv, NULL);
-        char **fp_lines = g_strsplit(fp_out ? fp_out : "", "\n", -1);
-        guint fp_count = 0;
-        for (guint i = 0; fp_lines[i] && fp_count < 80; i++) {
-            HdeStorePackage tmp;
-            if (!parse_flatpak_search_line(fp_lines[i], &tmp) || g_hash_table_contains(seen, tmp.name)) continue;
-            HdeStorePackage *copy = g_new0(HdeStorePackage, 1);
-            *copy = tmp;
-            g_hash_table_add(seen, g_strdup(copy->name));
-            g_ptr_array_add(pkgs_search, copy);
-            fp_count++;
-        }
-        g_strfreev(fp_lines);
-        g_free(fp_out);
+
+    char **fp_lines = g_strsplit(output->flatpak ? output->flatpak : "", "\n", -1);
+    guint fp_count = 0;
+    for (guint i = 0; fp_lines[i] && fp_count < 80; i++) {
+        HdeStorePackage tmp;
+        if (!parse_flatpak_search_line(fp_lines[i], &tmp) || g_hash_table_contains(seen, tmp.name)) continue;
+        HdeStorePackage *copy = g_new0(HdeStorePackage, 1);
+        *copy = tmp;
+        g_hash_table_add(seen, g_strdup(copy->name));
+        g_ptr_array_add(pkgs_search, copy);
+        fp_count++;
     }
+    g_strfreev(fp_lines);
     g_hash_table_destroy(seen);
 
     g_ptr_array_sort(pkgs_search, cmp_by_score);
@@ -2378,6 +2490,42 @@ static void do_search(const char *query)
     show_page("results");
     set_busy(FALSE);
     set_status(tr("%u results for “%s”.", "%u kết quả cho “%s”."), pkgs_search->len, search_query);
+    search_output_free(output);
+}
+
+static void do_search(const char *query)
+{
+    /* query may point into search_query itself when refreshing. */
+    char *new_query = g_strdup(query ? query : "");
+    g_free(search_query);
+    search_query = new_query;
+
+    search_generation++;
+    guint generation = search_generation;
+    active_search_generation = 0;
+    pkgs_clear(&pkgs_search);
+    pkgs_search = pkgs_new();
+
+    if (!search_query[0]) {
+        rebuild_results();
+        show_page("results");
+        set_busy(FALSE);
+        set_status("%s", tr("Ready.", "Sẵn sàng."));
+        return;
+    }
+
+    set_busy(TRUE);
+    set_status(tr("Searching for “%s”…", "Đang tìm “%s”…"), search_query);
+
+    StoreSearchRequest *request = g_new0(StoreSearchRequest, 1);
+    request->query = g_strdup(search_query);
+    request->generation = generation;
+    active_search_generation = generation;
+
+    GTask *task = g_task_new(NULL, NULL, search_done, NULL);
+    g_task_set_task_data(task, request, search_request_free);
+    g_task_run_in_thread(task, search_worker);
+    g_object_unref(task);
 }
 
 static gboolean run_delayed_search(gpointer data)
@@ -2409,6 +2557,10 @@ static void on_search_changed(GtkSearchEntry *entry, gpointer data)
 {
     (void)data;
     if (search_delay_id) g_source_remove(search_delay_id);
+    /* Ignore an older worker as soon as the text changes, even during the debounce. */
+    search_generation++;
+    active_search_generation = 0;
+    set_busy(FALSE);
     const char *query = gtk_entry_get_text(GTK_ENTRY(entry));
     if (!query || !*query) {
         search_delay_id = 0;
@@ -2666,10 +2818,10 @@ static void apply_store_css(void)
 
     GString *css = g_string_new(NULL);
     g_string_append(css,
-        ".store-sidebar { background: alpha(@theme_fg_color, 0.035);"
-        "  border-right: 1px solid alpha(@theme_fg_color, 0.10); }\n"
-        ".store-sidebar row { padding: 9px 14px; border-radius: 9px; }\n"
-        ".store-sidebar row:selected { background: alpha(@theme_selected_bg_color, 0.22); }\n"
+        ".store-sidebar { background: alpha(@theme_fg_color, 0.025);"
+        "  border-right: 1px solid alpha(@theme_fg_color, 0.08); padding: 16px 10px; }\n"
+        ".store-sidebar row { padding: 10px 14px; margin: 2px 4px; border-radius: 10px; }\n"
+        ".store-sidebar row:selected { background: alpha(@theme_selected_bg_color, 0.18); }\n"
         ".store-sidebar-label { font-weight: 600; }\n"
         ".store-h1 { font-size: 21px; font-weight: 700; }\n"
         ".store-lead { font-size: 13px; }\n"
@@ -2677,8 +2829,8 @@ static void apply_store_css(void)
         "  color: alpha(@theme_fg_color, 0.62); }\n"
         ".store-row-title { font-weight: 600; }\n"
         ".store-row-sub { font-size: 12px; color: alpha(@theme_fg_color, 0.62); }\n"
-        ".store-card { background: alpha(@theme_fg_color, 0.04);"
-        "  border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 12px; }\n"
+        ".store-card { background: alpha(@theme_fg_color, 0.035);"
+        "  border: 1px solid alpha(@theme_fg_color, 0.08); border-radius: 14px; }\n"
         ".store-card-flat { background: alpha(@theme_fg_color, 0.03);"
         "  border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 12px; }\n"
         ".store-card-flat row { border-bottom: 1px solid alpha(@theme_fg_color, 0.07); }\n"
@@ -2686,12 +2838,19 @@ static void apply_store_css(void)
         ".store-tile-letter { font-size: 15px; font-weight: 700; color: alpha(@theme_fg_color, 0.72); }\n"
         ".store-shot { padding: 0; border: 1px solid alpha(@theme_fg_color, 0.12); border-radius: 10px; }\n"
         ".store-shot:hover { border-color: alpha(@theme_fg_color, 0.28); }\n"
-        ".store-hero { background-image: linear-gradient(120deg, alpha(@theme_selected_bg_color, 0.30), alpha(@theme_fg_color, 0.04));"
-        "  border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 14px; padding: 18px; }\n"
-        ".store-banner { background-image: linear-gradient(135deg, #3584e4, #9141ac);"
-        "  border-radius: 16px; padding: 20px; }\n"
-        ".store-banner-title { color: #ffffff; font-size: 24px; font-weight: 800; }\n"
-        ".store-banner-sub { color: rgba(255, 255, 255, 0.88); }\n"
+        ".store-hero { background-image: linear-gradient(120deg, alpha(@theme_selected_bg_color, 0.24), alpha(@theme_fg_color, 0.025));"
+        "  border: 1px solid alpha(@theme_fg_color, 0.08); border-radius: 16px; padding: 22px; }\n"
+        ".store-banner { background-image: linear-gradient(125deg, #3584e4, #1c71d8);"
+        "  border-radius: 18px; padding: 26px; }\n"
+        ".store-banner-title { color: #ffffff; font-size: 27px; font-weight: 800; }\n"
+        ".store-banner-sub { color: rgba(255, 255, 255, 0.92); font-size: 14px; }\n"
+        ".store-app-card-button { padding: 0; border: none; background: transparent; box-shadow: none; }\n"
+        ".store-app-card { min-height: 132px; background: alpha(@theme_fg_color, 0.035);"
+        "  border: 1px solid alpha(@theme_fg_color, 0.09); border-radius: 16px; transition: background 140ms ease, border-color 140ms ease; }\n"
+        ".store-app-card-button:hover .store-app-card { background: alpha(@theme_selected_bg_color, 0.07);"
+        "  border-color: alpha(@theme_selected_bg_color, 0.40); }\n"
+        ".store-app-card-title { font-weight: 700; font-size: 14px; }\n"
+        ".store-app-card-description { font-size: 12px; color: alpha(@theme_fg_color, 0.65); }\n"
         ".store-badge { font-size: 11px; font-weight: 700; border-radius: 7px; padding: 1px 8px; }\n"
         ".store-badge-ok { background: alpha(#2ec27e, 0.20); color: #26a269; }\n"
         ".store-badge-warn { background: alpha(#e5a50a, 0.22); color: #8f6400; }\n"
@@ -2777,8 +2936,8 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf("Usage: hde-store [--search TEXT] [--updates] [--install-file FILE.deb] [--list-installed]\n"
                    "       hde-store --version\n\n"
-                   "Hyggshi Store — the app store of Hyggshi OS and HDE.  Packages are .deb (APT/dpkg);\n"
-                   "the Flatpak applications of the machine are listed read-only.\n");
+                   "Hyggshi Store — the app store of Hyggshi OS and HDE. APT packages and per-user Flatpak apps\n"
+                   "can be discovered, installed, updated and removed. Flatpak support needs flatpak and Flathub.\n");
             return 0;
         }
         if (!strcmp(argv[i], "--version")) {
@@ -2799,8 +2958,8 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    /* Use English consistently for GTK stock labels and Store text. */
-    setlocale(LC_ALL, "C.UTF-8");
+    /* Keep GTK stock labels in the system locale; Store copy itself prioritizes Vietnamese. */
+    setlocale(LC_ALL, "");
 
     gtk_init(&argc, &argv);
     hde_theme_apply_process();
@@ -2882,7 +3041,7 @@ int main(int argc, char **argv)
 
     stack = gtk_stack_new();
     gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
-    gtk_stack_set_transition_duration(GTK_STACK(stack), 120);
+    gtk_stack_set_transition_duration(GTK_STACK(stack), 180);
     gtk_widget_set_hexpand(stack, TRUE);
     gtk_widget_set_vexpand(stack, TRUE);
     gtk_box_pack_start(GTK_BOX(body), stack, TRUE, TRUE, 0);
